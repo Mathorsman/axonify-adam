@@ -1,0 +1,43 @@
+{
+  "protected_personas": {
+    "title_keywords": [
+      "vp ", "svp ", "vice president",
+      "director",
+      "coo", "chro", "cpo",
+      "c-level",
+      "district manager", "area manager", "regional director",
+      "operations excellence", "field enablement", "operational readiness",
+      "store excellence", "restaurant excellence",
+      "ehs", "health, safety",
+      "operations analytics", "business intelligence",
+      "learning & development", "learning and development",
+      "training & development", "training and development",
+      "people & culture", "people and culture"
+    ],
+    "job_level_values": [
+      "c-level", "vp", "director", "manager"
+    ],
+    "responsibility_keywords": [
+      "human resources",
+      "learning & development",
+      "learning and development",
+      "health & safety",
+      "health and safety",
+      "operations"
+    ],
+    "activity_lookback_months": 24,
+    "bizible_lookback_months": 24
+  },
+  "dirty_data_rules": {
+    "junk_name_keywords": [
+      "test", "sample", "demo", "fake", "dummy", "xxx", "yyy", "zzz",
+      "n/a", "na", "null", "none", "unknown", "tbd", "placeholder",
+      "delete", "do not use", "donotuse", "admin", "import"
+    ],
+    "short_name_max_chars": 2,
+    "flag_numeric_names": true,
+    "flag_all_caps_names": true,
+    "flag_missing_last_name": true,
+    "flag_no_contact_info": true
+  }
+}

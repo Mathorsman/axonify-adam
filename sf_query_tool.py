@@ -1,0 +1,21175 @@
+"""
+================================================================================
+Salesforce AI Query Tool  —  Axonify Edition
+================================================================================
+A Workbench-style Salesforce query and action tool with AI assistance,
+tailored specifically to the Axonify org cleanup and audit project.
+
+Features:
+  - AI Query Builder: Describe what you want in plain English
+  - Visual Query Builder: Point-and-click field/filter selection
+  - Raw SOQL Editor: Write or paste SOQL directly
+  - Audit Shortcuts: Pre-built queries for the active cleanup project
+  - Query History: Recall any query from the current session
+  - Results Grid: Sortable table with CSV export
+  - Dry Run Mode: Preview ALL changes before anything executes
+  - Auto-Backup: Exports affected records to CSV before ANY update/delete
+  - Safety Rails: Warns when queries or actions touch protected fields/tools
+
+Org Context (baked into AI prompts):
+  - Active tools to protect: 6sense, Clay, Gong, Marketo/Bizible, Nue CPQ,
+    Zendesk, Spiff, Mutiny, Mavenlink, ZoomInfo/RingLead, Slack
+  - Retired tools to clean up: Cloudingo, DiscoverOrg, Drift, SalesLoft,
+    Nudge, Gainsight, UserGems, Pardot, InsideView, G2Crowd
+  - Protected field prefixes: Axonify_, bizible2__, Ruby__, Gong__, X6sense,
+    accountBuyingStage6sense__c, Zendesk_, Spiff_, Mavenlink, Mutiny_, Clay_
+
+Setup:
+  1. Install dependencies:
+       pip install streamlit simple-salesforce pandas anthropic python-dotenv
+
+  2. Create a .env file (or set environment variables directly):
+       SF_CLIENT_ID       = your Connected App consumer key
+       SF_CLIENT_SECRET   = your Connected App consumer secret
+       ANTHROPIC_API_KEY  = your Anthropic API key
+       SF_DOMAIN          = "login" for production, "test" for sandbox
+       
+       Note: Username/password are NOT needed. The tool uses OAuth 2.0 web
+       flow — you log in via browser including MFA, just like normal.
+
+  3. Run:
+       streamlit run sf_query_tool.py
+
+================================================================================
+"""
+
+import os
+import json
+import datetime
+import xml.etree.ElementTree as _ET
+import traceback
+import re
+import urllib.parse
+import urllib.request
+import time
+import psycopg2
+import psycopg2.extras
+
+import pandas as pd
+import streamlit as st
+from simple_salesforce import Salesforce
+import anthropic
+import plotly.express as px
+import plotly.graph_objects as go
+
+# ── Try to load .env file if present ──────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv is optional — env vars may already be set
+
+
+# ── Secrets helper — Streamlit Cloud first, .env fallback ─────────────────────
+def _get_secret(key: str, default=None):
+    """Read a secret from st.secrets (Cloud) or os.getenv (.env / shell)."""
+    try:
+        return st.secrets[key]
+    except (KeyError, FileNotFoundError):
+        return os.getenv(key, default)
+
+
+# ── Dynamic base URL — detects Cloud vs localhost ─────────────────────────────
+def _get_base_url() -> str:
+    """Return the app's public URL for OAuth redirect construction."""
+    try:
+        from streamlit.web.server.websocket_headers import _get_websocket_headers
+        headers = _get_websocket_headers()
+        host  = headers.get("Host", "")
+        proto = headers.get("X-Forwarded-Proto", "https")
+        if host:
+            return f"{proto}://{host}"
+    except Exception:
+        pass
+    return "http://localhost:8501"
+
+
+# ── Supabase database connection ───────────────────────────────────────────────
+@st.cache_resource
+def _get_db_connection():
+    """Returns a persistent psycopg2 connection to Supabase. Returns None if not configured."""
+    url = _get_secret("SUPABASE_DB_URL")
+    if not url:
+        return None
+    try:
+        return psycopg2.connect(url)
+    except Exception:
+        return None
+
+
+# ── Database CRUD helpers ──────────────────────────────────────────────────────
+
+def db_save_query(sf_user: str, sf_instance: str, object_name: str, soql: str,
+                  row_count: int, result_data: list) -> str | None:
+    """Insert a completed query into query_history. Returns the UUID or None."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO query_history
+                     (sf_user, sf_instance, object_name, soql, row_count,
+                      rows_stored, result_data)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (sf_user, sf_instance, object_name, soql, row_count,
+                 min(row_count, 1000), psycopg2.extras.Json(result_data[:1000])),
+            )
+            conn.commit()
+            return str(cur.fetchone()[0])
+    except Exception as e:
+        conn.rollback()
+        st.warning(f"Could not save query to database: {e}")
+        return None
+
+
+def db_get_history(sf_user: str, all_users: bool = False) -> list[dict]:
+    """Fetch up to 50 recent query_history rows. Filters by sf_user unless all_users=True."""
+    conn = _get_db_connection()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if all_users:
+                cur.execute(
+                    "SELECT * FROM query_history ORDER BY run_at DESC LIMIT 50"
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM query_history WHERE sf_user = %s ORDER BY run_at DESC LIMIT 50",
+                    (sf_user,),
+                )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def db_save_backup(sf_user: str, operation: str, object_name: str,
+                   record_count: int, csv_text: str) -> str | None:
+    """Insert a backup CSV into the backups table. Returns the UUID or None."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO backups
+                     (sf_user, operation, object_name, record_count, csv_data)
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (sf_user, operation, object_name, record_count, csv_text),
+            )
+            conn.commit()
+            return str(cur.fetchone()[0])
+    except Exception as e:
+        conn.rollback()
+        st.warning(f"Could not save backup to database: {e}")
+        return None
+
+
+def db_get_backup(backup_id: str) -> str | None:
+    """Retrieve csv_data by backup UUID. Returns the CSV string or None."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT csv_data FROM backups WHERE id = %s", (backup_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+def db_save_operation_log(sf_user: str, operation: str, object_name: str,
+                          soql: str, payload: list, result: dict,
+                          backup_id: str | None, excluded_count: int,
+                          log_text: str) -> str | None:
+    """Insert a structured operation log row. Returns the UUID or None."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        succeeded = result.get("success", 0)
+        failed    = result.get("failed", 0)
+        errors    = result.get("errors", [])
+        if operation == "Update" and payload and isinstance(payload[0], dict):
+            changes   = psycopg2.extras.Json({k: v for k, v in payload[0].items() if k != "Id"})
+            record_ids = [r.get("Id", "") for r in payload if isinstance(r, dict)]
+        else:
+            changes   = psycopg2.extras.Json({})
+            record_ids = payload if payload and isinstance(payload[0], str) else [r.get("Id", "") for r in payload if isinstance(r, dict)]
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO operation_logs
+                     (sf_user, operation, object_name, soql, record_count,
+                      succeeded, failed, excluded, backup_id, changes,
+                      record_ids, errors, log_text)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (sf_user, operation, object_name, soql, len(payload),
+                 succeeded, failed, excluded_count,
+                 backup_id, changes, record_ids,
+                 psycopg2.extras.Json(errors), log_text),
+            )
+            conn.commit()
+            return str(cur.fetchone()[0])
+    except Exception as e:
+        conn.rollback()
+        st.warning(f"Could not save operation log to database: {e}")
+        return None
+
+
+def db_save_merge_log(sf_user: str, object_name: str, results_log: list[dict],
+                      backup_id: str | None, log_text: str) -> str | None:
+    """Insert a BulkMerge log row. Returns the UUID or None."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        succeeded = sum(1 for r in results_log if r.get("Status", "").startswith("✅"))
+        failed    = sum(1 for r in results_log if r.get("Status", "").startswith("❌"))
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO operation_logs
+                     (sf_user, operation, object_name, record_count,
+                      succeeded, failed, backup_id, errors, log_text)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (sf_user, "BulkMerge", object_name, len(results_log),
+                 succeeded, failed, backup_id,
+                 psycopg2.extras.Json(results_log), log_text),
+            )
+            conn.commit()
+            return str(cur.fetchone()[0])
+    except Exception as e:
+        conn.rollback()
+        st.warning(f"Could not save merge log to database: {e}")
+        return None
+
+
+def db_get_config(config_key: str) -> dict | list | None:
+    """Read a config value from app_config by key. Returns parsed JSON or None."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT config_value FROM app_config WHERE config_key = %s",
+                (config_key,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+
+def db_save_config(config_key: str, config_value: dict | list, updated_by: str = "unknown") -> bool:
+    """Upsert a config value into app_config. Returns True on success."""
+    conn = _get_db_connection()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO app_config (config_key, config_value, updated_by)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (config_key) DO UPDATE
+                     SET config_value = EXCLUDED.config_value,
+                         updated_at   = now(),
+                         updated_by   = EXCLUDED.updated_by""",
+                (config_key, psycopg2.extras.Json(config_value), updated_by),
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        conn.rollback()
+        st.warning(f"Could not save config to database: {e}")
+        return False
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE CONFIG  (must be the first Streamlit call)
+# ══════════════════════════════════════════════════════════════════════════════
+st.set_page_config(
+    page_title="A.D.A.M. · Axonify",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GLOBAL STYLES  — dark industrial theme, clean data-tool aesthetic
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+:root {
+    /* BACKGROUNDS — 4 clearly distinct levels */
+    --bg-base:        #0f1a15;   /* page background                        */
+    --bg-surface:     #142420;   /* cards, sidebar                         */
+    --bg-raised:      #1a3028;   /* inputs, code blocks                    */
+    --bg-overlay:     #234035;   /* hover states, active rows              */
+    /* TEXT — WCAG AA compliant on all backgrounds above */
+    --text-primary:   #f0f5f2;   /* headlines, labels        (13:1 on base) */
+    --text-secondary: #b8ccbf;   /* body copy, descriptions   (7.2:1 on base) */
+    --text-muted:     #6e8c7a;   /* timestamps, metadata only (3.9:1 — captions only) */
+}
+
+html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-secondary);
+}
+.app-header {
+    background: linear-gradient(90deg, var(--bg-base) 0%, var(--bg-surface) 100%);
+    border-bottom: 1px solid #1a2d22;
+    padding: 18px 32px 14px 32px;
+    margin-bottom: 24px;
+}
+.app-header h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    letter-spacing: -0.02em;
+}
+.app-header .subtitle {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+    font-family: 'IBM Plex Mono', monospace;
+}
+section[data-testid="stSidebar"] {
+    background-color: var(--bg-surface) !important;
+    border-right: 1px solid #1a2d22;
+}
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    background: var(--bg-base);
+    border-bottom: 1px solid #1a2d22;
+    padding: 0 8px;
+}
+.stTabs [data-baseweb="tab"] {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    padding: 10px 16px;
+    letter-spacing: 0.02em;
+}
+.stTabs [aria-selected="true"] {
+    color: #95F9AF !important;
+    border-bottom: 2px solid #95F9AF !important;
+    background: transparent !important;
+}
+.stButton > button {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    border-radius: 4px;
+    border: 1px solid #243830;
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+}
+.stButton > button:hover { border-color: #95F9AF; color: #95F9AF; background: var(--bg-base); }
+.stButton > button[kind="primary"] { background: #017551; border-color: #017551; color: #ffffff; }
+.stButton > button[kind="primary"]:hover { background: #00AA61; border-color: #00AA61; }
+.stTextArea textarea, .stTextInput input {
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 0.82rem !important;
+    background: var(--bg-raised) !important;
+    border: 1px solid #243830 !important;
+    color: var(--text-secondary) !important;
+    border-radius: 4px !important;
+}
+.stTextArea textarea:focus, .stTextInput input:focus {
+    border-color: #95F9AF !important;
+    box-shadow: 0 0 0 2px rgba(0,170,97,0.15) !important;
+}
+.pill-active  { background:#0a3022; color:#00AA61; padding:2px 8px; border-radius:12px; font-size:0.72rem; font-family:'IBM Plex Mono',monospace; display:inline-block; margin:2px; }
+.pill-retired { background:#3d1f1f; color:#F96041; padding:2px 8px; border-radius:12px; font-size:0.72rem; font-family:'IBM Plex Mono',monospace; display:inline-block; margin:2px; }
+.safety-banner {
+    background: #3d300a;
+    border: 1px solid #9e6a03;
+    border-radius: 4px;
+    padding: 10px 14px;
+    font-size: 0.82rem;
+    color: #FCBC68;
+    font-family: 'IBM Plex Mono', monospace;
+    margin-bottom: 8px;
+}
+.result-badge {
+    display:inline-block;
+    background:#00AA6122;
+    border:1px solid #00AA6155;
+    color:#95F9AF;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.78rem;
+    padding:3px 10px;
+    border-radius:12px;
+    margin-left:8px;
+}
+.shortcut-card {
+    background: var(--bg-surface);
+    border: 1px solid #1a2d22;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 4px;
+}
+.shortcut-card .sc-title { font-size:0.82rem; color:var(--text-secondary); font-weight:500; font-family:'IBM Plex Mono',monospace; }
+.shortcut-card .sc-desc  { font-size:0.72rem; color:var(--text-muted); margin-top:2px; }
+hr { border-color: #1a2d22 !important; }
+
+/* ── Sidebar navigation ──────────────────────────────────────────────────── */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button,
+section[data-testid="stSidebar"] div[data-testid="stBaseButton-secondary"] > button {
+    width: 100%; padding: 9px 12px;
+    background: transparent; border: 1px solid transparent;
+    border-radius: 8px; color: var(--text-muted); font-size: 13.5px;
+    text-align: left; transition: all 0.15s; cursor: pointer;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover,
+section[data-testid="stSidebar"] div[data-testid="stBaseButton-secondary"] > button:hover {
+    background: var(--bg-overlay) !important;
+    color: var(--text-secondary) !important;
+    border-color: rgba(255,255,255,0.08) !important;
+}
+.nav-active-marker + div[data-testid="stButton"] > button,
+.nav-active-marker + div[data-testid="stBaseButton-secondary"] > button {
+    background: rgba(0,170,97,0.12) !important;
+    color: #95F9AF !important;
+    border-color: rgba(0,170,97,0.25) !important;
+    font-weight: 500 !important;
+}
+.nav-section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.65rem; color: #3d4f44;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 8px 4px 4px 4px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONSTANTS — Axonify org context
+# ══════════════════════════════════════════════════════════════════════════════
+
+BACKUP_DIR          = "sf_backups"
+MAX_RECORDS_DISPLAY = 2000
+
+SUPPORTED_OBJECTS = [
+    "Account", "Contact", "Lead", "Opportunity", "Case",
+    "Task", "Event", "Campaign", "CampaignMember",
+    "OpportunityLineItem", "Quote", "Contract", "User",
+    # Permissions & access
+    "PermissionSet", "PermissionSetAssignment", "ObjectPermissions",
+    "FieldPermissions", "Profile", "UserRole",
+    # Metadata & automation
+    "Flow", "WorkflowRule",
+]
+
+# Retired tools: fields from these are cleanup candidates
+RETIRED_TOOLS = {
+    "Cloudingo":    ["CloudingoAgent__"],
+    "DiscoverOrg":  ["discoverorg_"],
+    "Drift":        ["Drift_"],
+    "SalesLoft":    ["SalesLoft1__"],
+    "Nudge":        ["Nudge_"],
+    "Gainsight":    ["Gainsight", "Exclude_from_Gainsight__c"],
+    "UserGems":     ["UserGems__"],
+    "Pardot":       ["Pardot_"],
+    "InsideView":   ["iv__", "IV_"],
+    "G2Crowd":      ["G2_"],
+    "RingLead":     ["UniqueEntry__"],
+    "Mavenlink":    ["Mavenlink"],
+    "Seismic":      ["Seismic_"],
+    "Loopio":       ["Loopio_"],
+    "TruVoice":     ["TruVoice_"],
+}
+
+# Active tools: fields from these must not be touched
+ACTIVE_TOOLS = {
+    "6sense":           ["accountBuyingStage6sense__c", "X6sense", "X6QA"],
+    "Clay":             ["Clay_"],
+    "Gong":             ["Gong__"],
+    "Marketo/Bizible":  ["bizible2__"],
+    "Nue CPQ":          ["Ruby__"],
+    "Zendesk":          ["Zendesk_"],
+    "Spiff":            ["Spiff_"],
+    "Mutiny":           ["Mutiny_"],
+    "ZoomInfo":         ["ZoomInfo_"],
+    "Slack":            ["SLACK_"],
+    "Chili Piper":      ["ChiliPiper_"],
+    "PandaDoc":         ["PandaDoc_"],
+}
+
+# Axonify's own business data — always protected
+PROTECTED_PREFIXES = [
+    "Axonify_", "bizible2__", "Ruby__", "Gong__",
+    "X6sense", "X6QA", "accountBuyingStage6sense__c",
+    "Zendesk_", "Spiff_", "Clay_", "Mutiny_",
+]
+
+# ── Shared constants ──────────────────────────────────────────────────────────
+AI_MODEL      = "claude-sonnet-4-6"
+
+COLOR_SUCCESS = "#00AA61"
+COLOR_ERROR   = "#F96041"
+COLOR_WARNING = "#FCBC68"
+COLOR_INFO    = "#95F9AF"
+
+TIMESTAMP_FMT   = "%Y%m%d_%H%M%S"
+BLANK_BLOCK_KEY = "__BLANK__"
+ORG_NAME        = os.getenv("ORG_NAME", "Your Org")  # resolved at runtime via _get_secret where needed
+
+# Pre-computed dicts for check_safety_flags() — built once at module load.
+# Maps UPPER_PREFIX → (tool_name, original_prefix) / original_prefix respectively
+# so the function avoids repeated .upper() calls on every SOQL check.
+_ACTIVE_PREFIX_TOOL = {p.upper(): (tool, p) for tool, prefixes in ACTIVE_TOOLS.items() for p in prefixes}
+_PROTECTED_UPPER    = {p.upper(): p for p in PROTECTED_PREFIXES}
+
+# Pre-built audit queries tied to the cleanup project
+AUDIT_SHORTCUTS = [
+    {
+        "category": "🔴 Retired Tool Fields",
+        "title":    "Cloudingo — check population",
+        "desc":     "Verify Cloudingo fields are empty before removing",
+        "soql":     "SELECT Id, Name, CloudingoAgent__DuplicateScore__c FROM Account WHERE CloudingoAgent__DuplicateScore__c != null LIMIT 200",
+    },
+    {
+        "category": "🔴 Retired Tool Fields",
+        "title":    "InsideView — populated records",
+        "desc":     "Heavily populated — archive data before field removal",
+        "soql":     "SELECT Id, Name, iv__InsideViewId__c FROM Account WHERE iv__InsideViewId__c != null LIMIT 500",
+    },
+    {
+        "category": "🔴 Retired Tool Fields",
+        "title":    "SalesLoft — cadence field data",
+        "desc":     "100% populated — must archive before removing",
+        "soql":     "SELECT Id, Name, SalesLoft1__Most_Recent_Cadence_Name__c, SalesLoft1__Most_Recent_Last_Completed_Step__c FROM Account WHERE SalesLoft1__Most_Recent_Cadence_Name__c != null LIMIT 500",
+    },
+    {
+        "category": "🔴 Retired Tool Fields",
+        "title":    "UserGems — job change data",
+        "desc":     "Find accounts with UserGems tracking data",
+        "soql":     "SELECT Id, Name FROM Account WHERE UserGems__Job_Change_Date__c != null LIMIT 200",
+    },
+    {
+        "category": "🔴 Retired Tool Fields",
+        "title":    "G2Crowd — check before flow deactivation",
+        "desc":     "Verify G2 fields are empty before deactivating G2_Event_Roll_Up flow",
+        "soql":     "SELECT Id, Name, G2_Last_Activity_Date__c FROM Account WHERE G2_Last_Activity_Date__c != null LIMIT 200",
+    },
+    {
+        "category": "🟡 Automation Cleanup",
+        "title":    "Active Workflow Rules",
+        "desc":     "All Workflow Rules still active — candidates for Flow migration",
+        "soql":     "SELECT Id, Name, TableEnumOrId, CreatedDate FROM WorkflowRule WHERE Active = true ORDER BY TableEnumOrId LIMIT 200",
+    },
+    {
+        "category": "🟡 Automation Cleanup",
+        "title":    "Active AutoLaunched Flows",
+        "desc":     "All active record-triggered and scheduled flows",
+        "soql":     "SELECT Id, MasterLabel, ProcessType, Status, LastModifiedDate FROM Flow WHERE Status = 'Active' AND ProcessType = 'AutoLaunchedFlow' ORDER BY LastModifiedDate DESC LIMIT 200",
+    },
+    {
+        "category": "🟡 Automation Cleanup",
+        "title":    "Test/Temp flows still active",
+        "desc":     "Active flows with TEST_ or TEMP_ prefix — should not be in production",
+        "soql":     "SELECT Id, MasterLabel, ProcessType, Status FROM Flow WHERE Status = 'Active' AND (MasterLabel LIKE 'TEST%' OR MasterLabel LIKE 'TEMP%') LIMIT 50",
+    },
+    {
+        "category": "🟢 Data Quality",
+        "title":    "Customer Accounts — blank Industry",
+        "desc":     "Customer accounts with no Industry value set",
+        "soql":     "SELECT Id, Name, Industry, Type, CreatedDate FROM Account WHERE Industry = null AND Type = 'Customer' ORDER BY CreatedDate DESC LIMIT 500",
+    },
+    {
+        "category": "🟢 Data Quality",
+        "title":    "Stale Accounts — no activity in 12 months",
+        "desc":     "Active accounts with no recent activity",
+        "soql":     "SELECT Id, Name, LastActivityDate, Type, Owner.Name FROM Account WHERE LastActivityDate < LAST_N_DAYS:365 AND Type != null AND IsDeleted = false LIMIT 500",
+    },
+    {
+        "category": "🟢 Data Quality",
+        "title":    "Orphaned Contacts — no Account",
+        "desc":     "Contacts not linked to any Account",
+        "soql":     "SELECT Id, Name, Email, CreatedDate FROM Contact WHERE AccountId = null ORDER BY CreatedDate DESC LIMIT 500",
+    },
+    {
+        "category": "🟢 Data Quality",
+        "title":    "Test/Demo Accounts in production",
+        "desc":     "Accounts with test, sandbox, or demo in the name",
+        "soql":     "SELECT Id, Name, CreatedDate, Owner.Name FROM Account WHERE (Name LIKE '%test%' OR Name LIKE '%sandbox%' OR Name LIKE '%demo%') AND IsDeleted = false LIMIT 200",
+    },
+    {
+        "category": "🔵 Field Adoption",
+        "title":    "Nue CPQ (Ruby__) adoption check",
+        "desc":     "Verify Ruby__ fields are being populated — low adoption flagged",
+        "soql":     "SELECT Id, Name, Ruby__Billing_Account__c FROM Account WHERE Ruby__Billing_Account__c != null LIMIT 200",
+    },
+    {
+        "category": "🔵 Field Adoption",
+        "title":    "Mutiny — adoption check",
+        "desc":     "Verify Mutiny_ fields are being used — very low population flagged",
+        "soql":     "SELECT Id, Name FROM Account WHERE Mutiny_Segment__c != null LIMIT 200",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "Who has Create on Opportunity — Step 1 of 2",
+        "desc":     "Returns the Permission Sets/Profiles with Create access. Copy the ParentId values and use in Step 2 to find the actual users.",
+        "soql":     "SELECT ParentId, Parent.Name, Parent.IsOwnedByProfile, PermissionsCreate, PermissionsRead, PermissionsEdit, PermissionsDelete FROM ObjectPermissions WHERE SObjectType = 'Opportunity' AND PermissionsCreate = true ORDER BY Parent.IsOwnedByProfile DESC, Parent.Name LIMIT 200",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "Who has Create on Opportunity — Step 2 of 2",
+        "desc":     "Paste the ParentId values from Step 1 into the IN clause to find which users hold those Permission Sets.",
+        "soql":     "SELECT Assignee.Name, Assignee.Email, Assignee.IsActive, PermissionSet.Name, PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment WHERE PermissionSetId IN ('PASTE_PARENTIDS_HERE') AND Assignee.IsActive = true ORDER BY Assignee.Name LIMIT 500",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "Who has Delete on Opportunity — Step 1 of 2",
+        "desc":     "Returns Permission Sets/Profiles with Delete access. Copy ParentId values for Step 2.",
+        "soql":     "SELECT ParentId, Parent.Name, Parent.IsOwnedByProfile, PermissionsDelete FROM ObjectPermissions WHERE SObjectType = 'Opportunity' AND PermissionsDelete = true ORDER BY Parent.IsOwnedByProfile DESC, Parent.Name LIMIT 200",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "Users assigned 'Modify All Data'",
+        "desc":     "Any user with Modify All Data is effectively a super-admin — audit regularly",
+        "soql":     "SELECT Assignee.Name, Assignee.Email, Assignee.IsActive, PermissionSet.Name, PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true ORDER BY Assignee.Name LIMIT 200",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "Users assigned 'View All Data'",
+        "desc":     "Users who can see all records regardless of sharing rules",
+        "soql":     "SELECT Assignee.Name, Assignee.Email, Assignee.IsActive, PermissionSet.Name FROM PermissionSetAssignment WHERE PermissionSet.PermissionsViewAllData = true AND Assignee.IsActive = true ORDER BY Assignee.Name LIMIT 200",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "All active users and their profiles",
+        "desc":     "Full list of active users, their profiles, and last login date",
+        "soql":     "SELECT Name, Email, Profile.Name, UserRole.Name, LastLoginDate, IsActive FROM User WHERE IsActive = true ORDER BY Profile.Name, Name LIMIT 500",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "Permission sets assigned per user",
+        "desc":     "All active users with their assigned permission sets",
+        "soql":     "SELECT Assignee.Name, Assignee.Email, PermissionSet.Name, PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment WHERE Assignee.IsActive = true AND PermissionSet.IsOwnedByProfile = false ORDER BY Assignee.Name, PermissionSet.Name LIMIT 500",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "CRUD breakdown for any object (Step 1 of 2)",
+        "desc":     "Full Create/Read/Edit/Delete breakdown for Account — edit SObjectType for any object. Use ParentId values in Step 2 to find the actual users.",
+        "soql":     "SELECT ParentId, Parent.Name, Parent.IsOwnedByProfile, PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords FROM ObjectPermissions WHERE SObjectType = 'Account' ORDER BY Parent.IsOwnedByProfile DESC, Parent.Name LIMIT 200",
+    },
+    {
+        "category": "🔐 Permissions",
+        "title":    "Find users from Permission Set IDs (Step 2 of 2)",
+        "desc":     "Paste ParentId values from any Step 1 query into the IN clause to see which users hold those Permission Sets.",
+        "soql":     "SELECT Assignee.Name, Assignee.Email, Assignee.IsActive, PermissionSet.Name, PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment WHERE PermissionSetId IN ('PASTE_PARENTIDS_HERE') AND Assignee.IsActive = true ORDER BY Assignee.Name LIMIT 500",
+    },
+]
+
+# System prompt for Claude — includes full Axonify org context
+AI_SYSTEM_PROMPT = """You are a Salesforce SOQL expert assistant embedded in a query tool for Axonify, a learning platform company.
+
+YOUR JOB: Convert plain-English requests into valid, safe SOQL queries.
+
+=== AXONIFY ORG CONTEXT ===
+
+RETIRED TOOLS (fields are cleanup candidates):
+- Cloudingo: CloudingoAgent__ prefix
+- DiscoverOrg: discoverorg_ prefix
+- Drift: Drift_ prefix
+- SalesLoft: SalesLoft1__ prefix (heavily populated — warn before removing)
+- Nudge: Nudge_ prefix (17% populated — warn before removing)
+- Gainsight: Gainsight, Exclude_from_Gainsight__c
+- UserGems: UserGems__ prefix
+- Pardot: Pardot_ prefix (replaced by Marketo)
+- InsideView: iv__, IV_ prefix (90% populated — warn before removing)
+- G2Crowd: G2_ prefix
+- RingLead legacy: UniqueEntry__ prefix
+- Mavenlink: Mavenlink prefix (retired)
+- Seismic, Loopio, TruVoice: retired
+
+ACTIVE TOOLS (never suggest removing these):
+- 6sense: accountBuyingStage6sense__c, X6sense, X6QA
+- Clay: Clay_ prefix
+- Gong: Gong__ prefix
+- Marketo/Bizible: bizible2__ prefix
+- Nue CPQ: Ruby__ prefix
+- Zendesk: Zendesk_ prefix
+- Spiff: Spiff_ prefix
+- Mutiny: Mutiny_ prefix
+- ZoomInfo/RingLead: ZoomInfo_ prefix
+- Also active: Chili Piper, PandaDoc, Slack, LinkedIn SN, LeadIQ, Klue, Kluster, HeySam, Storylane, Vidyard, Sendoso, Lucid Chart, Supermetrics, Xappex, UTM.io, Scratchpad, Zoom Events, Zapier, StitchData, Dock
+
+ALWAYS PROTECTED (Axonify's own business data — never remove):
+- Axonify_ prefix (the company's own product and business fields)
+- Account_Total_ARR_Learn__c and all ARR/revenue fields
+- Customer_Success_Manager__c, Customer_Stage__c, CSM_ prefix
+- Kronos_User__c, SuccessFactors_User__c, Zebra_ (tracks what customers use)
+- Account_Health_Overall_Risk__c, CSM_Risk_Sentiment__c
+
+=== SOQL RULES ===
+- Always include Id in SELECT
+- Single quotes around string values
+- Apostrophes inside SOQL string literals: use '' (two single quotes) in your JSON output. The tool automatically converts '' to \' before sending to Salesforce. Do NOT output \' directly — a lone backslash in a JSON string is an invalid escape sequence and will break JSON parsing.
+  Correct output:   WHERE Name IN ('BJ''s', 'Jersey Mike''s', 'Nando''s')
+  Incorrect output: WHERE Name IN ('BJ\'s', 'Jersey Mike\'s')   ← breaks JSON parsing
+- Dates as YYYY-MM-DD or LAST_N_DAYS:n syntax
+- Null check: field = null OR field = ''
+- LIMIT: Only add a LIMIT clause if the user explicitly asks for one (e.g. "top 10", "first 100", "sample").
+  Do NOT add LIMIT by default. The tool uses query_all() which automatically pages through all records.
+  If a row_limit value is provided in the prompt, append LIMIT {row_limit} to the query.
+- Never use SELECT *
+- For multi-step queries, also do NOT add LIMIT to intermediate steps unless the user asks.
+
+=== RELATIONSHIP FIELDS — ALWAYS PAIR NAME WITH ID ===
+Whenever you include a relationship name field, ALWAYS also include the corresponding ID field
+in the same SELECT. This is critical so the AI Update Assistant can write back to Salesforce
+(which requires IDs, not names).
+
+Common pairings — always include BOTH columns:
+  Owner.Name        → also include OwnerId
+  Account.Name      → also include AccountId
+  CreatedBy.Name    → also include CreatedById
+  LastModifiedBy.Name → also include LastModifiedById
+  Manager.Name      → also include ManagerId
+  ReportsTo.Name    → also include ReportsToId
+  Contact.Name      → also include ContactId
+  Opportunity.Name  → also include OpportunityId
+  Campaign.Name     → also include CampaignId
+
+Example — correct:
+  SELECT Id, Name, OwnerId, Owner.Name, AccountId, Account.Name FROM Contact
+
+Example — incorrect (missing IDs):
+  SELECT Id, Name, Owner.Name, Account.Name FROM Contact
+
+This rule applies to ALL queries, including multi-step queries. In FORMAT C queries,
+both the child and parent step must include OwnerId (or equivalent) so the merge and
+python_filter can compare IDs directly rather than names.
+
+=== SALESFORCE PERMISSIONS DATA MODEL ===
+Permissions are NOT stored on the User object. Use these objects instead:
+
+ObjectPermissions — CRUD access by Permission Set or Profile to an object
+  Key fields: SObjectType, PermissionsCreate, PermissionsRead, PermissionsEdit,
+              PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords
+  Parent.Name = the Permission Set or Profile name
+  Parent.IsOwnedByProfile = true means it is a Profile, false means a Permission Set
+  Example: "who has Create on Opportunity"
+    SELECT Parent.Name, Parent.IsOwnedByProfile, PermissionsCreate
+    FROM ObjectPermissions
+    WHERE SObjectType = 'Opportunity' AND PermissionsCreate = true
+
+FieldPermissions — field-level read/edit access
+  Key fields: SObjectType, Field (format: 'Object.FieldName'), PermissionsRead, PermissionsEdit
+  Example: "who can edit the CloseDate field"
+    SELECT Parent.Name, Field, PermissionsRead, PermissionsEdit
+    FROM FieldPermissions
+    WHERE Field = 'Opportunity.CloseDate' AND PermissionsEdit = true
+
+PermissionSetAssignment — which users have which Permission Sets
+  Key fields: AssigneeId, Assignee.Name, Assignee.Email, Assignee.IsActive,
+              PermissionSetId, PermissionSet.Name, PermissionSet.IsOwnedByProfile
+  Example: "which users have Modify All Data"
+    SELECT Assignee.Name, Assignee.Email, PermissionSet.Name
+    FROM PermissionSetAssignment
+    WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true
+
+PermissionSet — the Permission Set or Profile itself
+  Key fields: Name, IsOwnedByProfile, PermissionsModifyAllData, PermissionsViewAllData,
+              PermissionsManageUsers, PermissionsApiEnabled
+
+User — use for basic user info, not for permissions
+  Key fields: Name, Email, ProfileId, Profile.Name, UserRole.Name,
+              IsActive, LastLoginDate, CreatedDate
+
+CRITICAL SOQL LIMITATIONS — THESE CAUSE MALFORMED_QUERY AND MUST NEVER BE GENERATED:
+
+1. RELATIONSHIP FIELDS IN WHERE CLAUSES
+   You CANNOT use cross-object (relationship) fields on the right side of a WHERE comparison.
+   These fail because Salesforce cannot traverse relationships in filter conditions:
+     ❌ WHERE OwnerId != Account.OwnerId        — can SELECT Account.OwnerId, cannot filter by it
+     ❌ WHERE Contact.AccountId = Lead.ConvertedAccountId
+     ❌ WHERE Amount > Opportunity.ExpectedRevenue
+   
+   CORRECT APPROACH — use a two-step query:
+     Step 1: SELECT Id, OwnerId, AccountId FROM Contact WHERE AccountId != null
+     Step 2: In Python, compare Contact.OwnerId to Account.OwnerId from the Account query
+   OR: tell the user this comparison requires a formula field in Salesforce Setup.
+
+2. MULTI-LEVEL RELATIONSHIPS IN IN SUBQUERIES
+   ❌ WHERE PermissionSet.Id IN (SELECT ...)   — "more than one level of relationships" error
+   ❌ WHERE Assignee.ProfileId IN (SELECT ...) — same error
+
+RULE: If a WHERE clause would reference a field via a dot (relationship traversal),
+it MUST be converted to a multi-step query using <<PREV_IDS>> instead.
+
+CORRECT APPROACH — always use two-step logic or direct field references:
+
+To find "which users have Create on Opportunity":
+  Step 1 — find which PermissionSets grant that access:
+    SELECT ParentId, Parent.Name FROM ObjectPermissions
+    WHERE SObjectType = 'Opportunity' AND PermissionsCreate = true
+  Step 2 — find which users have those PermissionSets:
+    SELECT Assignee.Name, Assignee.Email, PermissionSet.Name
+    FROM PermissionSetAssignment
+    WHERE PermissionSetId IN ('id1','id2') AND Assignee.IsActive = true
+
+When generating SOQL for permission questions, ALWAYS generate Step 1 first.
+Tell the user in the explanation that this is a two-step query and they should
+run Step 1, collect the ParentId values, then use them in Step 2.
+Format the explanation clearly so the user knows what to do with each query.
+
+EXAMPLE — "contacts where owner differs from account owner":
+  This requires a two-step approach because WHERE OwnerId != Account.OwnerId is illegal in SOQL.
+  Step 1: SELECT Id, Name, Email, OwnerId, AccountId FROM Contact WHERE AccountId != null
+  Step 2: SELECT Id, OwnerId FROM Account WHERE Id IN ('<<PREV_IDS>>')
+    join_on: { "from_field": "AccountId" }
+  Then Python merges on AccountId=Id and filters rows where Contact.OwnerId != Account.OwnerId.
+  Add a merge_filter hint in the step: { "filter": "OwnerId_x != OwnerId_y" }
+
+For SYSTEM-LEVEL permissions (ModifyAllData, ViewAllData, etc.) you CAN query
+PermissionSetAssignment directly because these are fields ON the PermissionSet object,
+not cross-object subqueries:
+  ✅ SELECT Assignee.Name, PermissionSet.Name FROM PermissionSetAssignment
+     WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true
+
+=== HANDLING VAGUE OR GENERALISED REQUESTS ===
+Users are Salesforce admins, not developers. They will use plain English and imprecise field names.
+Your job is to interpret their intent and pick the best matching field from the Available Fields list.
+
+Examples of how to interpret vague requests:
+- "owner" → OwnerId or Owner.Name (use Owner.Name for display, OwnerId for filtering by ID)
+- "created date" → CreatedDate
+- "last modified" → LastModifiedDate  
+- "company" or "account name" → Name (on Account), AccountId or Account.Name (on other objects)
+- "email" → Email
+- "phone" → Phone
+- "industry" → Industry
+- "revenue" or "ARR" → look for ARR fields in the available fields list
+- "stage" → StageName (on Opportunity), Customer_Stage__c (on Account)
+- "status" → Status or the most relevant status field for the object
+
+If a user says something like "where Connor Skipper is the owner", write:
+  WHERE Owner.Name = 'Connor Skipper'
+Do NOT require the user to know the exact field API name.
+
+=== PICKLIST VALUE MATCHING ===
+For picklist fields (dropdowns), the Available Fields list includes the real Salesforce values under VALUES:.
+When the user mentions a picklist value, ALWAYS match it to the closest real value from that list.
+Use fuzzy/intent matching — the user will rarely type the exact value.
+
+Examples:
+- User says "Closed Won" → check StageName VALUES, use "Closed - Won" (the real value)
+- User says "New Business" → check Type VALUES, use "New Business" if it exists, or closest match
+- User says "customer" or "client" → check Type VALUES for "Customer" or equivalent
+- User says "at risk" → check health/risk fields VALUES for closest match
+
+If the user's value doesn't exactly match any picklist option, pick the best match and note it 
+in the explanation field (e.g. "I matched 'Closed Won' to the actual Salesforce value 'Closed - Won'").
+
+If no field in the available list clearly matches, pick the closest one and note it in the explanation.
+Never refuse to generate a query just because the request is imprecise — always make a best effort.
+
+=== RESPONSE FORMAT ===
+You MUST return ONLY a valid JSON object. No explanations before or after. No markdown. No code fences.
+Never say "I notice" or explain what you are about to do. Just return the JSON.
+
+If the user's request mentions a different object than the one provided in Available Fields, 
+still write the SOQL against the correct object for their request — the dropdown may be wrong.
+
+You MUST choose one of two response formats depending on whether the request
+requires a single query or multiple queries joined together.
+
+FORMAT A — Single query (use for most requests):
+{
+  "soql": "SELECT Id, Name FROM Account WHERE ...",
+  "explanation": "Plain English explanation of what this query does.",
+  "safety_notes": []
+}
+
+FORMAT B — Multi-step query (use when results from one query are needed to filter another via IN clause):
+{
+  "steps": [
+    {
+      "label": "Short name for this step, e.g. Permission Sets with Create on Opportunity",
+      "soql": "SELECT ParentId, Parent.Name FROM ObjectPermissions WHERE SObjectType = 'Opportunity' AND PermissionsCreate = true"
+    },
+    {
+      "label": "Users holding those Permission Sets",
+      "soql": "SELECT Assignee.Name, Assignee.Email, Assignee.IsActive, PermissionSet.Name FROM PermissionSetAssignment WHERE PermissionSetId IN ('<<PREV_IDS>>') AND Assignee.IsActive = true ORDER BY Assignee.Name",
+      "join_on": {
+        "from_field": "ParentId"
+      }
+    }
+  ],
+  "explanation": "Plain English explanation of the full multi-step process.",
+  "safety_notes": []
+}
+
+FORMAT C — Cross-object comparison (use when you need to compare a field on one object to a field on a related object,
+e.g. "Contact owner doesn't match Account owner", "Opportunity owner differs from Account owner"):
+{
+  "steps": [
+    {
+      "label": "Contacts with their Owner and Account",
+      "soql": "SELECT Id, Name, OwnerId, Owner.Name, AccountId, Account.Name, Account.OwnerId FROM Contact WHERE AccountId != null"
+    },
+    {
+      "label": "Accounts with their Owner",
+      "soql": "SELECT Id, OwnerId, Owner.Name FROM Account WHERE Id IN ('<<PREV_IDS>>')",
+      "join_on": {
+        "from_field": "AccountId",
+        "merge_left": "AccountId",
+        "merge_right": "Id",
+        "python_filter": "OwnerId_x != OwnerId_y",
+        "rename_columns": {
+          "OwnerId_x": "Contact.OwnerId",
+          "OwnerId_y": "Account.OwnerId",
+          "Owner.Name_x": "Contact Owner",
+          "Owner.Name_y": "Account Owner",
+          "Name_x": "Contact Name",
+          "Account.Name_x": "Account Name"
+        },
+        "output_columns": ["Id", "Contact Name", "Contact Owner", "Account Name", "Account Owner"]
+      }
+    }
+  ],
+  "explanation": "Plain English explanation of the full multi-step process.",
+  "safety_notes": []
+}
+
+FORMAT C RULES:
+- Use FORMAT C whenever the user wants to COMPARE a field on a child object to a field on its parent.
+- Step 1 fetches the child records (e.g. Contact) including the foreign key (e.g. AccountId) and the field to compare (e.g. OwnerId).
+  Also include any display fields the user wants to see.
+- Step 2 fetches the parent records using <<PREV_IDS>> and the same comparison field (e.g. Account OwnerId).
+- join_on.merge_left: the foreign key column in Step 1 results (e.g. "AccountId")
+- join_on.merge_right: the Id column in Step 2 results (always "Id")
+- join_on.python_filter: a pandas boolean expression applied AFTER the merge.
+  After merging two DataFrames, pandas appends _x (left/Step1) and _y (right/Step2) to duplicate column names.
+  So to compare Contact OwnerId to Account OwnerId: "OwnerId_x != OwnerId_y"
+  To compare by name instead: "Owner.Name_x != Owner.Name_y"
+- join_on.rename_columns: optional dict to rename _x/_y columns to readable names in the final output.
+  Always rename at minimum the two compared fields and any Name_x/Name_y columns.
+- join_on.output_columns: optional list of final column names to keep. Use renamed names here (after rename_columns).
+  Always include "Id" (not "Id_x") as the first output column — the tool normalises Id_x to Id automatically.
+- IMPORTANT: The python_filter is ALWAYS applied. It is not optional. The tool will validate that the filter
+  actually reduced the record count and will show an error if zero records were filtered out (which would
+  indicate the filter expression was wrong).
+
+COMMON FORMAT C PATTERNS:
+  * Contact owner != Account owner:
+      Step1 fields: Id, Name, OwnerId, Owner.Name, AccountId, Account.Name, Account.OwnerId
+      Step2: SELECT Id, OwnerId, Owner.Name FROM Account WHERE Id IN ('<<PREV_IDS>>')
+      python_filter: "OwnerId_x != OwnerId_y"
+  * Opportunity owner != Account owner:
+      Step1 fields: Id, Name, OwnerId, Owner.Name, AccountId, Account.Name, Account.OwnerId
+      Step2: SELECT Id, OwnerId, Owner.Name FROM Account WHERE Id IN ('<<PREV_IDS>>')
+      python_filter: "OwnerId_x != OwnerId_y"
+
+MULTI-STEP RULES:
+- Use FORMAT B whenever one query's results need to filter another query using an IN clause.
+- Use FORMAT C whenever the comparison is between a field on the child and a field on its parent.
+- The placeholder '<<PREV_IDS>>' in the SOQL will be automatically replaced with the
+  actual ID values returned by the previous step. Always wrap it in single quotes in the SOQL.
+- join_on.from_field is the column name in the PREVIOUS step's results to extract IDs from.
+  For ObjectPermissions → PermissionSetAssignment, use from_field: "ParentId"
+  For most other joins, use from_field: "Id"
+- Never ask the user to manually copy IDs between steps — the tool handles this automatically.
+- Common multi-step patterns:
+  * Object permissions → users: ObjectPermissions (get ParentId) → PermissionSetAssignment (filter by PermissionSetId)
+  * Parent → child lookups where subqueries are not supported
+  * Any query where SOQL subquery limitations would cause a MALFORMED_QUERY error
+
+IMPORTANT: If you cannot produce valid SOQL for any reason, still return JSON:
+{
+  "soql": "",
+  "explanation": "Reason why the query could not be generated.",
+  "safety_notes": []
+}
+
+=== OBJECT DETECTION ===
+The user has not pre-selected an object. Determine the correct Salesforce object from the user's
+request. Default to Account if unclear. Include the detected object in every JSON response as:
+  "detected_object": "ObjectName"
+For example, a request about contacts → "detected_object": "Contact"; about accounts → "detected_object": "Account".
+
+=== PYTHON STRATEGIES ===
+Some requests cannot be expressed in SOQL. When you detect one of these patterns, return a Python
+strategy instead of SOQL. Do NOT return an empty soql with an apology — return the strategy.
+
+Currently supported Python strategies:
+
+1. "account_hierarchy" — Use when the user asks for:
+   - All accounts in a hierarchy / family tree
+   - Parent and child accounts for a given account
+   - Full hierarchy traversal for a list of accounts
+   - "Show me every account related to X" (where related means same hierarchy)
+
+   Params:
+   - seed_names: list of account name strings extracted from the request (can be empty)
+   - seed_ids: list of 15 or 18-char Salesforce IDs extracted from the request (can be empty)
+   - extra_fields: list of Account field API names the user wants beyond the default hierarchy
+     columns. Parse these from the request. If none specified, leave as empty list.
+
+When returning a Python strategy, use this JSON shape:
+{
+  "strategy": "python",
+  "python_task": "<strategy_name>",
+  "params": { ... task-specific params ... },
+  "explanation": "Why this needs Python instead of SOQL.",
+  "safety_notes": [],
+  "detected_object": "Account"
+}
+
+At least one of seed_names or seed_ids must be non-empty. If the user's request does not specify
+any seed accounts, ask them to clarify — return an empty soql with an explanation asking them to
+name the accounts or provide IDs. Do NOT return a Python strategy with empty seeds."""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTHENTICATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── OAuth 2.0 Web Flow — captures auth code from browser redirect ─────────────
+
+
+def _exchange_code_for_token(code: str) -> dict:
+    """Exchange the OAuth authorization code for an access token."""
+    domain     = _get_secret("SF_DOMAIN", "login")
+    token_url  = f"https://{domain}.salesforce.com/services/oauth2/token"
+    payload    = urllib.parse.urlencode({
+        "grant_type":    "authorization_code",
+        "code":          code,
+        "client_id":     _get_secret("SF_CLIENT_ID"),
+        "client_secret": _get_secret("SF_CLIENT_SECRET"),
+        "redirect_uri":  f"{_get_base_url()}/callback",
+    }).encode()
+    req  = urllib.request.Request(token_url, data=payload, method="POST")
+    resp = urllib.request.urlopen(req)
+    return json.loads(resp.read().decode())
+
+
+
+def get_sf_connection() -> Salesforce:
+    """
+    Creates and caches a Salesforce connection using OAuth 2.0 Web Flow.
+
+    Token persistence strategy:
+      1. Check st.session_state — fastest path, same browser session
+      2. If neither works, show the login button and run the OAuth flow
+
+    The cache file is stored in the same directory as sf_query_tool.py.
+    Add .sf_token_cache.json to your .gitignore if you use version control.
+    """
+    # ── 1. In-memory cache (same Streamlit session) ───────────────────────────
+    if "sf" in st.session_state and st.session_state.sf is not None:
+        return st.session_state.sf
+
+    # Check required config
+    required = ["SF_CLIENT_ID", "SF_CLIENT_SECRET"]
+    missing  = [k for k in required if not _get_secret(k)]
+    if missing:
+        st.error(f"Missing environment variables: {', '.join(missing)}")
+        st.info("Add SF_CLIENT_ID and SF_CLIENT_SECRET to your .env file.")
+        st.stop()
+
+    # ── 2. Handle OAuth callback (code in URL after Salesforce redirect) ───────
+    if "sf_auth_code" in st.session_state and st.session_state.sf_auth_code:
+        try:
+            token_data   = _exchange_code_for_token(st.session_state.sf_auth_code)
+            instance_url = token_data["instance_url"]
+            access_token = token_data["access_token"]
+            sf = Salesforce(instance_url=instance_url, session_id=access_token)
+            st.session_state.sf           = sf
+            st.session_state.sf_auth_code = None
+            # Fetch and store logged-in user identity
+            if "sf_user_info" not in st.session_state:
+                try:
+                    me = sf.restful("chatter/users/me")
+                    st.session_state.sf_user_info = {
+                        "name":  me.get("name", "Unknown"),
+                        "email": me.get("email", "unknown@axonify.com"),
+                    }
+                except Exception:
+                    st.session_state.sf_user_info = {"name": "Unknown", "email": "unknown@axonify.com"}
+            return sf
+        except Exception as e:
+            st.error(f"Token exchange failed: {e}")
+            st.session_state.sf_auth_code = None
+            st.stop()
+
+    params = st.query_params
+    if "code" in params:
+        st.session_state.sf_auth_code = params["code"]
+        st.query_params.clear()
+        st.rerun()
+
+    # ── 3. No valid token — show login button ─────────────────────────────────
+    domain    = _get_secret("SF_DOMAIN", "login")
+    client_id = _get_secret("SF_CLIENT_ID")
+    auth_url  = (
+        f"https://{domain}.salesforce.com/services/oauth2/authorize"
+        f"?response_type=code"
+        f"&client_id={urllib.parse.quote(client_id)}"
+        f"&redirect_uri={urllib.parse.quote(_get_base_url() + '/callback')}"
+        f"&prompt=login"
+    )
+
+    st.markdown("## 🔐 Connect to Salesforce")
+    st.markdown("Click the button below to log in with your Salesforce credentials. Your browser will open the Salesforce login page where you can complete MFA as normal.")
+    st.markdown(f'''
+        <a href="{auth_url}" target="_self">
+            <button style="background:#017551;color:white;border:none;padding:14px 28px;
+                           font-size:16px;border-radius:6px;cursor:pointer;font-family:sans-serif;">
+                🔐 Log in to Salesforce
+            </button>
+        </a>
+    ''', unsafe_allow_html=True)
+    st.info("After logging in and completing MFA, you will be redirected back here automatically.")
+    st.stop()
+
+
+def get_anthropic_client() -> anthropic.Anthropic:
+    """Creates and caches an Anthropic API client for the session."""
+    # Always re-initialise if None — handles post-OAuth-redirect reruns
+    if st.session_state.get("anthropic_client") is None:
+        # Re-load .env on every init attempt in case env wasn't loaded yet
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+        except ImportError:
+            pass
+        api_key = _get_secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            st.error("ANTHROPIC_API_KEY not found. Check your .env file contains ANTHROPIC_API_KEY=sk-ant-...")
+            st.stop()
+        st.session_state.anthropic_client = anthropic.Anthropic(api_key=api_key)
+    return st.session_state.anthropic_client
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SALESFORCE HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_object_fields(object_name: str) -> list[dict]:
+    """
+    Returns field metadata for a Salesforce object.
+    Cached for 5 minutes to avoid repeated describe() API calls.
+    Each dict has: name, label, type, updateable, filterable.
+    """
+    sf = get_sf_connection()
+    try:
+        desc = getattr(sf, object_name).describe()
+        fields = []
+        for f in desc["fields"]:
+            entry = {
+                "name":       f["name"],
+                "label":      f["label"],
+                "type":       f["type"],
+                "updateable": f["updateable"],
+                "filterable": f["filterable"],
+                "picklist":   [],
+            }
+            # Capture actual picklist values so the AI can match user intent
+            # against real Salesforce values (e.g. 'Closed - Won' not 'Closed Won')
+            if f["type"] in ("picklist", "multipicklist") and f.get("picklistValues"):
+                entry["picklist"] = [
+                    pv["value"] for pv in f["picklistValues"] if pv.get("active")
+                ]
+            fields.append(entry)
+        return fields
+    except Exception as e:
+        st.error(f"Could not describe {object_name}: {e}")
+        return []
+
+
+def run_soql(soql: str) -> pd.DataFrame:
+    """
+    Executes a SOQL SELECT query and returns a DataFrame.
+
+    Salesforce's /query endpoint only accepts GET requests — the SOQL is
+    URL-encoded into the query string. This creates a hard URL length limit
+    of ~16,000 characters. To work around this, we check the URL-encoded
+    length of the SOQL before sending and raise a clear error if it would
+    exceed the limit, so the caller (run_query_plan / AI tab batching) can
+    split the query into smaller chunks.
+
+    Automatically pages through all result sets for queries returning >2000 rows.
+    Raises RuntimeError on SOQL errors with a clean message.
+    Raises ValueError with message "SOQL_TOO_LONG" if the query would exceed
+    Salesforce URL limits — callers should reduce chunk size and retry.
+    """
+    import urllib.parse
+    sf = get_sf_connection()
+
+    # Salesforce hard limit is ~16,383 chars for the full URL.
+    # The base URL (instance + /services/data/vXX.0/query?q=) is ~70 chars.
+    # We leave 2,000 chars headroom for safety → max SOQL length before encoding: ~4,700 chars
+    # (URL encoding inflates ~3x for quoted strings: apostrophe → %27, comma → %2C)
+    encoded_soql = urllib.parse.quote(soql)
+    if len(encoded_soql) > 14000:
+        raise ValueError(f"SOQL_TOO_LONG:{len(encoded_soql)}")
+
+    try:
+        # ── Step 1: get total count so we can show a real progress bar ────────
+        # Build a COUNT() version of the query by replacing the SELECT field
+        # list with SELECT COUNT(). We strip ORDER BY (not valid in COUNT queries)
+        # and any existing LIMIT clause.
+        try:
+            count_soql = re.sub(
+                r"(?i)SELECT\s+.+?\s+FROM\s+",
+                "SELECT COUNT() FROM ",
+                soql,
+                count=1,
+                flags=re.DOTALL,
+            )
+            count_soql = re.sub(r"(?i)\s+ORDER\s+BY\s+\S+(\s+(ASC|DESC))?", "", count_soql)
+            count_soql = re.sub(r"(?i)\s+LIMIT\s+\d+", "", count_soql)
+            count_result  = sf.query(count_soql)
+            total_records = count_result.get("totalSize", 0)
+        except Exception:
+            total_records = 0  # COUNT failed — proceed without progress bar
+
+        # ── Step 2: paginate manually so we can update the progress bar ───────
+        PAGE_SIZE = 2000  # Salesforce default page size
+
+        show_progress = total_records > PAGE_SIZE
+        progress_bar  = None
+        status_text   = None
+
+        _ST_MONO  = "font-family:'IBM Plex Mono',monospace;font-size:0.78rem"
+        _ST_GREY  = f"<div style='{_ST_MONO};color:#7a9485;'>"
+        _ST_GREEN = f"<div style='{_ST_MONO};color:{COLOR_SUCCESS};'>"
+
+        if show_progress:
+            status_text  = st.empty()
+            progress_bar = st.progress(0)
+            status_text.markdown(
+                f"{_ST_GREY}Fetching records\u2026 0 of {total_records:,}</div>",
+                unsafe_allow_html=True,
+            )
+
+        all_records  = []
+        result       = sf.query(soql)
+        all_records += result.get("records", [])
+
+        while not result.get("done") and result.get("nextRecordsUrl"):
+            if show_progress and progress_bar:
+                fetched  = len(all_records)
+                fraction = min(fetched / total_records, 1.0) if total_records else 0
+                progress_bar.progress(fraction)
+                status_text.markdown(
+                    f"{_ST_GREY}Fetching records\u2026 {fetched:,} of {total_records:,} ({int(fraction*100)}%)</div>",
+                    unsafe_allow_html=True,
+                )
+            result       = sf.query_more(result["nextRecordsUrl"], identifier_is_url=True)
+            all_records += result.get("records", [])
+
+        if show_progress and progress_bar:
+            progress_bar.progress(1.0)
+            status_text.markdown(
+                f"{_ST_GREEN}\u2713 Fetched {len(all_records):,} records</div>",
+                unsafe_allow_html=True,
+            )
+
+        if not all_records:
+            if show_progress and progress_bar:
+                progress_bar.empty()
+                status_text.empty()
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_records).drop(columns=["attributes"], errors="ignore")
+        df = _flatten_df(df)
+        return df
+    except Exception as e:
+        raise RuntimeError(f"SOQL error: {e}")
+
+
+
+def _fix_soql_apostrophes(soql: str) -> str:
+    """
+    Converts SQL-style apostrophe escaping ('') to SOQL-style (\') inside
+    string literals.  Only triggers when the apostrophe is flanked by word
+    characters (e.g. BJ''s → BJ\'s), so genuine empty-string literals like
+    = '' or IN ('') are left unchanged.
+    """
+    return re.sub(r"(\w)''(\w)", r"\1\\'\2", soql)
+
+
+def _inject_ids_and_run(soql_template: str, id_values: list, from_field: str) -> pd.DataFrame:
+    """
+    Injects a list of IDs into a SOQL template containing '<<PREV_IDS>>',
+    automatically batching and reducing chunk size to stay under the Salesforce
+    URL length limit (~14,000 encoded chars).
+
+    Strategy:
+      1. Group IDs by their 3-char Salesforce object prefix so each batch is
+         type-homogeneous (prevents MALFORMED_QUERY from mixed PermissionSet
+         and Profile IDs being injected into the same IN clause).
+      2. Start with INITIAL_CHUNK IDs per batch.
+      3. If a batch produces a SOQL_TOO_LONG signal, halve the chunk size and
+         retry automatically — down to a minimum of 10 IDs per batch.
+      4. Concat all batch results and deduplicate on Id (if present).
+
+    Returns a single merged DataFrame.
+    """
+    import urllib.parse
+
+    INITIAL_CHUNK = 200   # conservative starting point — well under URL limits for most queries
+    MIN_CHUNK     = 10    # absolute floor — if 10 IDs is still too long, something else is wrong
+
+    # Group IDs by Salesforce object prefix (first 3 chars, lowercased)
+    id_groups: dict[str, list] = {}
+    for v in id_values[:5000]:
+        prefix = str(v)[:3].lower()
+        id_groups.setdefault(prefix, []).append(v)
+
+    partial_dfs = []
+
+    for prefix_key, group_ids in id_groups.items():
+        chunk_size = INITIAL_CHUNK
+        pos = 0
+
+        while pos < len(group_ids):
+            chunk   = group_ids[pos : pos + chunk_size]
+            id_list = ", ".join(f"'{v}'" for v in chunk)
+
+            # Replace all possible ways the AI might write the placeholder.
+            # IMPORTANT: most specific patterns first — ('<<PREV_IDS>>') must be
+            # matched before '<<PREV_IDS>>' or <<PREV_IDS>>, otherwise we get
+            # double parentheses: IN (('id1','id2')) which Salesforce rejects.
+            injected = soql_template.replace("('<<PREV_IDS>>')", f"({id_list})")  # parens+quotes (most common)
+            injected = injected.replace('("<<PREV_IDS>>")',     f"({id_list})")  # parens+double-quotes
+            injected = injected.replace("'<<PREV_IDS>>'",         f"({id_list})")  # quotes only
+            injected = injected.replace('"<<PREV_IDS>>"',         f"({id_list})")  # double-quotes only
+            injected = injected.replace("(<<PREV_IDS>>)",           f"({id_list})")  # parens only
+            injected = injected.replace("<<PREV_IDS>>",             f"({id_list})")  # bare placeholder
+
+            try:
+                partial_dfs.append(run_soql(injected))
+                pos += chunk_size   # success — advance to next chunk
+
+            except ValueError as ve:
+                # run_soql raises ValueError("SOQL_TOO_LONG:N") when URL would be too long
+                if str(ve).startswith("SOQL_TOO_LONG") and chunk_size > MIN_CHUNK:
+                    chunk_size = max(MIN_CHUNK, chunk_size // 2)
+                    # Don't advance pos — retry same position with smaller chunk
+                else:
+                    raise   # can't reduce further — propagate
+
+            except RuntimeError as re:
+                raise   # actual SOQL error — propagate as-is
+
+    if not partial_dfs:
+        return pd.DataFrame()
+
+    combined = pd.concat(partial_dfs, ignore_index=True)
+
+    # Salesforce returns nested objects (e.g. Assignee.Name, Owner.Name) as
+    # OrderedDicts inside DataFrame cells. pandas cannot hash these for
+    # drop_duplicates(). Convert any dict-valued columns to strings first.
+    for col in combined.columns:
+        if combined[col].apply(lambda x: isinstance(x, dict)).any():
+            combined[col] = combined[col].apply(
+                lambda x: str(x) if isinstance(x, dict) else x
+            )
+
+    if "Id" in combined.columns:
+        combined = combined.drop_duplicates(subset=["Id"])
+    else:
+        try:
+            combined = combined.drop_duplicates()
+        except TypeError:
+            pass  # if still unhashable, skip dedup — duplicates are harmless
+
+    return combined
+
+
+def _flatten_df(df):
+    """
+    Flattens any remaining nested dict/OrderedDict columns in a DataFrame.
+    Salesforce relationship fields (Owner.Name etc.) sometimes survive as dicts
+    after a pandas merge — this ensures they are always scalar values.
+    """
+    for col in list(df.columns):
+        if df[col].apply(lambda x: isinstance(x, dict)).any():
+            expanded = df[col].apply(
+                lambda x: pd.Series(x) if isinstance(x, dict) else pd.Series({"value": x})
+            )
+            expanded.columns = [
+                col if k == "value" else f"{col}.{k}"
+                for k in expanded.columns
+            ]
+            df = df.drop(columns=[col]).join(expanded)
+            drop_attr = [c for c in df.columns if c.endswith(".attributes")]
+            df = df.drop(columns=drop_attr, errors="ignore")
+    return df
+
+
+def run_query_plan(steps: list[dict], status_cb=None) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Executes a multi-step query plan (FORMAT B or FORMAT C).
+
+    FORMAT B — sequential IN-clause injection:
+      Each step has <<PREV_IDS>> replaced with IDs from the previous step.
+
+    FORMAT C — cross-object field comparison:
+      Step 2 join_on includes:
+        merge_left     — foreign key in Step 1 results (e.g. "AccountId")
+        merge_right    — Id column in Step 2 results (always "Id")
+        python_filter  — pandas eval expression applied after merge
+                         (uses _x/_y suffixes for duplicate column names)
+        rename_columns — optional dict renaming _x/_y columns to readable names
+        output_columns — optional list of columns to keep in final output
+
+    The python_filter is VALIDATED: if it removes zero records an error is
+    raised so the user sees a clear message rather than silently wrong data.
+
+    Returns (merged_df, step_summaries).
+    """
+    # status_cb(msg, style) pushes a live status line to the UI.
+    # style: "info" | "success" | "warning" | "filter"
+    # Falls back to a no-op if not provided (e.g. when called without UI context).
+    def _status(msg, style="info"):
+        if status_cb:
+            status_cb(msg, style)
+
+    if not steps:
+        return pd.DataFrame(), []
+
+    # Build a human-readable plan summary shown before execution starts
+    total_soql_steps = len(steps)
+    has_python       = any(s.get("join_on", {}).get("python_filter") for s in steps)
+    total_phases     = total_soql_steps + (1 if has_python else 0)
+    _status(
+        f"Starting {total_phases}-phase job: "
+        + ", ".join(f"Step {i+1}: {s.get('label','?')}" for i, s in enumerate(steps))
+        + (f", Step {total_phases}: Python filter/merge" if has_python else ""),
+        "info"
+    )
+
+    prev_df        = None
+    step_summaries = []
+
+    for i, step in enumerate(steps):
+        soql  = step.get("soql", "")
+        label = step.get("label", f"Step {i+1}")
+        join  = step.get("join_on", {})
+
+        # ── Inject IDs from previous step if FORMAT B placeholder present ─────
+        if "<<PREV_IDS>>" in soql and prev_df is not None:
+            from_field = join.get("from_field", "Id")
+
+            if from_field in prev_df.columns:
+                id_values = prev_df[from_field].dropna().unique().tolist()
+            else:
+                matches   = [c for c in prev_df.columns if c.endswith(from_field)]
+                id_values = prev_df[matches[0]].dropna().unique().tolist() if matches else []
+
+            if not id_values:
+                step_summaries.append(f"**{label}**: No IDs from previous step — stopping.")
+                _status(f"Step {i+1} of {total_phases} ({label}): No IDs from previous step — stopping.", "warning")
+                break
+
+            _status(f"⏳ Step {i+1} of {total_phases}: Fetching {label} ({len(id_values):,} IDs to match)...", "info")
+            df = _inject_ids_and_run(soql, id_values, from_field)
+        else:
+            _status(f"⏳ Step {i+1} of {total_phases}: Fetching {label}...", "info")
+            df = run_soql(soql)
+
+        df = _flatten_df(df)
+        count = len(df)
+        msg = f"✓ Step {i+1} of {total_phases} ({label}): {count:,} record{'s' if count != 1 else ''} fetched"
+        step_summaries.append(f"**{label}**: {count:,} record{'s' if count != 1 else ''} found")
+        _status(msg, "success")
+
+        if df.empty:
+            step_summaries.append("  → No results at this step — stopping.")
+            _status(f"Step {i+1}: No results — stopping.", "warning")
+            return pd.DataFrame(), step_summaries
+
+        # ── FORMAT C: merge + python_filter ───────────────────────────────────
+        merge_left    = join.get("merge_left")
+        merge_right   = join.get("merge_right")
+        python_filter = join.get("python_filter")
+
+        if prev_df is not None and merge_left and merge_right:
+            if merge_left not in prev_df.columns:
+                raise RuntimeError(
+                    f"Merge key '{merge_left}' not found in Step {i} results. "
+                    f"Available columns: {list(prev_df.columns)}"
+                )
+            if merge_right not in df.columns:
+                raise RuntimeError(
+                    f"Merge key '{merge_right}' not found in Step {i+1} results. "
+                    f"Available columns: {list(df.columns)}"
+                )
+
+            pre_merge   = len(prev_df)
+            python_phase = i + 2  # merge/filter is always the phase after the last SOQL step
+            _status(
+                f"⏳ Step {python_phase} of {total_phases}: "
+                f"Merging {pre_merge:,} + {count:,} records in Python on {merge_left} = {merge_right}...",
+                "info"
+            )
+            merged    = prev_df.merge(df, left_on=merge_left, right_on=merge_right, how="inner")
+            merged    = _flatten_df(merged)
+            merge_msg = (
+                f"✓ Step {python_phase} of {total_phases}: "
+                f"Merge complete — {pre_merge:,} + {count:,} → {len(merged):,} matched records"
+            )
+            step_summaries.append(
+                f"  → Merged Step {i} ({pre_merge:,}) with Step {i+1} ({count:,}) "
+                f"on {merge_left} = {merge_right}: {len(merged):,} matched"
+            )
+            _status(merge_msg, "success")
+
+            # Apply python_filter — validated (must actually remove records)
+            if python_filter:
+                pre_filter = len(merged)
+                try:
+                    mask     = merged.eval(python_filter)
+                    filtered = merged[mask].copy()
+                except Exception as e:
+                    raise RuntimeError(
+                        f"python_filter '{python_filter}' failed: {e}\n"
+                        f"Columns available after merge: {list(merged.columns)}"
+                    )
+
+                removed = pre_filter - len(filtered)
+                if removed == 0 and pre_filter > 0:
+                    raise RuntimeError(
+                        f"\u26a0\ufe0f Filter '{python_filter}' matched ALL {pre_filter:,} records — "
+                        f"nothing was removed. The filter expression may be incorrect.\n"
+                        f"Columns after merge: {list(merged.columns)}"
+                    )
+
+                filter_msg = (
+                    f"✓ Step {python_phase} of {total_phases}: "
+                    f"Filter `{python_filter}` — "
+                    f"{pre_filter:,} → {len(filtered):,} records "
+                    f"({removed:,} removed where values matched)"
+                )
+                step_summaries.append(
+                    f"  → Filter `{python_filter}`: "
+                    f"{pre_filter:,} \u2192 {len(filtered):,} records "
+                    f"({removed:,} removed where values matched)"
+                )
+                _status(filter_msg, "filter")
+                merged = filtered
+
+            # Always promote Id_x back to Id so the Actions tab and results
+            # grid can find the child record Id after a merge.
+            # Do this before user rename_columns so custom names still apply.
+            if "Id_x" in merged.columns and "Id" not in merged.columns:
+                merged = merged.rename(columns={"Id_x": "Id"})
+            # Also update any output_columns reference that used Id_x
+            output_cols_raw = join.get("output_columns", [])
+            if output_cols_raw:
+                join["output_columns"] = ["Id" if c == "Id_x" else c for c in output_cols_raw]
+
+            # Rename columns
+            rename_map = join.get("rename_columns", {})
+            if rename_map:
+                # Also fix any rename_map keys that referenced Id_x
+                rename_map = {"Id" if k == "Id_x" else k: v for k, v in rename_map.items()}
+                safe_rename = {k: v for k, v in rename_map.items() if k in merged.columns}
+                merged = merged.rename(columns=safe_rename)
+
+            # Keep only requested output columns
+            output_cols = join.get("output_columns", [])
+            if output_cols:
+                keep = [c for c in output_cols if c in merged.columns]
+                missing_out = [c for c in output_cols if c not in merged.columns]
+                if missing_out:
+                    step_summaries.append(
+                        f"  \u26a0\ufe0f Output columns not found after rename: {missing_out} — showing all columns."
+                    )
+                    keep = keep or list(merged.columns)
+                merged = merged[keep]
+
+            df = merged
+
+        prev_df = df
+
+    return prev_df if prev_df is not None else pd.DataFrame(), step_summaries
+
+
+def backup_records(df: pd.DataFrame, operation: str, object_name: str) -> str:
+    """
+    Saves a DataFrame backup before any update or delete.
+    Writes to Supabase backups table when configured; falls back to a local CSV file.
+    Returns the backup UUID (Supabase) or file path (local fallback).
+    """
+    csv_text = df.to_csv(index=False)
+    user     = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    backup_id = db_save_backup(user, operation, object_name, len(df), csv_text)
+    if backup_id is not None:
+        return backup_id
+    # Fallback: disk write for local dev without Supabase configured
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime(TIMESTAMP_FMT)
+    filename  = f"{BACKUP_DIR}/{object_name}_{operation}_{timestamp}.csv"
+    df.to_csv(filename, index=False)
+    return filename
+
+
+LOG_DIR = "sf_logs"
+
+
+def write_operation_log(
+    operation: str,
+    object_name: str,
+    soql: str,
+    payload: list,
+    result: dict,
+    backup_path: str,
+    excluded_count: int = 0,
+) -> str:
+    """
+    Writes a structured audit log entry to sf_logs/ after every update or delete.
+
+    Each log file covers one operation and contains:
+      - Timestamp, operation type, and Salesforce object
+      - The SOQL query that produced the affected records
+      - Record counts: attempted, succeeded, failed, excluded
+      - Backup file path (so you can trace data back to the pre-change state)
+      - Per-record detail for any failures (up to 50 errors logged)
+      - A summary of what field was changed and to what value (for updates)
+
+    Log files are named:  sf_logs/<Object>_<Operation>_<timestamp>.log
+    They are plain text so they can be opened in any editor or attached to a
+    change management ticket.
+
+    Returns the path to the log file.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp     = datetime.datetime.now()
+    ts_file       = timestamp.strftime(TIMESTAMP_FMT)
+    ts_readable   = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    filename      = f"{LOG_DIR}/{object_name}_{operation}_{ts_file}.log"
+
+    total_attempted = len(payload)
+    succeeded       = result.get("success", 0)
+    failed          = result.get("failed", 0)
+    errors          = result.get("errors", [])
+
+    lines = [
+        "=" * 72,
+        f"SALESFORCE OPERATION LOG — {ORG_NAME}",
+        "=" * 72,
+        f"Timestamp:        {ts_readable}",
+        f"Operation:        {operation}",
+        f"Object:           {object_name}",
+        f"",
+        f"RECORD COUNTS",
+        f"  Records in query results:  {total_attempted + excluded_count:,}",
+        f"  Excluded via checkboxes:   {excluded_count:,}",
+        f"  Attempted ({operation}):       {total_attempted:,}",
+        f"  Succeeded:                 {succeeded:,}",
+        f"  Failed:                    {failed:,}",
+        f"",
+        f"BACKUP FILE",
+        f"  {backup_path if backup_path else 'Auto-backup was disabled — no backup created'}",
+        f"",
+        f"SOURCE QUERY",
+        f"  {soql}",
+        f"",
+    ]
+
+    # For updates, log what field was changed and to what value
+    if operation == "Update" and payload and isinstance(payload[0], dict):
+        changed_fields = {k: v for k, v in payload[0].items() if k != "Id"}
+        if changed_fields:
+            lines.append("CHANGES APPLIED")
+            for field, value in changed_fields.items():
+                display_val = f"'{value}'" if value is not None else "NULL (cleared)"
+                lines.append(f"  {field} → {display_val}")
+            lines.append("")
+
+    # Log the IDs of all affected records
+    lines.append(f"AFFECTED RECORD IDs  ({total_attempted:,} records)")
+    if operation == "Update":
+        ids = [r.get("Id", "?") for r in payload if isinstance(r, dict)]
+    else:
+        ids = payload if isinstance(payload[0], str) else [r.get("Id", "?") for r in payload]
+    for i, rid in enumerate(ids[:500]):   # cap at 500 IDs in the log
+        lines.append(f"  {rid}")
+    if len(ids) > 500:
+        lines.append(f"  ... and {len(ids) - 500:,} more (see backup CSV for full list)")
+    lines.append("")
+
+    # Log any errors
+    if errors:
+        lines.append(f"ERRORS  ({len(errors)} failures)")
+        for i, err in enumerate(errors[:50]):
+            lines.append(f"  [{i+1}] {err}")
+        if len(errors) > 50:
+            lines.append(f"  ... {len(errors) - 50} more errors truncated")
+        lines.append("")
+
+    lines.append("=" * 72)
+    lines.append(f"END OF LOG")
+    lines.append("=" * 72)
+
+    log_text = "\n".join(lines)
+
+    # Write to Supabase (primary) — silently falls back if not configured
+    user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    # backup_path may be a UUID (Supabase) or a file path (local) — store as-is
+    db_save_operation_log(
+        user, operation, object_name, soql, payload, result,
+        backup_path if backup_path else None, excluded_count, log_text,
+    )
+
+    # Also write disk file (local fallback / legacy compatibility)
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(log_text)
+    except Exception:
+        pass
+
+    return filename
+
+
+def write_merge_log(
+    object_name: str,
+    results_log: list[dict],
+    backup_path: str = "",
+) -> str:
+    """
+    Writes a structured audit log for a bulk dedupe merge run to sf_logs/.
+
+    Each log file covers one merge batch and contains:
+      - Timestamp, object type, and summary counts
+      - Per-pair detail: Keep name, Remove name, status, children moved, and
+        the full error message for any failure
+      - Backup file path for traceability
+
+    Log files are named:  sf_logs/<Object>_BulkMerge_<timestamp>.log
+    Returns the path to the log file.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp   = datetime.datetime.now()
+    ts_file     = timestamp.strftime(TIMESTAMP_FMT)
+    ts_readable = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    filename    = f"{LOG_DIR}/{object_name}_BulkMerge_{ts_file}.log"
+
+    n_total   = len(results_log)
+    n_success = sum(1 for r in results_log if r["Status"].startswith("✅"))
+    n_partial = sum(1 for r in results_log if r["Status"].startswith("⚠️"))
+    n_failed  = sum(1 for r in results_log if r["Status"].startswith("❌"))
+
+    lines = [
+        "=" * 72,
+        f"SALESFORCE MERGE LOG — {ORG_NAME}",
+        "=" * 72,
+        f"Timestamp:        {ts_readable}",
+        f"Operation:        BulkMerge",
+        f"Object:           {object_name}",
+        f"",
+        f"RECORD COUNTS",
+        f"  Total pairs attempted:  {n_total:,}",
+        f"  Succeeded:              {n_success:,}",
+        f"  Partial (with errors):  {n_partial:,}",
+        f"  Failed:                 {n_failed:,}",
+        f"",
+        f"BACKUP FILE",
+        f"  {backup_path if backup_path else 'Auto-backup was disabled — no backup created'}",
+        f"",
+        f"MERGE DETAIL",
+    ]
+
+    for i, r in enumerate(results_log, 1):
+        lines.append(f"  [{i:>3}] {r['Status']}  {r['Pair']}")
+        if r.get("Moved") and r["Moved"] != "—":
+            lines.append(f"         Children moved: {r['Moved']}")
+        if r.get("Errors"):
+            lines.append(f"         Reason: {r['Errors']}")
+
+    lines += [
+        "",
+        "=" * 72,
+        "END OF LOG",
+        "=" * 72,
+    ]
+
+    log_text = "\n".join(lines)
+
+    # Write to Supabase (primary)
+    user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    db_save_merge_log(user, object_name, results_log, backup_path if backup_path else None, log_text)
+
+    # Also write disk file (local fallback / legacy compatibility)
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(log_text)
+    except Exception:
+        pass
+
+    return filename
+
+
+def _bulk_execute(sf: Salesforce, object_name: str, records: list[dict], operation: str, external_id_field: str = None) -> dict:
+    """Shared Bulk API executor. operation: 'update', 'delete', 'insert', 'upsert'."""
+    obj = getattr(sf.bulk, object_name)
+    if operation == "upsert":
+        if not external_id_field:
+            return {"success": 0, "failed": len(records), "errors": ["external_id_field required for upsert"]}
+        results = obj.upsert(records, external_id_field)
+    else:
+        results = getattr(obj, operation)(records)
+    success = sum(1 for r in results if r.get("success"))
+    failed  = len(results) - success
+    errors  = [r.get("errors") for r in results if not r.get("success")]
+    return {"success": success, "failed": failed, "errors": errors, "raw_results": results}
+
+
+def execute_update(sf: Salesforce, object_name: str, records: list[dict]) -> dict:
+    """
+    Bulk-updates records using the Salesforce Bulk API.
+    Each dict must contain 'Id' plus the field(s) to update.
+    Returns { success: int, failed: int, errors: list }.
+    """
+    return _bulk_execute(sf, object_name, records, "update")
+
+
+def execute_delete(sf: Salesforce, object_name: str, record_ids: list[str]) -> dict:
+    """
+    Bulk-deletes records using the Salesforce Bulk API.
+    Accepts a list of Salesforce record IDs.
+    Returns { success: int, failed: int, errors: list }.
+    """
+    records = [{"Id": rid} for rid in record_ids]
+    return _bulk_execute(sf, object_name, records, "delete")
+
+
+def check_safety_flags(soql: str) -> tuple[list[str], list[str]]:
+    """
+    Scans a SOQL string for active tool fields (warnings) and
+    Axonify protected fields (blocks).
+    Returns (warnings: list[str], blocks: list[str]).
+    """
+    soql_upper = soql.upper()
+    warnings, blocks = [], []
+
+    for prefix_upper, (tool, prefix) in _ACTIVE_PREFIX_TOOL.items():
+        if prefix_upper in soql_upper:
+            warnings.append(
+                f"References {tool} fields ({prefix}) — active integration. "
+                "Be careful before updating or deleting."
+            )
+
+    for prefix_upper, prefix in _PROTECTED_UPPER.items():
+        if prefix_upper in soql_upper:
+            blocks.append(
+                f"References protected field prefix '{prefix}' (Axonify business data or active tool) — "
+                "bulk updates and deletes are blocked on these fields."
+            )
+
+    return warnings, blocks
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AI HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def generate_soql_from_natural_language(
+    user_request: str,
+    object_name: str,
+    available_fields: list[dict],
+    row_limit: int | None = None,
+) -> tuple[str, str, list[str], list[dict]]:
+    """
+    Sends a plain-English request to Claude and returns:
+      (soql, explanation, safety_notes, steps)
+    soql is non-empty for single queries; steps is non-empty for multi-step plans.
+    Uses claude-sonnet-4-6 — the latest Anthropic model as of Feb 2026.
+    """
+    client = get_anthropic_client()
+
+    # Build a smart field list for the AI — Account has 500+ fields so we can't
+    # send everything. Strategy:
+    #   1. Always include any field whose API name or label appears in the user request
+    #   2. Fill remaining slots with standard fields first, then custom fields (alpha)
+    #   3. Cap at 300 fields to stay within token limits while covering most cases
+    CAP = 300
+    request_lower = user_request.lower()
+
+    # Fields explicitly mentioned in the request (by API name or label fragment)
+    priority, rest = [], []
+    for f in available_fields:
+        name_match  = f["name"].lower().replace("__c", "").replace("_", " ") in request_lower
+        label_match = f["label"].lower() in request_lower
+        api_match   = f["name"].lower() in request_lower
+        if name_match or label_match or api_match:
+            priority.append(f)
+        else:
+            rest.append(f)
+
+    # Sort the rest: standard fields (no __c) first, then custom alphabetically
+    standard = sorted([f for f in rest if not f["name"].endswith("__c")], key=lambda x: x["name"])
+    custom   = sorted([f for f in rest if f["name"].endswith("__c")],     key=lambda x: x["name"])
+    ordered  = priority + standard + custom
+
+    field_lines = []
+    for f in ordered[:CAP]:
+        line = f"  {f['name']} ({f['type']}) — {f['label']}"
+        if f.get('picklist'):
+            values = " | ".join(f['picklist'])
+            line += f"\n      VALUES: {values}"
+        field_lines.append(line)
+
+    # Always tell the AI how many fields exist so it knows the list may be truncated
+    total_fields = len(available_fields)
+    field_summary = f"(Showing {len(field_lines)} of {total_fields} fields — priority fields matching the request are listed first)\n"
+    field_summary += "\n".join(field_lines)
+
+    limit_instruction = (
+        f"Row limit: The user has set a cap of {row_limit} rows. Append LIMIT {row_limit} to each SOQL query."
+        if row_limit
+        else "Row limit: NONE — do NOT add any LIMIT clause. The tool will fetch all records automatically."
+    )
+
+    if object_name == "Auto":
+        object_context = (
+            "No object pre-selected. Determine the correct Salesforce object from the user's request. "
+            "Default to Account if unclear. Include \"detected_object\": \"ObjectName\" in your JSON response.\n\n"
+            f"Available fields for Account (shown as context — adjust object if request targets another):\n{field_summary}"
+        )
+    else:
+        object_context = (
+            f"Selected object in dropdown: {object_name}\n"
+            f"Note: If the user request mentions a different object, write the query against that object instead.\n\n"
+            f"Available fields for {object_name}:\n{field_summary}"
+        )
+
+    user_prompt = (
+        f"{object_context}\n\n"
+        f"{limit_instruction}\n\n"
+        f"User request: {user_request}\n\n"
+        f"Return ONLY the JSON object. No explanation text before or after it."
+    )
+
+    response = get_anthropic_client().messages.create(
+        model=AI_MODEL,
+        max_tokens=2000,
+        system=AI_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    raw = response.content[0].text.strip()
+    # Strip accidental markdown fencing
+    raw = re.sub(r"^```(?:json)?", "", raw).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+
+    def _parse_raw(text: str) -> dict:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # AI may have written \' directly in JSON (invalid escape).
+            # Convert \' → '' so the JSON is valid; _fix_soql_apostrophes
+            # will convert '' → \' in the SOQL values afterwards.
+            return json.loads(text.replace("\\'", "''"))
+
+    try:
+        parsed = _parse_raw(raw)
+    except json.JSONDecodeError:
+        # Both attempts failed — return a clear error, NOT the raw JSON
+        # (raw JSON sent to run_soql() causes "unexpected token: '{'" errors).
+        return "", "AI returned malformed JSON. Please try again.", [], []
+
+    # Store the AI-detected object for use in the UI
+    st.session_state.ai_detected_object = parsed.get("detected_object", "Account")
+
+    # Python strategy — store in session state and return empty so Cases 1/2/3 don't trigger
+    if parsed.get("strategy") == "python":
+        st.session_state.ai_python_strategy = parsed
+        return ("", parsed.get("explanation", ""), parsed.get("safety_notes", []), [])
+
+    # Fix SQL-style '' apostrophe escaping → SOQL-style \' in all generated SOQL
+    fixed_soql  = _fix_soql_apostrophes(parsed.get("soql", ""))
+    fixed_steps = [
+        dict(s, soql=_fix_soql_apostrophes(s.get("soql", "")))
+        for s in parsed.get("steps", [])
+    ]
+    return (
+        fixed_soql,
+        parsed.get("explanation", "AI-generated — please review before running."),
+        parsed.get("safety_notes", []),
+        fixed_steps,   # multi-step plan, empty list = single query
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PYTHON STRATEGY REGISTRY
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_account_hierarchy(params: dict, status_cb=None) -> "pd.DataFrame":
+    """
+    Fetches full account hierarchies for a set of seed accounts.
+
+    Strategy:
+      1. Query ALL accounts (Id, Name, ParentId + any extra_fields) in one SOQL call
+      2. Find seed accounts by matching seed_names (case-insensitive contains) or seed_ids
+      3. Walk UP from each seed via ParentId to find the ultimate parent (top of tree)
+      4. Walk DOWN from each ultimate parent to collect all descendants
+      5. Add computed columns: Ultimate_Parent_Id, Ultimate_Parent_Name,
+         Hierarchy_Level, Hierarchy_Path
+
+    Args:
+        params: Dict with keys:
+            - seed_names (list[str]): Account names to search for (case-insensitive contains)
+            - seed_ids (list[str]): Salesforce Account IDs to look up directly
+            - extra_fields (list[str]): Additional Account field API names to include
+        status_cb: Optional progress callback (msg, style) matching _render_status signature
+
+    Returns:
+        DataFrame containing only the accounts that belong to the same hierarchies
+        as the seed accounts (not every account in the org).
+    """
+    def _status(msg, style="info"):
+        if status_cb:
+            status_cb(msg, style)
+
+    seed_names   = [s.strip() for s in (params.get("seed_names") or []) if s.strip()]
+    seed_ids     = [s.strip() for s in (params.get("seed_ids")   or []) if s.strip()]
+    extra_fields = [f.strip() for f in (params.get("extra_fields") or []) if f.strip()]
+
+    # ── Step 1: Fetch all accounts in one call ──────────────────────────────
+    _status("Fetching all accounts from Salesforce...")
+    base_fields = ["Id", "Name", "ParentId"]
+    # Deduplicate — preserve order, keep base fields first
+    seen = set(base_fields)
+    all_fields = list(base_fields)
+    for f in extra_fields:
+        if f not in seen:
+            all_fields.append(f)
+            seen.add(f)
+
+    soql = f"SELECT {', '.join(all_fields)} FROM Account"
+    full_df = run_soql(soql)
+
+    if full_df.empty:
+        raise RuntimeError("No accounts found in Salesforce. Cannot traverse hierarchy.")
+
+    _status(f"✓ Loaded {len(full_df):,} accounts", "success")
+
+    # ── Step 2: Find seed accounts ─────────────────────────────────────────
+    _status("Searching for seed accounts...")
+    seed_mask = pd.Series(False, index=full_df.index)
+
+    for name in seed_names:
+        seed_mask |= full_df["Name"].str.contains(name, case=False, na=False)
+
+    if seed_ids:
+        # Handle 15 vs 18-char IDs — compare first 15 chars of both sides
+        id_prefixes = [sid[:15] for sid in seed_ids if len(sid) >= 15]
+        if id_prefixes:
+            seed_mask |= full_df["Id"].str[:15].isin(id_prefixes)
+
+    seed_rows = full_df[seed_mask]
+
+    if seed_rows.empty:
+        parts = []
+        if seed_names:
+            parts.append(f"names containing: {', '.join(repr(n) for n in seed_names)}")
+        if seed_ids:
+            parts.append(f"IDs: {', '.join(seed_ids)}")
+        raise RuntimeError(
+            f"No seed accounts found matching {' or '.join(parts)}. "
+            "Check the account name spelling or try a Salesforce ID."
+        )
+
+    _status(f"✓ Found {len(seed_rows):,} seed account(s)", "success")
+
+    # ── Step 3: Walk UP to find ultimate parents ───────────────────────────
+    _status("Tracing hierarchy roots...")
+
+    # Build lookup dicts in one pass — faster than iterrows()
+    id_to_row: dict = {}
+    parent_to_children: dict = {}
+    for rec in full_df.to_dict("records"):
+        aid = rec["Id"]
+        id_to_row[aid] = rec
+        pid = rec.get("ParentId")
+        if pid and not pd.isna(pid):
+            parent_to_children.setdefault(pid, []).append(aid)
+
+    def _walk_up_full(start_id: str) -> tuple:
+        """Walk ParentId up to root. Returns (root_id, level, 'root > … > leaf' path)."""
+        path_ids = [start_id]
+        current_id = start_id
+        for _ in range(15):
+            row = id_to_row.get(current_id)
+            if row is None:
+                break
+            parent_id = row.get("ParentId")
+            if not parent_id or pd.isna(parent_id):
+                break
+            path_ids.append(parent_id)
+            current_id = parent_id
+        path_ids.reverse()  # root → leaf
+        level = len(path_ids) - 1
+        path_str = " > ".join(
+            id_to_row[pid]["Name"] if pid in id_to_row else pid
+            for pid in path_ids
+        )
+        return current_id, level, path_str
+
+    ultimate_parent_ids = {_walk_up_full(sid)[0] for sid in seed_rows["Id"]}
+
+    _status(f"✓ Identified {len(ultimate_parent_ids)} hierarchy tree(s)", "success")
+
+    # ── Step 4: Walk DOWN to collect all descendants ────────────────────────
+    _status("Collecting all hierarchy members...")
+    # BFS using adjacency dict — O(N) instead of O(N×D) DataFrame scans
+    hierarchy_ids = set(ultimate_parent_ids)
+    frontier = set(ultimate_parent_ids)
+    for _ in range(15):
+        next_frontier = set()
+        for pid in frontier:
+            next_frontier.update(parent_to_children.get(pid, []))
+        new_ids = next_frontier - hierarchy_ids
+        if not new_ids:
+            break
+        hierarchy_ids |= new_ids
+        frontier = new_ids
+
+    result_df = full_df[full_df["Id"].isin(hierarchy_ids)].copy()
+
+    # ── Step 5: Add computed hierarchy columns ─────────────────────────────
+    _status("Building hierarchy metadata...")
+
+    # Map each ultimate parent ID → Name
+    ultimate_parent_names = {
+        uid: (id_to_row[uid]["Name"] if uid in id_to_row else uid)
+        for uid in ultimate_parent_ids
+    }
+
+    # One pass over result accounts — computes root_id, level, and path together
+    meta_list = [_walk_up_full(aid) for aid in result_df["Id"]]
+    result_df["Ultimate_Parent_Id"]   = [m[0] for m in meta_list]
+    result_df["Ultimate_Parent_Name"] = [ultimate_parent_names.get(m[0], m[0]) for m in meta_list]
+    result_df["Hierarchy_Level"]      = [m[1] for m in meta_list]
+    result_df["Hierarchy_Path"]       = [m[2] for m in meta_list]
+
+    result_df = result_df.sort_values(
+        ["Ultimate_Parent_Name", "Hierarchy_Level", "Name"],
+        ignore_index=True,
+    )
+
+    _status(
+        f"✓ Built hierarchy for {len(result_df):,} accounts across {len(ultimate_parent_ids)} tree(s)",
+        "success",
+    )
+    return result_df
+
+
+PYTHON_STRATEGIES: dict = {
+    "account_hierarchy": run_account_hierarchy,
+}
+
+
+def execute_python_strategy(strategy: dict, status_cb=None) -> "pd.DataFrame":
+    """
+    Dispatches a Python strategy to the appropriate registered function.
+
+    Args:
+        strategy: The full parsed dict from the AI containing python_task and params.
+        status_cb: Optional callback for live status updates (msg, style).
+
+    Returns:
+        A pandas DataFrame of results.
+
+    Raises:
+        ValueError: If the python_task is not in the registry.
+        RuntimeError: If the strategy function fails.
+    """
+    task_name = strategy.get("python_task", "")
+    func = PYTHON_STRATEGIES.get(task_name)
+
+    if func is None:
+        raise ValueError(
+            f"Unknown Python strategy: '{task_name}'. "
+            f"Available: {list(PYTHON_STRATEGIES.keys())}"
+        )
+
+    params = strategy.get("params", {})
+    return func(params, status_cb=status_cb)
+
+
+def explain_soql(soql: str) -> str:
+    """
+    Returns a plain-English explanation of any SOQL string.
+    Includes Axonify-specific context where relevant.
+    """
+    response = get_anthropic_client().messages.create(
+        model=AI_MODEL,
+        max_tokens=400,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Explain this Salesforce SOQL query in 2-3 plain-English sentences. "
+                "Note any Axonify-specific context (retired tools, active tools, etc):\n\n"
+                + soql
+            ),
+        }],
+    )
+    return response.content[0].text.strip()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUDIT TRAIL NOISE FILTER
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Sections that contain admin-relevant configuration changes.
+# Anything NOT in this set is hidden by default. Unknown future Section values
+# are hidden rather than shown — safer than a pure blocklist.
+AUDIT_SIGNAL_SECTIONS: set[str] = {
+    # Schema & data model
+    "Custom Objects", "Custom Fields", "Record Types", "Page Layouts",
+    "Compact Layouts", "Lightning Pages", "Custom Metadata Types",
+    "Custom Settings", "Custom Tabs", "Global Actions", "Publisher Layouts",
+    "Search Layouts", "Related Lists",
+    # Automations
+    "Flows", "Workflow Rules", "Process Builder", "Approval Processes",
+    "Escalation Rules", "Assignment Rules", "Auto-Response Rules",
+    "Matching Rules", "Duplicate Rules",
+    # Code & triggers
+    "Apex Classes", "Apex Triggers", "Visualforce Pages",
+    "Visualforce Components", "Lightning Components", "Static Resources",
+    "Platform Cache",
+    # Permissions & security
+    "Profiles", "Permission Sets", "Permission Set Groups", "Roles",
+    "Sharing Rules", "Organization-Wide Defaults", "Security Controls",
+    "Session Settings", "Login Access Policies",
+    "Certificate and Key Management", "Named Credentials",
+    "Auth. Providers", "CORS",
+    # User management (provisioning, not logins)
+    "Manage Users",
+    # Connected apps & packages
+    "Connected Apps", "Installed Packages", "AppExchange",
+    "Remote Access", "OAuth",
+    # Validation & data quality
+    "Validation Rules", "Picklists",
+    # Reports & dashboards (admin config changes, not runs)
+    "Report Types", "Custom Report Types", "Dashboard",
+    # Territory & assignment
+    "Territory", "Territory Models", "Queues", "Groups", "Lead Settings",
+    # Email & notification config (not sends)
+    "Email Templates", "Email Deliverability", "Organization Email Addresses",
+    # Other admin config
+    "Company Information", "Business Hours", "Holidays", "Data Management",
+    "Sandbox", "Change Sets", "Deploy",
+}
+
+# Display-text patterns that are noise even within allowed Sections.
+# Checked with case-insensitive substring match.
+AUDIT_NOISE_PATTERNS: list[str] = [
+    "logged in", "logged out", "login-as", "login as",
+    "password reset", "changed their password", "verified their identity",
+    "granted login access", "has granted login access",
+    "session activated", "session deactivated",
+    "exported report", "ran a report", "viewed dashboard",
+    "refreshed dashboard", "subscribed to report", "unsubscribed from report",
+    "scheduled data export", "data export completed",
+    "posted to chatter", "posted a comment", "liked a post",
+    "adjusted forecast", "submitted forecast",
+]
+
+
+def filter_audit_trail(
+    df: pd.DataFrame,
+    signal_only: bool = True,
+    display_col: str = "Display",
+) -> pd.DataFrame:
+    """
+    Filter a SetupAuditTrail DataFrame to admin-relevant configuration changes.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw SetupAuditTrail rows. Must contain a ``Section`` column; the
+        display-text column name can be overridden via *display_col*
+        (default ``"Display"``; digest_scheduler uses ``"Detail"``).
+    signal_only : bool
+        If True (default), keep only AUDIT_SIGNAL_SECTIONS rows and strip
+        AUDIT_NOISE_PATTERNS.  If False, return all rows unchanged.
+    display_col : str
+        Name of the column holding the human-readable change description.
+
+    Returns
+    -------
+    pd.DataFrame  (reset index)
+    """
+    if df.empty or not signal_only:
+        return df
+
+    result = df.copy()
+
+    # Step 1 — Keep only signal Sections
+    if "Section" in result.columns:
+        result = result[result["Section"].astype(str).isin(AUDIT_SIGNAL_SECTIONS)]
+
+    # Step 2 — Remove noise patterns from the display text
+    if display_col in result.columns and not result.empty:
+        lower = result[display_col].astype(str).str.lower()
+        noise = pd.Series(False, index=result.index)
+        for pat in AUDIT_NOISE_PATTERNS:
+            noise |= lower.str.contains(pat, na=False)
+        result = result[~noise]
+
+    # Step 3 — Belt-and-suspenders: strip self-Login-As (even in noise-only rows)
+    name_col = next(
+        (c for c in ("CreatedBy.Name", "User") if c in result.columns), None
+    )
+    if display_col in result.columns and name_col and not result.empty:
+        self_login = result.apply(
+            lambda r: "login-as" in str(r[display_col]).lower()
+            and str(r[name_col]) in str(r[display_col]),
+            axis=1,
+        )
+        result = result[~self_login]
+
+    return result.reset_index(drop=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UI COMPONENTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_results_grid(df: pd.DataFrame, label: str = "Results"):
+    """
+    Renders query results as an interactive table with per-row Include checkboxes.
+
+    Every row starts checked (included). Uncheck any rows you want to protect
+    from updates or deletes — those records are saved to session_state.excluded_ids
+    and will be skipped in the Actions tab.
+
+    Uses st.data_editor so the checkboxes are live and persist across reruns.
+    Falls back to a plain dataframe if Id column is missing.
+    """
+    total = len(df)
+    st.markdown(
+        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.85rem;color:#7a9485;">{label}</span>'
+        f'<span class="result-badge">{total:,} record{"s" if total != 1 else ""}</span>',
+        unsafe_allow_html=True,
+    )
+
+    if total == 0:
+        st.info("No records matched your query.")
+        return
+
+    if total > MAX_RECORDS_DISPLAY:
+        st.warning(
+            f"Showing first {MAX_RECORDS_DISPLAY:,} of {total:,} records. "
+            "The CSV export below contains all records."
+        )
+
+    display_df = df.head(MAX_RECORDS_DISPLAY).copy()
+
+    # ── Checkbox column — only when Id is present (needed for exclusion tracking)
+    if "Id" in display_df.columns:
+        excluded = st.session_state.get("excluded_ids", set())
+
+        # Select All / Deselect All buttons
+        btn_col1, btn_col2, _ = st.columns([1, 1, 6])
+        with btn_col1:
+            if st.button("☑  Select All", key="select_all_btn"):
+                st.session_state.excluded_ids = set()
+                excluded = set()
+                st.rerun()
+        with btn_col2:
+            if st.button("☐  Deselect All", key="deselect_all_btn"):
+                st.session_state.excluded_ids = set(display_df["Id"].tolist())
+                excluded = set(display_df["Id"].tolist())
+                st.rerun()
+
+        display_df.insert(0, "✓ Include", display_df["Id"].apply(lambda x: x not in excluded))
+
+        # Column config: make only the checkbox editable, lock everything else
+        col_config = {"✓ Include": st.column_config.CheckboxColumn(
+            "✓ Include",
+            help="Uncheck to exclude this record from updates and deletes",
+            default=True,
+        )}
+        for col in display_df.columns:
+            if col != "✓ Include":
+                col_config[col] = st.column_config.Column(col, disabled=True)
+
+        edited = st.data_editor(
+            display_df,
+            column_config=col_config,
+            hide_index=True,
+            width='stretch',
+            height=440,
+            key="results_editor",
+        )
+
+        # Persist exclusions back to session state
+        newly_excluded = set(
+            edited.loc[~edited["✓ Include"], "Id"].tolist()
+        )
+        st.session_state.excluded_ids = newly_excluded
+
+        # Status line showing selection counts
+        included_count = total - len(newly_excluded)
+        if newly_excluded:
+            st.markdown(
+                f'<div class="safety-banner" style="background:#1a2a1a;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                f'✓ {included_count:,} records selected &nbsp;·&nbsp; '
+                f'<span style="color:{COLOR_ERROR};">⊘ {len(newly_excluded):,} excluded</span> ' 
+                f'— excluded records will be skipped in the Actions tab.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption(f"All {total:,} records selected. Uncheck any rows you want to protect before using the Actions tab.")
+
+    else:
+        # No Id column — just show a plain read-only grid
+        st.dataframe(display_df, width="stretch", height=420, hide_index=True)
+
+    csv_data  = df.to_csv(index=False).encode("utf-8")
+    timestamp = datetime.datetime.now().strftime(TIMESTAMP_FMT)
+    st.download_button(
+        label="⬇️  Export all records to CSV",
+        data=csv_data,
+        file_name=f"sf_export_{timestamp}.csv",
+        mime="text/csv",
+    )
+
+
+def render_safety_flags(soql: str) -> tuple[list, list]:
+    """
+    Checks SOQL for safety issues and renders warning/block banners.
+    Returns (warnings, blocks) for callers that need to gate actions.
+    """
+    warnings, blocks = check_safety_flags(soql)
+    for w in warnings:
+        st.markdown(f'<div class="safety-banner">⚠️ {w}</div>', unsafe_allow_html=True)
+    for b in blocks:
+        st.error(f"🚫 PROTECTED FIELD: {b}")
+    return warnings, blocks
+
+
+def render_dry_run_panel(df: pd.DataFrame, operation: str, object_name: str):
+    """
+    Displays the dry-run confirmation panel before any destructive action.
+    Shows record count, preview table, backup notice, and confirm/cancel buttons.
+    Returns (confirmed: bool, cancelled: bool).
+    """
+    record_count = len(df)
+    icon = "🔴" if operation == "Delete" else "🟡"
+
+    st.markdown("---")
+    st.subheader(f"{icon} Dry Run Preview — {operation}")
+    st.markdown(
+        f"**You are about to {operation.lower()} "
+        f"{record_count:,} `{object_name}` record{'s' if record_count != 1 else ''}.**"
+    )
+
+    if operation == "Delete":
+        st.error(
+            "This will permanently remove these records from Salesforce. "
+            "Salesforce keeps deleted records in the Recycle Bin for 15 days. "
+            "A timestamped backup CSV will be saved to `sf_backups/` before any record is deleted."
+        )
+    else:
+        st.warning(
+            "Review the changes below. "
+            "A timestamped backup CSV will be saved to `sf_backups/` before any record is updated."
+        )
+
+    st.dataframe(df.head(500), width="stretch", height=300, hide_index=True)
+    if record_count > 500:
+        st.caption(f"Preview shows first 500 of {record_count:,} records.")
+
+    col1, col2, _ = st.columns([1, 1, 4])
+    with col1:
+        confirmed = st.button(f"✅ Confirm {operation}", type="primary", key=f"confirm_{operation.lower()}")
+    with col2:
+        cancelled = st.button("❌ Cancel", key=f"cancel_{operation.lower()}")
+
+    return confirmed, cancelled
+
+
+def add_to_history(soql: str, object_name: str, row_count: int, result_data: list | None = None):
+    """Appends a completed query to the session history (max 20 entries) and persists to Supabase."""
+    if "query_history" not in st.session_state:
+        st.session_state.query_history = []
+    st.session_state.query_history.insert(0, {
+        "soql":      soql,
+        "object":    object_name,
+        "rows":      row_count,
+        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+    })
+    st.session_state.query_history = st.session_state.query_history[:20]
+    # Persist to Supabase (silently skipped if not configured)
+    user_info = st.session_state.get("sf_user_info", {})
+    sf_user   = user_info.get("email", "unknown")
+    sf        = st.session_state.get("sf")
+    sf_inst   = getattr(sf, "sf_instance", "") if sf else ""
+    db_save_query(sf_user, sf_inst, object_name, soql, row_count, result_data or [])
+
+
+def extract_object_from_soql(soql: str) -> str:
+    """Best-effort extraction of the FROM object name from a SOQL string."""
+    tokens = soql.split()
+    upper  = [t.upper() for t in tokens]
+    if "FROM" in upper:
+        idx = upper.index("FROM")
+        if idx + 1 < len(tokens):
+            return tokens[idx + 1].rstrip(",").rstrip(")")
+    return ""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN APP
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEDUPLICATE — matching engine and merge helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _normalise_domain(url: str) -> str:
+    """
+    Strips protocol, www., and path from a website URL so that
+    'https://www.acmecorp.com/about' and 'acmecorp.com' both become 'acmecorp.com'.
+    Returns empty string if input is null/blank.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    url = url.strip().lower()
+    url = re.sub(r"^https?://", "", url)
+    url = re.sub(r"^www\.", "", url)
+    url = url.split("/")[0].split("?")[0]
+    return url
+
+
+# Regex patterns stripped from account names before fuzzy-matching.
+# Defined at module level so the list is not rebuilt on every call.
+COMPANY_SUFFIXES = [
+    r"\binc\.?\b", r"\bincorporated\b", r"\bcorp\.?\b", r"\bcorporation\b",
+    r"\bllc\.?\b", r"\bltd\.?\b", r"\blimited\b", r"\bco\.?\b", r"\bgroup\b",
+    r"\bholdings?\b", r"\benterprises?\b", r"\bsolutions?\b", r"\bservices?\b",
+]
+
+# Bad/placeholder website domains — Python-side substring match after SOQL fetch.
+# Add or remove entries here as needed.
+JUNK_WEBSITE_DOMAINS: list[str] = [
+    # Generic site builders / placeholders
+    "wordpress.com", "wix.com", "squarespace.com", "weebly.com",
+    "godaddy.com", "sites.google.com", "webflow.io", "jimdo.com",
+    "yolasite.com", "strikingly.com",
+    # Social / not a company website
+    "facebook.com", "twitter.com",
+    "linkedin.com", "instagram.com", "youtube.com", "youtu.be",
+    "tiktok.com", "pinterest.com",
+    # Reference / mapping sites
+    "mapquest.com",
+    # Obvious test/junk values
+    "example.com", "google.com", "bing.com",
+    "n/a", "na", "none", "null", "tbd", "http://", "https://",
+]
+
+
+
+def _normalise_name(name: str) -> str:
+    """
+    Strips common legal suffixes and punctuation so that 'Acme Corp.' and
+    'Acme Corporation' score as more similar.
+    """
+    if not name or not isinstance(name, str):
+        return ""
+    name = name.lower().strip()
+    for s in COMPANY_SUFFIXES:
+        name = re.sub(s, "", name)
+    name = re.sub(r"[^\w\s]", " ", name)   # punctuation → space
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+# Words in an Account Name that signal it is a holding/parent account structure.
+# A pair containing one holding and one regular account should NOT be merged —
+# both records serve different structural purposes in the org.
+HOLDING_KEYWORDS = {"holding", "holdings", "holdco", "hold co", "parent", "group"}
+
+def _is_holding_account(record: dict) -> bool:
+    """
+    Returns True if this Account record appears to be a structural holding account.
+
+    Detection uses two signals:
+      1. The Account Name contains a known holding keyword (case-insensitive).
+      2. The Type field is set to a holding-type value (if your org uses that).
+
+    We deliberately keep this broad — false positives (flagging a regular account
+    as holding) are safer than false negatives (merging a holding into a regular).
+    """
+    name = str(record.get("Name", "")).lower()
+    acct_type = str(record.get("Type", "")).lower()
+
+    # Check name for holding keywords
+    for keyword in HOLDING_KEYWORDS:
+        # Match as a whole word so "Holdings Inc" matches but "Withholding" does not
+        if re.search(rf"\b{re.escape(keyword)}\b", name):
+            return True
+
+    # Check Type field — extend this list if your org has specific Type values
+    holding_types = {"holding", "holdings", "parent account", "holding company"}
+    if acct_type in holding_types:
+        return True
+
+    return False
+
+
+def _completeness_score(record: dict, fields: list[str]) -> int:
+    """
+    Counts how many of the given fields are non-null and non-empty.
+    Used to pick the 'most complete' master record.
+    """
+    return sum(
+        1 for f in fields
+        if record.get(f) and str(record.get(f)).strip() not in ("", "None", "nan")
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_accounts_for_dedupe(_sf_instance_url: str) -> pd.DataFrame:
+    """
+    Pulls the fields we need for fuzzy matching from all non-deleted Accounts.
+    Cached for 5 minutes.  We pass sf.sf_instance as a cache key (cache_data
+    can't hash the Salesforce object itself).
+    """
+    sf = get_sf_connection()
+    soql = """
+        SELECT Id, Name, Website, BillingCity, BillingCountry, Phone,
+               OwnerId, Owner.Name, Type, Industry,
+               CreatedDate, LastModifiedDate,
+               NumberOfEmployees, AnnualRevenue
+        FROM Account
+        WHERE IsDeleted = false
+        ORDER BY Name
+    """
+    try:
+        result = sf.query_all(soql)
+        records = result.get("records", [])
+        if not records:
+            return pd.DataFrame()
+        df = pd.DataFrame(records).drop(columns=["attributes"], errors="ignore")
+        # Flatten Owner.Name from nested dict
+        if "Owner" in df.columns:
+            df["Owner.Name"] = df["Owner"].apply(
+                lambda x: x.get("Name", "") if isinstance(x, dict) else ""
+            )
+            df = df.drop(columns=["Owner"], errors="ignore")
+        return df
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch Accounts: {e}")
+
+
+def find_duplicate_candidates(
+    df: pd.DataFrame,
+    name_threshold: int = 85,
+    domain_boost: int = 10,
+    city_boost: int = 5,
+    country_conflict_penalty: int = -20,
+) -> list[dict]:
+    """
+    Finds likely duplicate Account pairs using fuzzy name matching plus
+    domain/city signals.
+
+    Algorithm:
+    1. Normalise names and domains for all records.
+    2. For efficiency, pre-group records by their first word (blocking step)
+       so we don't compare every record to every other record.
+    3. Within each block, score all pairs with rapidfuzz token_sort_ratio.
+    4. If both records share the same website domain, boost the score.
+    5. If both records share the same non-empty BillingCity, boost the score.
+    6. If both records have a non-empty BillingCountry and the values differ,
+       apply a penalty (these are almost certainly not duplicates).
+    7. Return pairs above the threshold, sorted by score descending.
+
+    Returns a list of dicts:
+      { score, key, rec_a, rec_b, match_signals }
+    """
+    try:
+        from rapidfuzz import fuzz
+    except ImportError:
+        raise RuntimeError(
+            "rapidfuzz is not installed. Run:  pip install rapidfuzz --break-system-packages"
+        )
+
+    records = df.to_dict("records")
+    n = len(records)
+
+    # Pre-compute normalised values
+    for r in records:
+        r["_norm_name"]   = _normalise_name(str(r.get("Name", "") or ""))
+        r["_norm_domain"] = _normalise_domain(str(r.get("Website", "") or ""))
+        r["_first_word"]  = r["_norm_name"].split()[0] if r["_norm_name"].split() else BLANK_BLOCK_KEY
+
+    # Blocking: group by first word of normalised name
+    from collections import defaultdict
+    blocks = defaultdict(list)
+    for r in records:
+        blocks[r["_first_word"]].append(r)
+
+    seen  = set()
+    pairs = []
+
+    for block_records in blocks.values():
+        if len(block_records) < 2:
+            continue
+        for i in range(len(block_records)):
+            for j in range(i + 1, len(block_records)):
+                a = block_records[i]
+                b = block_records[j]
+
+                # Dedupe pair key (always smaller ID first)
+                key = tuple(sorted([a["Id"], b["Id"]]))
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                # Name similarity
+                name_score = fuzz.token_sort_ratio(a["_norm_name"], b["_norm_name"])
+
+                # Domain boost: same non-empty domain is a strong signal
+                domain_match = (
+                    a["_norm_domain"]
+                    and b["_norm_domain"]
+                    and a["_norm_domain"] == b["_norm_domain"]
+                )
+
+                # City boost: same non-empty BillingCity
+                city_a = (a.get("BillingCity") or "").strip()
+                city_b = (b.get("BillingCity") or "").strip()
+                city_match = bool(city_a and city_b and city_a.lower() == city_b.lower())
+
+                # Country conflict penalty: both non-empty but different
+                country_a = (a.get("BillingCountry") or "").strip()
+                country_b = (b.get("BillingCountry") or "").strip()
+                country_conflict = bool(
+                    country_a and country_b and country_a.lower() != country_b.lower()
+                )
+
+                final_score = min(100, name_score
+                    + (domain_boost if domain_match else 0)
+                    + (city_boost if city_match else 0)
+                    + (country_conflict_penalty if country_conflict else 0)
+                )
+
+                if final_score < name_threshold:
+                    continue
+
+                # Build human-readable match signals for the UI
+                signals = [f"Name similarity: {name_score}%"]
+                if domain_match:
+                    signals.append(f"Same website domain: {a['_norm_domain']}")
+                if city_match:
+                    signals.append(f"Same city: {city_a}")
+                if country_conflict:
+                    signals.append(f"⚠️ Different countries: {country_a} vs {country_b}")
+                if (a.get("Phone") and b.get("Phone")
+                        and re.sub(r"\D", "", str(a["Phone"])) == re.sub(r"\D", "", str(b["Phone"]))):
+                    signals.append("Same phone number")
+
+                # Classify the pair type so the UI and AI can handle it correctly.
+                #
+                # regular + regular  → standard duplicate, may merge
+                # holding + holding  → duplicate holding accounts, may merge
+                # regular + holding  → structural pair, KEEP BOTH — never merge
+                #
+                a_is_holding = _is_holding_account(a)
+                b_is_holding = _is_holding_account(b)
+
+                if a_is_holding and b_is_holding:
+                    pair_type = "holding_holding"   # duplicates — review for merge
+                elif a_is_holding or b_is_holding:
+                    pair_type = "holding_regular"   # structural — do not merge
+                else:
+                    pair_type = "regular_regular"   # standard duplicate review
+
+                if a_is_holding or b_is_holding:
+                    signals.append(
+                        "⚠️ Holding account detected"
+                        + (" (both records)" if a_is_holding and b_is_holding
+                           else " (one record)")
+                    )
+
+                pairs.append({
+                    "score":         final_score,
+                    "key":           f"{key[0]}_{key[1]}",
+                    "rec_a":         a,
+                    "rec_b":         b,
+                    "match_signals": signals,
+                    "pair_type":     pair_type,
+                })
+
+    pairs.sort(key=lambda x: x["score"], reverse=True)
+    return pairs
+
+
+# Fields shown in the side-by-side merge dialog (in display order)
+MERGE_DISPLAY_FIELDS = [
+    ("Name",              "Account Name"),
+    ("Website",           "Website"),
+    ("Phone",             "Phone"),
+    ("BillingCity",       "Billing City"),
+    ("BillingCountry",    "Billing Country"),
+    ("Industry",          "Industry"),
+    ("Type",              "Account Type"),
+    ("NumberOfEmployees", "Employees"),
+    ("AnnualRevenue",     "Annual Revenue"),
+    ("Owner.Name",        "Owner"),
+    ("CreatedDate",       "Created Date"),
+    ("LastModifiedDate",  "Last Modified"),
+]
+
+# Child objects to re-parent when merging
+MERGE_CHILD_OBJECTS = [
+    ("Contact",          "AccountId"),
+    ("Opportunity",      "AccountId"),
+    ("Case",             "AccountId"),
+    ("Task",             "WhatId"),
+    ("Event",            "WhatId"),
+    ("Contract",         "AccountId"),
+    ("CampaignMember",   "AccountId"),  # not standard but some orgs have it
+]
+
+
+def execute_account_merge(
+    sf,
+    master_id: str,
+    duplicate_id: str,
+    object_name: str = "Account",
+    dry_run: bool = True,
+) -> dict:
+    """
+    Merges duplicate_id into master_id by:
+      1. Re-parenting all child records (Contacts, Opps, Cases, etc.)
+      2. Deleting the duplicate Account
+
+    In dry_run mode, only counts what WOULD be moved — nothing is changed.
+
+    Returns:
+      {
+        "children_moved": { "Contact": 3, "Opportunity": 1, ... },
+        "errors": [],
+        "dry_run": True/False
+      }
+    """
+    children_moved = {}
+    errors         = []
+
+    for child_obj, parent_field in MERGE_CHILD_OBJECTS:
+        try:
+            # Count/fetch children linked to the duplicate
+            count_result = sf.query(
+                f"SELECT Id FROM {child_obj} "
+                f"WHERE {parent_field} = '{duplicate_id}' LIMIT 2000"
+            )
+            child_records = count_result.get("records", [])
+            if not child_records:
+                continue
+
+            children_moved[child_obj] = len(child_records)
+
+            if not dry_run:
+                # Re-parent in batches via Bulk API
+                payload = [{"Id": r["Id"], parent_field: master_id} for r in child_records]
+                obj_api = getattr(sf.bulk, child_obj)
+                results = obj_api.update(payload)
+                failed  = [r for r in results if not r.get("success")]
+                if failed:
+                    errors.append(f"{child_obj}: {len(failed)} re-parent failures")
+
+        except Exception as e:
+            # Some child objects may not exist in this org — skip gracefully
+            err_str = str(e)
+            if "sObject type" not in err_str and "INVALID_TYPE" not in err_str:
+                errors.append(f"{child_obj}: {e}")
+
+    if not dry_run and not errors:
+        # Delete the duplicate
+        try:
+            sf.Account.delete(duplicate_id)
+        except Exception as e:
+            errors.append(f"Delete duplicate: {e}")
+
+    return {
+        "children_moved": children_moved,
+        "errors":         errors,
+        "dry_run":        dry_run,
+    }
+
+
+def get_ai_merge_recommendation(
+    rec_a: dict,
+    rec_b: dict,
+    children_a: dict,
+    children_b: dict,
+    match_signals: list[str],
+    pair_type: str = "regular_regular",
+) -> dict:
+    """
+    Calls Claude with web_search enabled to research a duplicate pair.
+
+    The prompt is structured as a strict two-stage gate:
+
+    STAGE 1 — Are these the same company?
+      Claude searches the web and compares the records to answer this single
+      question. Child record counts are deliberately excluded from this
+      judgement — they are not evidence of identity.
+
+      If NOT the same company → returns { "same_company": false, ... }
+      The UI renders a "Do Not Merge" card and stops. No merge recommendation.
+
+    STAGE 2 — Only if same company: which record is the better master?
+      Based purely on data quality signals (field completeness, recency,
+      data accuracy vs web findings). Returns full merge recommendation.
+
+    Returns the parsed dict, or raises RuntimeError on failure.
+    """
+    client = get_anthropic_client()
+
+    # Build field comparison block — no child record counts, by design.
+    # Child counts tell us about CRM history, not company identity.
+    field_rows = []
+    for api, label in MERGE_DISPLAY_FIELDS:
+        va = rec_a.get(api, "")
+        vb = rec_b.get(api, "")
+        va = "" if va is None or str(va).strip() in ("None", "nan") else str(va)
+        vb = "" if vb is None or str(vb).strip() in ("None", "nan") else str(vb)
+        field_rows.append(f"  {label}: A={va!r}  B={vb!r}")
+
+    field_block = "\n".join(field_rows)
+    signals_block = "\n".join(f"  - {s}" for s in match_signals)
+
+
+    # Build pair_type context to inject into the prompt
+    _PAIR_TYPE_INSTRUCTIONS = {
+        "regular_regular": "",   # no special instruction needed
+        "holding_holding": (
+            "IMPORTANT — BOTH RECORDS ARE HOLDING ACCOUNTS:\n"
+            "A holding account is a structural parent record in Salesforce used to group related accounts.\n"
+            "Having TWO holding accounts for the same company is a data error — at most one should exist.\n"
+            "If they represent the same company, recommend merging (same_company = true).\n"
+            "The surviving holding account will retain all child accounts."
+        ),
+        "holding_regular": (
+            "IMPORTANT — ONE RECORD IS A HOLDING ACCOUNT AND ONE IS A REGULAR ACCOUNT:\n"
+            "This is almost certainly NOT a duplicate situation. Holding accounts and regular accounts\n"
+            "for the same company are both intentional — they serve different structural purposes.\n"
+            "Unless you find very strong evidence these are genuinely the same record entered twice,\n"
+            "return same_company = false."
+        ),
+    }
+    pair_type_instruction = _PAIR_TYPE_INSTRUCTIONS.get(pair_type, "")
+
+    prompt = f"""You are a Salesforce data quality expert. Your job is to determine whether two Account records represent the SAME real-world company, and if so, which record has better data quality.
+
+CANDIDATE DUPLICATE PAIR
+=========================
+Fuzzy match signals that flagged these as potential duplicates:
+{signals_block}
+
+Field comparison (Record A vs Record B):
+{field_block}
+
+{pair_type_instruction}
+
+YOUR TASK — TWO STAGES
+=======================
+
+STAGE 1: ARE THESE THE SAME COMPANY?
+-------------------------------------
+Search the web using the company names, websites, phone numbers, and cities above.
+Determine whether Record A and Record B refer to the SAME real-world legal entity.
+
+Key signals of SAME company:
+- Same or very similar official name
+- Same website domain (after stripping www/https)
+- Same phone number
+- Same physical location
+- One appears to be a renamed/rebranded version of the other
+- One is a subsidiary or division of the other with the same parent
+
+Key signals of DIFFERENT companies:
+- Different website domains pointing to different businesses
+- Different countries or cities with no parent/subsidiary relationship
+- Different industries or business types
+- Web research confirms they are unrelated entities with similar names
+
+CRITICAL RULE: Child record counts (Contacts, Opportunities, Cases) tell you
+about CRM history — NOT about company identity. Do NOT use child record counts
+as evidence that records are or are not duplicates. Two records can both have
+many child records and still be duplicates, or have none and still be different companies.
+
+If you determine these are DIFFERENT companies, return this JSON and nothing else:
+{{
+  "same_company": false,
+  "confidence": "High",
+  "reasoning": "Clear explanation of why these are different companies. Cite specific web findings — different websites, different locations, different business types, etc.",
+  "web_findings": "What you found online about each company separately."
+}}
+
+STAGE 2: WHICH RECORD IS THE BETTER MASTER? (only if same_company = true)
+--------------------------------------------------------------------------
+If these ARE the same company, determine which Salesforce record should be kept
+as the master record. Base this decision ONLY on data quality:
+- Which record has more accurate field values (validated against web findings)?
+- Which record has more complete data (fewer blank fields)?
+- Which record has a more recent LastModifiedDate?
+- Which field values are more current/correct based on what you found online?
+
+Do NOT factor in child record counts when choosing the master. Child records
+will always be re-parented to whichever master is chosen — it is not a reason
+to pick one over the other.
+
+If same_company = true, return this JSON and nothing else:
+{{
+  "same_company": true,
+  "master": "A",
+  "confidence": "High",
+  "reasoning": "Explanation of why these are the same company AND why A is the better master record, based on data quality and web findings.",
+  "web_findings": "What you found online — official name, website, location, size, status.",
+  "field_picks": {{
+    "Name": "A",
+    "Website": "B",
+    "BillingCity": "A"
+  }},
+  "warnings": []
+}}
+
+Rules for field_picks:
+- Only include fields where A and B have DIFFERENT values
+- Pick the value that is more accurate based on your web research
+- Omit fields that are blank on both sides
+
+RESPONSE FORMAT
+===============
+Return ONLY the JSON object. No text before or after it. No markdown fences.
+"""
+
+    response = client.messages.create(
+        model=AI_MODEL,
+        max_tokens=1500,
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    # Extract the final text block (after tool_use / tool_result blocks)
+    text_blocks = [b.text for b in response.content if hasattr(b, "text") and b.text]
+    if not text_blocks:
+        raise RuntimeError("AI returned no text response.")
+
+    raw = text_blocks[-1].strip()
+
+    # Strip any preamble text before the JSON object (defensive)
+    json_start = raw.find("{")
+    if json_start > 0:
+        raw = raw[json_start:]
+    elif json_start == -1:
+        raise RuntimeError(f"NO_JSON:{raw}")
+
+    # Strip any accidental markdown fences
+    raw = re.sub(r"^```(?:json)?", "", raw).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Could not parse AI response as JSON: {e}\n\nRaw: {raw[:500]}")
+
+
+def render_ai_recommendation_panel(
+    pair: dict,
+    rec_a: dict,
+    rec_b: dict,
+    children_a: dict,
+    children_b: dict,
+) -> dict | None:
+    """
+    Renders the AI Research & Recommendation panel above the field comparison.
+
+    The panel has two possible outcomes based on the AI's same_company judgement:
+
+    same_company = False:
+        Shows a prominent red "DO NOT MERGE" card with Claude's reasoning.
+        The merge dialog is still visible below so the admin can override
+        if they disagree, but no merge recommendation is given.
+        Returns None — no radio pre-selection happens.
+
+    same_company = True:
+        Shows a green/yellow/red recommendation card (master / duplicate).
+        Field picks pre-select the radio buttons in the merge dialog.
+        Returns the rec dict so the merge dialog can apply the picks.
+
+    In both cases, the decision is based ONLY on company identity signals
+    (name, website, location, web research). Child record counts are never
+    passed to the AI and never influence the same_company determination.
+    """
+    cache_key = f"ai_rec_{pair['key']}"
+
+    st.markdown("---")
+
+    col_title, col_btn = st.columns([4, 1])
+    with col_title:
+        st.markdown("### 🤖  AI Research & Recommendation")
+        st.caption(
+            "Claude searches the web to determine whether these are the same company, "
+            "then recommends which record has better data quality."
+        )
+    with col_btn:
+        gen_btn = st.button(
+            "🔍  Research & Recommend",
+            type="primary",
+            key=f"ai_rec_btn_{pair['key']}",
+        )
+
+    if gen_btn:
+        st.session_state.pop(cache_key, None)
+        with st.spinner("Searching the web and analysing both records — this takes 5–15 seconds..."):
+            try:
+                result = get_ai_merge_recommendation(
+                    rec_a, rec_b, children_a, children_b,
+                    pair["match_signals"],
+                    pair_type=pair.get("pair_type", "regular_regular"),
+                )
+                st.session_state[cache_key] = result
+            except RuntimeError as e:
+                err_str = str(e)
+                if err_str.startswith("NO_JSON:"):
+                    # Claude returned plain text — treat as uncertain, show the text
+                    st.session_state[cache_key] = {
+                        "same_company": False,
+                        "confidence": "Low",
+                        "reasoning": err_str[len("NO_JSON:"):].strip(),
+                        "web_findings": "",
+                    }
+                else:
+                    st.error(f"AI research failed: {err_str}")
+                    return None
+
+    rec = st.session_state.get(cache_key)
+    if not rec:
+        st.info(
+            "Click **Research & Recommend** to have Claude search the web for this company "
+            "and determine whether these records represent the same real-world organisation."
+        )
+        return None
+
+    confidence  = rec.get("confidence", "Medium")
+    conf_color  = {"High": COLOR_SUCCESS, "Medium": COLOR_WARNING, "Low": COLOR_ERROR}.get(confidence, "#7a9485")
+    same        = rec.get("same_company", True)  # default True for backwards compat
+
+    # ── OUTCOME A: Different companies — DO NOT MERGE ─────────────────────────
+    if not same:
+        name_a = rec_a.get("Name", "Record A")
+        name_b = rec_b.get("Name", "Record B")
+        st.markdown(
+            f'''<div style="background:#1a0f0a;border:2px solid {COLOR_ERROR};border-radius:6px;'''
+            f'''padding:20px 24px;margin-bottom:12px;">'''
+            f'''<div style="font-family:IBM Plex Mono,monospace;font-size:0.75rem;'''
+            f'''color:{COLOR_ERROR};letter-spacing:0.08em;margin-bottom:10px;">'''
+            f'''⛔  AI FINDING: DO NOT MERGE</div>'''
+            f'''<div style="font-size:1rem;font-weight:600;color:#e6f3ec;margin-bottom:6px;">'''
+            f'''These appear to be <span style="color:{COLOR_ERROR};">two different companies</span></div>'''
+            f'''<div style="font-size:0.85rem;color:#7a9485;margin-bottom:12px;">'''
+            f'''<strong style="color:#c9d9cf;">{name_a}</strong> and '''
+            f'''<strong style="color:#c9d9cf;">{name_b}</strong> should both be kept. '''
+            f'''Both records and all their associated data will be preserved.</div>''' 
+            f'''<span style="background:{conf_color}22;color:{conf_color};font-family:IBM Plex Mono,monospace;'''
+            f'''font-size:0.72rem;padding:2px 10px;border-radius:12px;border:1px solid {conf_color}55;">'''
+            f'''{confidence} confidence</span>''' 
+            f'''</div>''',
+            unsafe_allow_html=True,
+        )
+
+        if rec.get("reasoning"):
+            with st.expander("📋  Why AI says these are different companies", expanded=True):
+                st.markdown(rec["reasoning"])
+
+        if rec.get("web_findings"):
+            with st.expander("🌐  Web Research Findings", expanded=False):
+                st.markdown(rec["web_findings"])
+
+        st.caption(
+            "If you believe this is incorrect, you can still use the merge controls below. "
+            "Otherwise, click **Skip This Pair** to remove it from the queue."
+        )
+        # Return None — no field pre-selection, no merge recommendation
+        return None
+
+    # ── OUTCOME B: Same company — show merge recommendation ───────────────────
+    master      = rec.get("master", "A")
+    master_name = rec_a.get("Name", "Record A") if master == "A" else rec_b.get("Name", "Record B")
+    dupl_name   = rec_b.get("Name", "Record B") if master == "A" else rec_a.get("Name", "Record A")
+
+    st.markdown(
+        f'''<div style="background:#0a1f12;border:2px solid {COLOR_SUCCESS};border-radius:6px;'''
+        f'''padding:20px 24px;margin-bottom:12px;">'''
+        f'''<div style="font-family:IBM Plex Mono,monospace;font-size:0.75rem;'''
+        f'''color:{COLOR_SUCCESS};letter-spacing:0.08em;margin-bottom:10px;">'''
+        f'''✅  AI FINDING: SAME COMPANY — MERGE RECOMMENDED</div>'''
+        f'''<div style="font-size:1rem;font-weight:600;color:#e6f3ec;margin-bottom:12px;">'''
+        f'''Keep <span style="color:{COLOR_INFO};">{master_name}</span> · '''
+        f'''Remove <span style="color:{COLOR_ERROR};">{dupl_name}</span></div>'''
+        f'''<span style="background:{conf_color}22;color:{conf_color};font-family:IBM Plex Mono,monospace;'''
+        f'''font-size:0.72rem;padding:2px 10px;border-radius:12px;border:1px solid {conf_color}55;">'''
+        f'''{confidence} confidence</span>''' 
+        f'''</div>''',
+        unsafe_allow_html=True,
+    )
+
+    if rec.get("reasoning"):
+        with st.expander("📋  Reasoning", expanded=True):
+            st.markdown(rec["reasoning"])
+
+    if rec.get("web_findings"):
+        with st.expander("🌐  Web Research Findings", expanded=False):
+            st.markdown(rec["web_findings"])
+
+    if rec.get("warnings"):
+        for w in rec["warnings"]:
+            st.markdown(f'''<div class="safety-banner">⚠️ {w}</div>''', unsafe_allow_html=True)
+
+    st.markdown(
+        '''<div style="font-family:IBM Plex Mono,monospace;font-size:0.75rem;color:#6e8c7a;margin-top:8px;">'''
+        '''Field selections below have been pre-set to the AI recommendation. Override any field freely.''' 
+        '''</div>''',
+        unsafe_allow_html=True,
+    )
+
+    return rec
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BULK DEDUPLICATION HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_open_opportunity_account_ids(account_ids: list[str]) -> set[str]:
+    """
+    Given a list of Account IDs, returns the subset that have at least one
+    open Opportunity (i.e. StageName is not a closed stage value).
+
+    We run this as a single batched SOQL query — one query covering all pairs —
+    rather than one per account, which would be far too slow.
+
+    Salesforce does not have a single IsOpen flag on Opportunity, so we compare
+    StageName against known closed values. Extend CLOSED_STAGES if your org
+    uses custom stage names for closed deals.
+    """
+    CLOSED_STAGES = {"Closed Won", "Closed - Won", "Closed Lost", "Closed - Lost", "Abandoned"}
+
+    if not account_ids:
+        return set()
+
+    sf = get_sf_connection()
+    affected = set()
+
+    # Batch in chunks of 200 to stay within SOQL IN-clause limits
+    for i in range(0, len(account_ids), 200):
+        chunk   = account_ids[i : i + 200]
+        id_list = ", ".join(f"'{aid}'" for aid in chunk)
+        try:
+            result = sf.query_all(
+                f"SELECT AccountId, StageName FROM Opportunity "
+                f"WHERE AccountId IN ({id_list}) AND IsDeleted = false"
+            )
+            for rec in result.get("records", []):
+                if rec.get("StageName") not in CLOSED_STAGES:
+                    affected.add(rec["AccountId"])
+        except Exception:
+            pass  # fail safe — don't block bulk review if the query fails
+
+    return affected
+
+
+def _bulk_triage_pairs(
+    active_pairs: list[dict],
+    open_opp_account_ids: set[str],
+) -> tuple[list[dict], list[dict]]:
+    """
+    Splits pairs into bulk_eligible vs manual_only.
+
+    A pair goes to manual_only if ANY of these are true:
+      1. pair_type == "holding_regular"  — structural pair, keep both
+      2. score < 90                      — not confident enough to auto-merge
+      3. Either account has an open Opp  — live revenue risk
+
+    Returns (bulk_eligible, manual_only).
+    Each manual_only pair gets a "_manual_reasons" key listing why.
+    """
+    bulk_eligible = []
+    manual_only   = []
+
+    for p in active_pairs:
+        pair_type = p.get("pair_type", "regular_regular")
+        score     = p.get("score", 0)
+        id_a      = p["rec_a"].get("Id", "")
+        id_b      = p["rec_b"].get("Id", "")
+
+        reasons = []
+        if pair_type == "holding_regular":
+            reasons.append("Holding + regular account — these should both be kept")
+        if score < 90:
+            reasons.append(f"Match score {score}% is below the 90% bulk threshold")
+        if id_a in open_opp_account_ids:
+            reasons.append(f"'{p['rec_a'].get('Name','')}' has open Opportunities")
+        if id_b in open_opp_account_ids:
+            reasons.append(f"'{p['rec_b'].get('Name','')}' has open Opportunities")
+
+        if reasons:
+            manual_only.append({**p, "_manual_reasons": reasons})
+        else:
+            bulk_eligible.append(p)
+
+    return bulk_eligible, manual_only
+
+
+def render_bulk_review_panel(
+    active_pairs: list[dict],
+    auto_backup: bool,
+    dry_run_mode: bool,
+):
+    """
+    Renders the Bulk Review panel.
+
+    Flow:
+      1. Check for open Opportunities (single SOQL, cached in session_state).
+      2. Triage all pairs: bulk-eligible vs manual-only.
+      3. Show an editable grid for bulk-eligible pairs:
+           - Include checkbox (default True)
+           - Score column
+           - Master selector A/B (auto-set to most recently modified)
+           - Keep (Master) and Remove (Dup) name columns (read-only)
+      4. Action bar: Select All, Deselect All, Export CSV, Dismiss, Bulk Merge.
+      5. Manual-only table: explains why each pair needs individual review.
+    """
+    sf = get_sf_connection()
+
+    st.markdown("### Bulk Review")
+    st.caption(
+        "Pairs are triaged automatically. High-confidence pairs with no open "
+        "Opportunities can be merged here in bulk. Any pair that needs a closer "
+        "look is listed in the manual review table at the bottom."
+    )
+
+    # ── Step 1: Open Opportunity check ───────────────────────────────────────
+    # Cached per scan session so re-renders don't re-query Salesforce.
+    OPP_CACHE_KEY = "bulk_open_opp_ids"
+
+    if OPP_CACHE_KEY not in st.session_state:
+        all_ids = list({
+            aid
+            for p in active_pairs
+            for aid in [p["rec_a"].get("Id",""), p["rec_b"].get("Id","")]
+            if aid
+        })
+        with st.spinner(f"Checking {len(all_ids)} accounts for open Opportunities..."):
+            st.session_state[OPP_CACHE_KEY] = fetch_open_opportunity_account_ids(all_ids)
+
+    open_opp_ids = st.session_state[OPP_CACHE_KEY]
+
+    if st.button("↻  Re-check Opportunities", key="bulk_opp_recheck"):
+        del st.session_state[OPP_CACHE_KEY]
+        st.rerun()
+
+    # ── Step 2: Triage ────────────────────────────────────────────────────────
+    bulk_eligible, manual_only = _bulk_triage_pairs(active_pairs, open_opp_ids)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Active Pairs",  len(active_pairs))
+    c2.metric("Bulk Eligible",       len(bulk_eligible),
+              help="Score ≥90%, no open Opps, not a holding+regular pair")
+    c3.metric("Manual Review Only",  len(manual_only),
+              help="Below 90% score, open Opps, or holding account involved")
+
+    st.markdown("---")
+
+    # ── Step 3: Bulk-eligible grid ────────────────────────────────────────────
+    st.markdown("#### ✅  Bulk-Eligible Pairs")
+
+    if not bulk_eligible:
+        st.info("No pairs meet the bulk criteria — all require individual review below.")
+    else:
+        st.caption(
+            "Master is pre-set to the most recently modified record. "
+            "Change the **Master →** column for any row if you prefer the other record. "
+            "Uncheck **Include** to exclude a pair from the bulk action."
+        )
+
+        def _pick_master(p: dict) -> str:
+            """Returns 'A' or 'B' — whichever record was modified more recently."""
+            lm_a = str(p["rec_a"].get("LastModifiedDate", "") or "")
+            lm_b = str(p["rec_b"].get("LastModifiedDate", "") or "")
+            return "A" if lm_a >= lm_b else "B"
+
+        # ── Select All / Deselect All ─────────────────────────────────────────
+        # Per-row include state is persisted in session_state so individual
+        # checkbox edits survive reruns. Select All / Deselect All write every
+        # key in the dict; the editor writes back individual keys after render.
+        BULK_INCLUDE_STATES = "bulk_include_states"
+        include_states = st.session_state.setdefault(BULK_INCLUDE_STATES, {})
+        for p in bulk_eligible:
+            include_states.setdefault(p["key"], True)
+
+        col_sel, col_desel, _ = st.columns([1, 1, 5])
+        with col_sel:
+            if st.button("☑  Select All", key="bulk_sel_all"):
+                for p in bulk_eligible:
+                    include_states[p["key"]] = True
+                st.rerun()
+        with col_desel:
+            if st.button("☐  Deselect All", key="bulk_desel_all"):
+                for p in bulk_eligible:
+                    include_states[p["key"]] = False
+                st.rerun()
+
+        # Build the editable DataFrame from persisted per-row state
+        grid_rows = []
+        for p in bulk_eligible:
+            m = _pick_master(p)
+            include_val = include_states.get(p["key"], True)
+            grid_rows.append({
+                "Include":       include_val,
+                "Score":         p["score"],
+                "Master →":      m,
+                "Keep (Master)": p["rec_a"]["Name"] if m == "A" else p["rec_b"]["Name"],
+                "Remove (Dup)":  p["rec_b"]["Name"] if m == "A" else p["rec_a"]["Name"],
+                "pair_key":      p["key"],
+            })
+
+        grid_df = pd.DataFrame(grid_rows)
+
+        col_cfg = {
+            "Include":  st.column_config.CheckboxColumn("Include", default=True, width="small"),
+            "Score":    st.column_config.NumberColumn("Score", format="%d%%", width="small"),
+            "Master →": st.column_config.SelectboxColumn(
+                "Master →", options=["A","B"], width="small",
+                help="A = keep left record, B = keep right record",
+            ),
+            "Keep (Master)": st.column_config.Column("Keep (Master)", disabled=True),
+            "Remove (Dup)":  st.column_config.Column("Remove (Dup)",  disabled=True),
+            "pair_key":      st.column_config.Column("pair_key",      disabled=True),
+        }
+
+        edited_grid = st.data_editor(
+            grid_df,
+            column_config=col_cfg,
+            column_order=["Include", "Score", "Master →", "Keep (Master)", "Remove (Dup)"],
+            hide_index=True,
+            width="stretch",
+            height=min(600, 44 + len(bulk_eligible) * 36),
+            key="bulk_grid_editor",
+        )
+
+        # Persist per-row include state back to session_state after every render
+        for _, row in edited_grid.iterrows():
+            include_states[row["pair_key"]] = bool(row["Include"])
+
+        # ── Export CSV (placed after editor so it uses the live edited_grid) ──
+        with st.columns([1, 6])[0]:
+            export_rows = []
+            pair_lookup = {p["key"]: p for p in bulk_eligible}
+            for _, row in edited_grid.iterrows():
+                p = pair_lookup.get(row["pair_key"], {})
+                export_rows.append({
+                    "Include":      row["Include"],
+                    "Score":        row["Score"],
+                    "Master":       row["Master →"],
+                    "Keep (Master)": row["Keep (Master)"],
+                    "Remove (Dup)":  row["Remove (Dup)"],
+                    "Master ID":    (p.get("rec_a",{}).get("Id","") if row["Master →"] == "A"
+                                     else p.get("rec_b",{}).get("Id","")),
+                    "Duplicate ID": (p.get("rec_b",{}).get("Id","") if row["Master →"] == "A"
+                                     else p.get("rec_a",{}).get("Id","")),
+                    "Signals":      " · ".join(p.get("match_signals", [])),
+                })
+            csv_bytes = pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇  Export CSV",
+                data=csv_bytes,
+                file_name=f"dedupe_bulk_{datetime.datetime.now().strftime(TIMESTAMP_FMT)}.csv",
+                mime="text/csv",
+                key="bulk_export_csv",
+            )
+
+        # ── Dismiss and Merge buttons ─────────────────────────────────────────
+        st.markdown("---")
+        selected = edited_grid[edited_grid["Include"] == True]
+        n_sel    = len(selected)
+
+        col_dismiss, col_merge, _ = st.columns([1, 2, 4])
+
+        with col_dismiss:
+            dismiss_btn = st.button(
+                f"🚫  Dismiss ({n_sel})",
+                key="bulk_dismiss_btn",
+                disabled=(n_sel == 0),
+                help="Mark selected pairs as not duplicates — removes them from the queue without merging.",
+            )
+
+        with col_merge:
+            merge_label = f"⚡  Bulk Merge {n_sel} pair{'s' if n_sel != 1 else ''}"
+            if dry_run_mode:
+                merge_label += "  [DRY RUN]"
+            merge_btn = st.button(
+                merge_label,
+                type="primary",
+                key="bulk_merge_btn",
+                disabled=(n_sel == 0),
+            )
+
+        # ── Dismiss handler ───────────────────────────────────────────────────
+        if dismiss_btn:
+            to_dismiss = set(selected["pair_key"].tolist())
+            st.session_state.dedupe_dismissed.update(to_dismiss)
+            st.session_state.pop(OPP_CACHE_KEY, None)   # re-triage next render
+            st.success(f"✅ {len(to_dismiss)} pair(s) dismissed.")
+            st.rerun()
+
+        # ── Merge handler ─────────────────────────────────────────────────────
+        if merge_btn:
+            pair_lookup = {p["key"]: p for p in bulk_eligible}
+
+            # Build the merge plan from the edited grid
+            merge_plan = []
+            for _, row in selected.iterrows():
+                p = pair_lookup.get(row["pair_key"])
+                if not p:
+                    continue
+                master_rec = p["rec_a"] if row["Master →"] == "A" else p["rec_b"]
+                dupl_rec   = p["rec_b"] if row["Master →"] == "A" else p["rec_a"]
+                merge_plan.append({
+                    "pair_key":    p["key"],
+                    "master_id":   master_rec["Id"],
+                    "master_name": master_rec.get("Name",""),
+                    "dupl_id":     dupl_rec["Id"],
+                    "dupl_name":   dupl_rec.get("Name",""),
+                })
+
+            # Dry-run: just show the plan, don't execute
+            if dry_run_mode:
+                st.warning(f"**DRY RUN** — {len(merge_plan)} merge(s) planned. No changes will be made.")
+                st.dataframe(
+                    pd.DataFrame([
+                        {"Keep": m["master_name"], "Remove": m["dupl_name"],
+                         "Master ID": m["master_id"], "Duplicate ID": m["dupl_id"]}
+                        for m in merge_plan
+                    ]),
+                    width="stretch", hide_index=True,
+                )
+                st.info("Toggle off **Dry Run Mode** in the sidebar to execute.")
+            else:
+                # Backup all duplicate records before touching anything
+                backup_path = ""
+                if auto_backup:
+                    backup_ids = [m["dupl_id"] for m in merge_plan]
+                    try:
+                        _chunks = []
+                        for _ci in range(0, len(backup_ids), 200):
+                            _chunk   = backup_ids[_ci: _ci + 200]
+                            _id_list = ", ".join(f"'{i}'" for i in _chunk)
+                            _chunks.append(run_soql(
+                                f"SELECT Id, Name, Website, Phone, BillingCity, BillingCountry, "
+                                f"Industry, Type, NumberOfEmployees, AnnualRevenue "
+                                f"FROM Account WHERE Id IN ({_id_list})"
+                            ))
+                        backup_df   = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame()
+                        backup_path = backup_records(backup_df, "bulk_merge_duplicates", "Account")
+                        st.success(f"✅ Backup saved → `{backup_path}`")
+                    except Exception as e:
+                        st.error(f"Backup failed: {e} — aborting for safety.")
+                        return  # never proceed without a backup
+
+                # Execute merges, one pair at a time
+                results_log = []
+                progress    = st.progress(0, text="Merging...")
+
+                for i, m in enumerate(merge_plan):
+                    progress.progress(i / len(merge_plan),
+                                      text=f"Merging {i+1}/{len(merge_plan)}: {m['master_name']}")
+                    try:
+                        result = execute_account_merge(
+                            sf,
+                            master_id=m["master_id"],
+                            duplicate_id=m["dupl_id"],
+                            dry_run=False,
+                        )
+                        status = "✅ Success" if not result["errors"] else "⚠️ Partial"
+                        moved  = ", ".join(f"{v} {k}" for k,v in result["children_moved"].items()) or "—"
+                        results_log.append({
+                            "Pair":   f"{m['master_name']} ← {m['dupl_name']}",
+                            "Status": status,
+                            "Moved":  moved,
+                            "Errors": "; ".join(result["errors"]),
+                        })
+                        if not result["errors"]:
+                            st.session_state.dedupe_merged.add(m["pair_key"])
+                    except Exception as e:
+                        results_log.append({
+                            "Pair":   f"{m['master_name']} ← {m['dupl_name']}",
+                            "Status": "❌ Failed",
+                            "Moved":  "—",
+                            "Errors": str(e),
+                        })
+
+                progress.progress(1.0, text="Done.")
+
+                # Results summary
+                n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
+                n_err = len(results_log) - n_ok
+                if n_err == 0:
+                    st.success(f"✅ All {n_ok} pair(s) merged successfully.")
+                else:
+                    st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
+                st.dataframe(pd.DataFrame(results_log), width="stretch", hide_index=True)
+
+                # Write merge log
+                log_path = write_merge_log("Account", results_log, backup_path)
+                st.info(f"📋 Merge log saved → `{log_path}`")
+
+                # Re-query Salesforce so the pair count reflects the true post-merge state
+                params = st.session_state.get("dedupe_last_scan_params", {})
+                if params:
+                    with st.spinner("Re-scanning for duplicates after merge…"):
+                        try:
+                            fetch_accounts_for_dedupe.clear()
+                            df_fresh = fetch_accounts_for_dedupe(sf.sf_instance)
+                            st.session_state.dedupe_candidates = find_duplicate_candidates(
+                                df_fresh,
+                                name_threshold=params.get("name_threshold", 85),
+                                domain_boost=params.get("domain_boost", 10),
+                                city_boost=params.get("city_boost", 5),
+                                country_conflict_penalty=params.get("country_conflict_penalty", -20),
+                            )
+                            st.session_state.dedupe_review_idx = 0
+                            st.session_state.dedupe_dismissed  = set()
+                            st.session_state.pop("bulk_include_states", None)
+                        except Exception as e:
+                            st.warning(f"Re-scan failed ({e}) — click Scan to refresh manually.")
+
+                st.session_state.pop(OPP_CACHE_KEY, None)
+                st.rerun()
+
+    # ── Step 4: Manual-only pairs ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🔍  Requires Individual Review")
+    st.caption(
+        "Switch to the **Individual Review** tab to handle these pairs one at a time."
+    )
+
+    if not manual_only:
+        st.info("All pairs were eligible for bulk processing — nothing needs individual review.")
+    else:
+        manual_rows = []
+        for p in manual_only:
+            manual_rows.append({
+                "Score":              f"{p['score']}%",
+                "Record A":           p["rec_a"].get("Name",""),
+                "Record B":           p["rec_b"].get("Name",""),
+                "Why Manual Review":  " · ".join(p.get("_manual_reasons", [])),
+            })
+        st.dataframe(
+            pd.DataFrame(manual_rows),
+            width="stretch",
+            hide_index=True,
+            height=min(500, 44 + len(manual_only) * 36),
+        )
+
+
+def _run_dedupe_discovery(sf) -> dict:
+    """
+    Runs 4 read-only aggregate SOQL queries to characterise the org's
+    Account data before a full dedup scan.
+
+    Returns a dict with keys:
+      total_accounts   int
+      name_dupes       list[{"Name": str, "Count": int}]
+      website_dupes    list[{"Website": str, "Count": int}]
+      open_opps        list[{"Account Name": str, "Open Opportunities": int}]
+
+    NOTE: Uses sf.query() directly — NOT run_soql() — because run_soql()
+    transforms queries into COUNT() wrappers that break GROUP BY / HAVING.
+    """
+    # Q1 — Org scale (COUNT() puts total in result["totalSize"])
+    r1 = sf.query("SELECT COUNT() FROM Account WHERE IsDeleted = false")
+    total_accounts = r1.get("totalSize", 0)
+
+    # Q2 — Exact name duplicates
+    r2 = sf.query(
+        "SELECT Name, COUNT(Id) cnt FROM Account "
+        "WHERE IsDeleted = false "
+        "GROUP BY Name HAVING COUNT(Id) > 1 "
+        "ORDER BY COUNT(Id) DESC LIMIT 50"
+    )
+    name_dupes = [
+        {"Name": rec.get("Name", ""), "Count": rec.get("cnt", 0)}
+        for rec in r2.get("records", [])
+    ]
+
+    # Q3 — Website domain duplicates
+    r3 = sf.query(
+        "SELECT Website, COUNT(Id) cnt FROM Account "
+        "WHERE Website != null AND IsDeleted = false "
+        "GROUP BY Website HAVING COUNT(Id) > 1 "
+        "ORDER BY COUNT(Id) DESC LIMIT 50"
+    )
+    website_dupes = [
+        {"Website": rec.get("Website", ""), "Count": rec.get("cnt", 0)}
+        for rec in r3.get("records", [])
+    ]
+
+    # Q4 — Accounts with open Opportunities (high-risk merge candidates)
+    r4 = sf.query(
+        "SELECT AccountId, Account.Name, COUNT(Id) OpenOpps "
+        "FROM Opportunity "
+        "WHERE IsClosed = false AND IsDeleted = false "
+        "GROUP BY AccountId, Account.Name "
+        "ORDER BY COUNT(Id) DESC LIMIT 100"
+    )
+    open_opps = []
+    for rec in r4.get("records", []):
+        acct = rec.get("Account", {})
+        acct_name = (
+            acct.get("Name", rec.get("AccountId", ""))
+            if isinstance(acct, dict)
+            else rec.get("AccountId", "")
+        )
+        open_opps.append({
+            "Account Name":       acct_name,
+            "Open Opportunities": rec.get("OpenOpps", 0),
+        })
+
+    return {
+        "total_accounts": total_accounts,
+        "name_dupes":     name_dupes,
+        "website_dupes":  website_dupes,
+        "open_opps":      open_opps,
+    }
+
+
+def render_dedupe_tab(auto_backup: bool, dry_run_mode: bool):
+    """
+    Renders the full Deduplicate tab UI.
+    Broken into three visual phases:
+      1. Scan controls + candidate list
+      2. Merge dialog (side-by-side field comparison)
+      3. Execution + result
+    """
+    sf          = get_sf_connection()
+    candidates  = st.session_state.dedupe_candidates
+    dismissed   = st.session_state.dedupe_dismissed
+    merged      = st.session_state.dedupe_merged
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.subheader("Account Deduplication")
+    st.caption(
+        "Finds likely duplicate Accounts using fuzzy name matching and website domain signals. "
+        "Review each pair side-by-side and choose which values to keep before merging."
+    )
+
+    # ── Discovery & Health Check ───────────────────────────────────────────────
+    with st.expander("📊  Discovery & Health Check", expanded=False):
+        disc = st.session_state.get("dedupe_discovery_results")
+
+        btn_label = "🔄  Re-run Discovery" if disc else "▶  Run Discovery"
+        if st.button(btn_label, key="dedupe_discovery_run"):
+            with st.spinner("Running discovery queries…"):
+                try:
+                    disc = _run_dedupe_discovery(sf)
+                    st.session_state.dedupe_discovery_results = disc
+                except Exception as e:
+                    st.error(f"Discovery failed: {e}")
+                    disc = None
+
+        if disc:
+            # ── Row 1: metric cards ───────────────────────────────────────
+            n_name_dupe_accts    = sum(r["Count"] for r in disc["name_dupes"])
+            n_website_dupe_accts = sum(r["Count"] for r in disc["website_dupes"])
+
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("Total Accounts",              f"{disc['total_accounts']:,}")
+            mc2.metric("Accounts with Name Dupes",    f"{n_name_dupe_accts:,}")
+            mc3.metric("Accounts with Website Dupes", f"{n_website_dupe_accts:,}")
+
+            # ── Row 2: side-by-side dataframes ───────────────────────────
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                st.caption("Top Name Duplicates (by group size)")
+                if disc["name_dupes"]:
+                    st.dataframe(
+                        disc["name_dupes"][:20],
+                        width='stretch', hide_index=True,
+                    )
+                else:
+                    st.info("No exact name duplicates found.")
+            with dc2:
+                st.caption("Top Website Duplicates (by group size)")
+                if disc["website_dupes"]:
+                    st.dataframe(
+                        disc["website_dupes"][:20],
+                        width='stretch', hide_index=True,
+                    )
+                else:
+                    st.info("No website duplicates found.")
+
+            # ── Row 3: open-opps warning ──────────────────────────────────
+            n_open_opp_accts = len(disc["open_opps"])
+            if n_open_opp_accts > 0:
+                st.warning(
+                    f"⚠️ {n_open_opp_accts:,} account(s) have open Opportunities — "
+                    "these will be flagged as **Manual Review** during the scan. "
+                    "Do not bulk merge them."
+                )
+
+                # ── Row 4: collapsible full list ──────────────────────────
+                with st.expander(
+                    f"View {n_open_opp_accts:,} accounts with open Opportunities"
+                ):
+                    st.dataframe(
+                        disc["open_opps"],
+                        width='stretch', hide_index=True,
+                    )
+
+    # ── Phase 1: Scan Controls ────────────────────────────────────────────────
+    with st.expander("⚙️  Scan Settings", expanded=(candidates is None)):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            threshold = st.slider(
+                "Minimum match score",
+                min_value=70, max_value=99, value=85, step=1,
+                help="Higher = fewer but more confident matches. 85 is a good starting point."
+            )
+        with col2:
+            domain_boost = st.slider(
+                "Website domain match bonus",
+                min_value=0, max_value=20, value=10, step=1,
+                help="Extra points added when both records share the same website domain."
+            )
+        with col3:
+            city_boost = st.slider(
+                "Same city bonus",
+                min_value=0, max_value=15, value=5, step=1,
+                help="Extra points added when both records share the same BillingCity."
+            )
+        with col4:
+            country_penalty_display = st.slider(
+                "Different country penalty",
+                min_value=0, max_value=30, value=20, step=1,
+                help="Points deducted when both records have a non-empty BillingCountry but they differ. Displayed as a positive number, applied as negative internally."
+            )
+
+        scan_btn = st.button("🔍  Scan for Duplicates", type="primary", key="dedupe_scan")
+
+    if scan_btn:
+        with st.spinner("Fetching all Accounts and running fuzzy matching — this may take 30–60 seconds for large orgs..."):
+            try:
+                df_accounts = fetch_accounts_for_dedupe(sf.sf_instance)
+                st.session_state.dedupe_candidates = find_duplicate_candidates(
+                    df_accounts,
+                    name_threshold=threshold,
+                    domain_boost=domain_boost,
+                    city_boost=city_boost,
+                    country_conflict_penalty=-country_penalty_display,
+                )
+                st.session_state.dedupe_review_idx = 0
+                st.session_state.dedupe_dismissed  = set()
+                st.session_state.pop("bulk_include_states", None)
+                st.session_state["dedupe_last_scan_params"] = {
+                    "name_threshold":           threshold,
+                    "domain_boost":             domain_boost,
+                    "city_boost":               city_boost,
+                    "country_conflict_penalty": -country_penalty_display,
+                }
+                st.rerun()
+            except RuntimeError as e:
+                st.error(str(e))
+                return
+
+    if candidates is None:
+        st.info("Click **Scan for Duplicates** above to begin. Accounts are fetched fresh each scan.")
+        return
+
+    # Filter out dismissed and already-merged pairs
+    active = [
+        p for p in candidates
+        if p["key"] not in dismissed and p["key"] not in merged
+    ]
+
+    # ── Phase 2: Candidate Queue ──────────────────────────────────────────────
+    total_found   = len(candidates)
+    total_active  = len(active)
+    total_merged  = len(merged)
+    total_skipped = len(dismissed)
+
+    # Stats bar
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Pairs Found",  total_found)
+    col2.metric("Remaining",    total_active)
+    col3.metric("Merged",       total_merged)
+    col4.metric("Skipped",      total_skipped)
+
+    if not active:
+        if total_merged > 0 or total_skipped > 0:
+            st.success("✅ All duplicate pairs have been reviewed. Re-scan to check for new duplicates.")
+        else:
+            st.success("✅ No duplicate pairs found above the current threshold. Try lowering the match score.")
+        return
+
+    st.markdown("---")
+
+    # ── Review mode: Bulk Review (default) vs Individual Review ──────────────────
+    # Bulk Review triages all pairs automatically and lets you process many at
+    # once. Individual Review is for pairs that need a human eye on each one.
+    _acct_dedupe_view = st.radio(
+        "Review mode",
+        ["⚡  Bulk Review", "🔍  Individual Review"],
+        key="acct_dedupe_view",
+        label_visibility="collapsed",
+    )
+    st.markdown("---")
+
+    if _acct_dedupe_view == "⚡  Bulk Review":
+        render_bulk_review_panel(active, auto_backup, dry_run_mode)
+
+    if _acct_dedupe_view == "🔍  Individual Review":
+        st.caption(
+            "Review one pair at a time. Use this for pairs the Bulk Review flagged "
+            "as manual-only, or any pair you want to inspect closely."
+        )
+
+        # Queue list — all active pairs as a clickable table
+        st.markdown("**Click a row to open the merge dialog below**")
+
+        _PAIR_TYPE_LABEL = {
+            "regular_regular": "Review",
+            "holding_holding": "⚠️ Both Holding",
+            "holding_regular": "🚫 Keep Both",
+        }
+
+        queue_rows = []
+        for i, p in enumerate(active):
+            ptype = p.get("pair_type", "regular_regular")
+            queue_rows.append({
+                "#":       i + 1,
+                "Score":   f"{p['score']}%",
+                "Type":    _PAIR_TYPE_LABEL.get(ptype, ptype),
+                "Record A": p["rec_a"].get("Name", ""),
+                "Record B": p["rec_b"].get("Name", ""),
+                "Signals":  " · ".join(p["match_signals"]),
+            })
+        queue_df = pd.DataFrame(queue_rows)
+
+        idx = st.session_state.dedupe_review_idx
+        idx = min(idx, len(active) - 1)
+
+        selected_row = st.dataframe(
+            queue_df,
+            width="stretch",
+            hide_index=True,
+            height=min(200, 40 + len(active) * 35),
+            on_select="rerun",
+            selection_mode="single-row",
+            key="dedupe_queue_table",
+        )
+
+        if selected_row and selected_row.selection.rows:
+            idx = selected_row.selection.rows[0]
+            st.session_state.dedupe_review_idx = idx
+
+        pair = active[idx]
+
+        # ── Phase 3: Merge Dialog ─────────────────────────────────────────────
+        st.markdown("---")
+        rec_a     = pair["rec_a"]
+        rec_b     = pair["rec_b"]
+        pair_type = pair.get("pair_type", "regular_regular")
+
+        # ── Holding-account guard — shown BEFORE any merge controls ──────────────
+        # A holding account and a regular account for the same company are both
+        # intentional and must never be merged. Show a hard stop banner and hide
+        # the merge controls entirely.
+        if pair_type == "holding_regular":
+            holding_rec  = rec_a if _is_holding_account(rec_a) else rec_b
+            regular_rec  = rec_b if _is_holding_account(rec_a) else rec_a
+            st.markdown(
+                f'''<div style="background:#1a0f0a;border:2px solid {COLOR_ERROR};border-radius:6px;'''
+                f'''padding:20px 24px;margin-bottom:16px;">'''
+                f'''<div style="font-family:IBM Plex Mono,monospace;font-size:0.75rem;'''
+                f'''color:{COLOR_ERROR};letter-spacing:0.08em;margin-bottom:10px;">'''
+                f'''⛔  DO NOT MERGE — HOLDING ACCOUNT + REGULAR ACCOUNT</div>'''
+                f'''<div style="font-size:1rem;font-weight:600;color:#e6f3ec;margin-bottom:8px;">'''
+                f'''Both of these records should be kept.</div>'''
+                f'''<div style="font-size:0.88rem;color:#c9d9cf;margin-bottom:6px;">'''
+                f'''<strong style="color:{COLOR_INFO};">{holding_rec.get("Name","")}</strong> '''
+                f'''is a <em>holding account</em> — a structural parent record used to '''
+                f'''roll up child accounts beneath it.</div>'''
+                f'''<div style="font-size:0.88rem;color:#c9d9cf;margin-bottom:12px;">'''
+                f'''<strong style="color:{COLOR_INFO};">{regular_rec.get("Name","")}</strong> '''
+                f'''is a regular account and belongs as a child beneath the holding account.</div>'''
+                f'''<div style="font-size:0.82rem;color:#7a9485;">'''
+                f'''If the ParentId relationship is not already set, navigate to '''
+                f'''<strong>{regular_rec.get("Name","")}</strong> in Salesforce and set its '''
+                f'''Parent Account to <strong>{holding_rec.get("Name","")}</strong>. '''
+                f'''Then click Skip This Pair to remove it from the queue.</div>''' 
+                f'''</div>''',
+                unsafe_allow_html=True,
+            )
+            # Only show Skip — no merge controls at all for holding_regular pairs
+            if st.button("Skip This Pair →", key=f"skip_holding_{pair['key']}"):
+                st.session_state.dedupe_dismissed.add(pair["key"])
+                st.session_state.dedupe_review_idx = max(0, idx - 1)
+                st.rerun()
+            return
+
+        # Determine suggested master: most complete record wins
+        score_fields = [f for f, _ in MERGE_DISPLAY_FIELDS]
+        completeness_a = _completeness_score(rec_a, score_fields)
+        completeness_b = _completeness_score(rec_b, score_fields)
+        suggested_master = "A" if completeness_a >= completeness_b else "B"
+
+        # Merge dialog heading — note if this is a holding+holding pair
+        if pair_type == "holding_holding":
+            st.markdown(
+                f"### ⚠️  Duplicate Holding Accounts: **{rec_a.get('Name', '')}** ↔ **{rec_b.get('Name', '')}**"
+            )
+            st.warning(
+                "Both records are holding accounts for the same company. "
+                "One should be removed — the surviving holding account will keep all child accounts beneath it."
+            )
+        else:
+            st.markdown(
+                f"### Merge: **{rec_a.get('Name', '')}** ↔ **{rec_b.get('Name', '')}**"
+            )
+        st.caption(
+            f"Match confidence: **{pair['score']}%** · "
+            + " · ".join(pair["match_signals"])
+        )
+
+        # ── Fetch child counts for both records (used by AI + preview) ────────────
+        # Cache per pair key so navigating pairs doesn't re-query unnecessarily
+        child_cache_key = f"children_{pair['key']}"
+        if child_cache_key not in st.session_state:
+            children_a, children_b = {}, {}
+            for child_obj, parent_field in MERGE_CHILD_OBJECTS:
+                try:
+                    for side, rec_id, dest in [("A", rec_a["Id"], children_a),
+                                                ("B", rec_b["Id"], children_b)]:
+                        r = sf.query(
+                            f"SELECT COUNT() FROM {child_obj} "
+                            f"WHERE {parent_field} = '{rec_id}'"
+                        )
+                        count = r.get("totalSize", 0)
+                        if count > 0:
+                            dest[child_obj] = count
+                except Exception:
+                    pass  # object may not exist in this org
+            st.session_state[child_cache_key] = (children_a, children_b)
+        else:
+            children_a, children_b = st.session_state[child_cache_key]
+
+        # ── AI Research & Recommendation panel ───────────────────────────────────
+        ai_rec = render_ai_recommendation_panel(pair, rec_a, rec_b, children_a, children_b)
+
+        # Determine effective master: AI > completeness fallback
+        # AI master recommendation also updates the radio default
+        ai_master = ai_rec.get("master") if ai_rec else None
+        effective_suggested = ai_master if ai_master in ("A", "B") else suggested_master
+
+        # Add AI badge to master radio label if AI has weighed in
+        def _master_label(x):
+            ai_badge = " 🤖" if (ai_rec and x == ai_master) else ""
+            comp_badge = " ⭐" if (not ai_rec and x == suggested_master) else ""
+            name   = rec_a.get("Name", "") if x == "A" else rec_b.get("Name", "")
+            comp   = completeness_a if x == "A" else completeness_b
+            kids   = children_a if x == "A" else children_b
+            child_summary = f", {sum(kids.values())} child records" if kids else ""
+            return f"Record {x}{ai_badge}{comp_badge}: {name} ({comp} fields filled{child_summary})"
+
+        col_master_label, col_master_pick = st.columns([2, 3])
+        with col_master_label:
+            st.markdown("**Which record survives as master?**")
+            st.caption("The master keeps its ID and all child records are re-parented to it.")
+        with col_master_pick:
+            master_choice = st.radio(
+                "Master record",
+                options=["A", "B"],
+                format_func=_master_label,
+                index=0 if effective_suggested == "A" else 1,
+                horizontal=False,
+                key=f"master_{pair['key']}",
+                label_visibility="collapsed",
+            )
+
+        master_rec = rec_a if master_choice == "A" else rec_b
+        dupl_rec   = rec_b if master_choice == "A" else rec_a
+
+        st.markdown("---")
+
+        # Side-by-side field comparison
+        # For each field in MERGE_DISPLAY_FIELDS, show both values side by side.
+        # If they differ, show a radio — defaulting to AI pick if available,
+        # otherwise defaulting to the master record's value.
+
+        ai_badge_a = "🤖 " if ai_rec and ai_master == "A" else ("⭐ " if not ai_rec and master_choice == "A" else "")
+        ai_badge_b = "🤖 " if ai_rec and ai_master == "B" else ("⭐ " if not ai_rec and master_choice == "B" else "")
+        ai_field_picks = ai_rec.get("field_picks", {}) if ai_rec else {}
+
+        header_note = " (🤖 = AI pick · radio pre-set, override freely)" if ai_rec else ""
+        st.markdown(f"**Field-by-field comparison — select which value to keep for each field:**{header_note}")
+        st.markdown(
+            '<div style="display:grid;grid-template-columns:160px 1fr 40px 1fr;'
+            'gap:4px 12px;align-items:center;padding:6px 0;'
+            'font-family:\'IBM Plex Mono\',monospace;font-size:0.75rem;color:#6e8c7a;">'
+            '<div>FIELD</div>'
+            f'<div>{ai_badge_a}RECORD A: {rec_a.get("Name","")[:30]}</div>'
+            '<div></div>'
+            f'<div>{ai_badge_b}RECORD B: {rec_b.get("Name","")[:30]}</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        field_selections = {}  # field_api_name → "A" or "B"
+
+        def _fmt(v):
+            if v is None or str(v).strip() in ("", "None", "nan", "NaN"):
+                return "—"
+            if isinstance(v, float) and v == int(v):
+                return f"{int(v):,}"
+            return str(v)
+
+        for field_api, field_label in MERGE_DISPLAY_FIELDS:
+            val_a = rec_a.get(field_api, "")
+            val_b = rec_b.get(field_api, "")
+
+            disp_a = _fmt(val_a)
+            disp_b = _fmt(val_b)
+
+            same = (disp_a == disp_b)
+
+            cols = st.columns([2, 4, 1, 4])
+            with cols[0]:
+                st.markdown(
+                    f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:0.75rem;'
+                    f'color:#7a9485;padding:6px 0;">{field_label}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            if same:
+                # Values are identical — no choice needed, just show the value
+                with cols[1]:
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 0;color:#c9d9cf;">{disp_a}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    st.markdown(
+                        f'<div style="text-align:center;padding:6px 0;color:{COLOR_SUCCESS};font-size:0.75rem;">✓</div>',
+                        unsafe_allow_html=True,
+                    )
+                with cols[3]:
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 0;color:#c9d9cf;">{disp_b}</div>',
+                        unsafe_allow_html=True,
+                    )
+                field_selections[field_api] = master_choice  # same value, doesn't matter
+            else:
+                # Values differ — show radio to pick.
+                # Priority: AI field pick → master record → A as tiebreaker
+                default_pick = ai_field_picks.get(field_api, master_choice)
+                if default_pick not in ("A", "B"):
+                    default_pick = master_choice
+
+                # Show a small 🤖 indicator if the AI specifically picked this field
+                ai_picked_this = field_api in ai_field_picks
+                indicator_a = "🤖 " if (ai_picked_this and default_pick == "A") else ""
+                indicator_b = "🤖 " if (ai_picked_this and default_pick == "B") else ""
+
+                with cols[1]:
+                    bg_a = "#0d2a1f" if (ai_picked_this and default_pick == "A") else ("#0a3022" if default_pick == "A" else "#0f1a15")
+                    border_a = "#017551" if (ai_picked_this and default_pick == "A") else (COLOR_SUCCESS if default_pick == "A" else "#1a2d22")
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 8px;border-radius:4px;'
+                        f'background:{bg_a};border:1px solid {border_a};color:#c9d9cf;">'
+                        f'{indicator_a}{disp_a}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    picked = st.radio(
+                        f"pick_{field_api}",
+                        ["A", "B"],
+                        index=0 if default_pick == "A" else 1,
+                        key=f"field_{pair['key']}_{field_api}",
+                        label_visibility="collapsed",
+                        horizontal=False,
+                    )
+                    field_selections[field_api] = picked
+                with cols[3]:
+                    bg_b = "#0d2a1f" if (ai_picked_this and default_pick == "B") else ("#0a3022" if default_pick == "B" else "#0f1a15")
+                    border_b = "#017551" if (ai_picked_this and default_pick == "B") else (COLOR_SUCCESS if default_pick == "B" else "#1a2d22")
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 8px;border-radius:4px;'
+                        f'background:{bg_b};border:1px solid {border_b};color:#c9d9cf;">'
+                        f'{indicator_b}{disp_b}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        # ── Preview of surviving record ───────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("**Surviving record preview** — what the master will look like after merge:")
+
+        preview_data = []
+        for field_api, field_label in MERGE_DISPLAY_FIELDS:
+            chosen_rec  = rec_a if field_selections.get(field_api, master_choice) == "A" else rec_b
+            chosen_val  = chosen_rec.get(field_api, "")
+            source_name = rec_a.get("Name", "A") if field_selections.get(field_api, master_choice) == "A" else rec_b.get("Name", "B")
+
+            def _fmt2(v):
+                if v is None or str(v).strip() in ("", "None", "nan", "NaN"):
+                    return "—"
+                if isinstance(v, float) and v == int(v):
+                    return f"{int(v):,}"
+                return str(v)
+
+            preview_data.append({
+                "Field":        field_label,
+                "Kept Value":   _fmt2(chosen_val),
+                "Source":       source_name[:35],
+            })
+
+        st.dataframe(pd.DataFrame(preview_data), width="stretch", hide_index=True, height=280)
+
+        # What will be re-parented?
+        # Use the pre-fetched children counts (already loaded above) — no extra API call needed
+        st.markdown("**Child records that will be re-parented to master:**")
+        dupl_children = children_b if master_choice == "A" else children_a
+        master_children = children_a if master_choice == "A" else children_b
+        if dupl_children:
+            child_rows = [
+                {
+                    "Object":                 obj,
+                    "On Duplicate (moves)":   count,
+                    "Already on Master":      master_children.get(obj, 0),
+                }
+                for obj, count in dupl_children.items()
+            ]
+            st.dataframe(pd.DataFrame(child_rows), width="stretch", hide_index=True)
+        else:
+            st.info("No child records found on the duplicate record — safe to delete.")
+
+        # ── Action buttons ─────────────────────────────────────────────────────────
+        st.markdown("---")
+        col1, col2, col3, col4 = st.columns([2, 2, 2, 4])
+
+        with col1:
+            merge_btn = st.button(
+                "✅  Merge Records",
+                type="primary",
+                key=f"merge_btn_{pair['key']}",
+                help="Re-parents all child records to master, updates field values, then deletes the duplicate."
+            )
+        with col2:
+            skip_btn = st.button(
+                "⏭️  Skip This Pair",
+                key=f"skip_btn_{pair['key']}",
+                help="Mark as not a duplicate and move to the next pair."
+            )
+        with col3:
+            next_btn = st.button(
+                "→  Next Pair",
+                key=f"next_btn_{pair['key']}",
+                help="Move to the next pair without deciding."
+            )
+
+        if skip_btn:
+            st.session_state.dedupe_dismissed.add(pair["key"])
+            st.session_state.dedupe_review_idx = max(0, idx - 1)
+            st.rerun()
+
+        if next_btn:
+            st.session_state.dedupe_review_idx = (idx + 1) % len(active)
+            st.rerun()
+
+        if merge_btn:
+            # Build the field update payload: apply per-field selections to master record
+            field_updates = {}
+            for field_api, _ in MERGE_DISPLAY_FIELDS:
+                if field_api in ("Owner.Name", "CreatedDate", "LastModifiedDate"):
+                    continue  # read-only / relationship fields
+                chosen_rec = rec_a if field_selections.get(field_api, master_choice) == "A" else rec_b
+                new_val    = chosen_rec.get(field_api)
+                curr_val   = master_rec.get(field_api)
+                if new_val != curr_val:
+                    field_updates[field_api] = new_val
+
+            # Auto-backup
+            if auto_backup:
+                backup_df = pd.DataFrame([master_rec, dupl_rec])
+                backup_path = backup_records(backup_df, "merge", "Account")
+                st.success(f"✅ Backup saved → `{backup_path}`")
+
+            with st.spinner("Merging..."):
+                errors = []
+
+                # Step 1: Apply field updates to master
+                if field_updates:
+                    try:
+                        update_payload = {"Id": master_rec["Id"]}
+                        update_payload.update(field_updates)
+                        sf.Account.update(master_rec["Id"], field_updates)
+                    except Exception as e:
+                        errors.append(f"Field update: {e}")
+
+                # Step 2: Re-parent children + delete duplicate
+                result = execute_account_merge(
+                    sf, master_rec["Id"], dupl_rec["Id"], dry_run=False
+                )
+                errors.extend(result["errors"])
+
+            if errors:
+                st.error("Merge completed with errors:\n" + "\n".join(errors))
+            else:
+                moved_summary = ", ".join(
+                    f"{v} {k}" for k, v in result["children_moved"].items()
+                ) or "no child records"
+                st.success(
+                    f"✅ Merged successfully! Re-parented {moved_summary} to "
+                    f"**{master_rec.get('Name', master_rec['Id'])}**. "
+                    f"Duplicate deleted."
+                )
+
+            st.session_state.dedupe_merged.add(pair["key"])
+            st.session_state.dedupe_review_idx = max(0, idx - 1)
+            # Clear the account cache so a re-scan gets fresh data
+            fetch_accounts_for_dedupe.clear()
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONTACT DEDUPLICATION
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Contact deduplication differs from Account deduplication in several ways:
+#
+#  1. PRIMARY MATCH SIGNAL: Email address (exact match) is the strongest signal
+#     for contact identity. Fuzzy name matching is the secondary signal.
+#
+#  2. SAME-ACCOUNT BOOST: Two contacts at the same Account with similar names
+#     are very likely duplicates. A "same account" bonus is added to the score.
+#
+#  3. NO HOLDING-ACCOUNT CONCEPT: Contacts don't have a structural holding /
+#     regular split, so that entire classification layer is removed.
+#
+#  4. TRIAGE SIGNAL: Instead of open Opportunities (Account-level risk), we
+#     flag contacts that are the Primary Contact on an open Opportunity or
+#     have open Cases assigned to them — these need extra human care.
+#
+#  5. CHILD OBJECTS: Contacts own different children — Tasks, Events,
+#     CampaignMembers, Cases (ContactId), EmailMessages, etc.
+#
+#  6. AI PROMPT: Adapted to determine whether two records are the SAME PERSON
+#     rather than the same company. Web search is less useful here; we rely
+#     more on field-level evidence (same email, same phone, same employer).
+#
+# The UI structure mirrors the Account dedupe tab exactly:
+#   - Scan Controls → Bulk Review → Individual Review (with merge dialog)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Fields shown in the Contact side-by-side merge dialog (display order)
+CONTACT_MERGE_DISPLAY_FIELDS = [
+    ("Name",             "Full Name"),         # computed — not directly writable
+    ("FirstName",        "First Name"),
+    ("LastName",         "Last Name"),
+    ("Email",            "Email"),
+    ("Phone",            "Phone"),
+    ("MobilePhone",      "Mobile Phone"),
+    ("Title",            "Title"),
+    ("Department",       "Department"),
+    ("Account.Name",     "Account"),           # read-only — shown for context
+    ("MailingCity",      "Mailing City"),
+    ("MailingCountry",   "Mailing Country"),
+    ("LeadSource",       "Lead Source"),
+    ("OwnerId",          "Owner"),             # shown as Owner.Name in display
+    ("CreatedDate",      "Created Date"),
+    ("LastModifiedDate", "Last Modified"),
+]
+
+# Read-only fields that must never be written back during a merge update.
+# Owner.Name, Account.Name are relationship traversals; CreatedDate is system.
+CONTACT_READ_ONLY_FIELDS = {
+    "Name", "Account.Name", "Owner.Name", "CreatedDate", "LastModifiedDate",
+}
+
+# Child objects to re-parent when merging Contacts.
+# Each tuple is (SObject API name, field that holds the Contact FK).
+CONTACT_CHILD_OBJECTS = [
+    ("Task",              "WhoId"),
+    ("Event",             "WhoId"),
+    ("CampaignMember",    "ContactId"),
+    ("Case",              "ContactId"),
+    ("EmailMessage",      "RelatedToId"),  # may not exist in all orgs
+]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_contacts_for_dedupe(_sf_instance_url: str) -> pd.DataFrame:
+    """
+    Pulls the fields we need for fuzzy matching from all non-deleted Contacts.
+    Cached for 5 minutes. We pass sf.sf_instance as a cache-buster key.
+
+    We include AccountId (the raw ID) for same-account boosting, and
+    Account.Name for display purposes.
+    """
+    sf = get_sf_connection()
+    soql = """
+        SELECT Id, FirstName, LastName, Name, Email, Phone, MobilePhone,
+               Title, Department, LeadSource,
+               AccountId, Account.Name,
+               OwnerId, Owner.Name,
+               CreatedDate, LastModifiedDate,
+               MailingCity, MailingCountry
+        FROM Contact
+        WHERE IsDeleted = false
+        ORDER BY LastName, FirstName
+    """
+    try:
+        result = sf.query_all(soql)
+        records = result.get("records", [])
+        if not records:
+            return pd.DataFrame()
+        df = pd.DataFrame(records).drop(columns=["attributes"], errors="ignore")
+
+        # Flatten nested relationship fields from dicts → plain strings
+        if "Owner" in df.columns:
+            df["Owner.Name"] = df["Owner"].apply(
+                lambda x: x.get("Name", "") if isinstance(x, dict) else ""
+            )
+            df = df.drop(columns=["Owner"], errors="ignore")
+        if "Account" in df.columns:
+            df["Account.Name"] = df["Account"].apply(
+                lambda x: x.get("Name", "") if isinstance(x, dict) else ""
+            )
+            df = df.drop(columns=["Account"], errors="ignore")
+
+        return df
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch Contacts: {e}")
+
+
+def find_contact_duplicate_candidates(
+    df: pd.DataFrame,
+    name_threshold: int = 85,
+    same_account_boost: int = 10,
+    email_boost: int = 15,
+) -> list[dict]:
+    """
+    Finds likely duplicate Contact pairs using a combination of:
+
+      1. EMAIL MATCH (strongest signal):
+         - Exact same email → automatic 100% score after boosts.
+         - Pair is flagged regardless of name similarity.
+
+      2. FUZZY NAME MATCH:
+         - Blocking step: group by first word of normalised LastName.
+         - Within each block: rapidfuzz token_sort_ratio on full name.
+
+      3. BOOSTS applied on top of the base name score:
+         - same_account_boost: both contacts belong to the same Account.
+         - email_boost: both contacts share the same email address.
+
+    Returns a list of dicts (same schema as Account pairs):
+      { score, key, rec_a, rec_b, match_signals }
+
+    Note: There is no holding-account classification for Contacts.
+    """
+    try:
+        from rapidfuzz import fuzz
+    except ImportError:
+        raise RuntimeError(
+            "rapidfuzz is not installed. Run:  pip install rapidfuzz --break-system-packages"
+        )
+
+    records = df.to_dict("records")
+
+    # Pre-compute normalised values for each record
+    for r in records:
+        full_name = str(r.get("Name", "") or "")
+        r["_norm_name"]  = _normalise_name(full_name)
+        r["_norm_email"] = str(r.get("Email", "") or "").strip().lower()
+        # Blocking key: first word of last name (normalised)
+        last = _normalise_name(str(r.get("LastName", "") or ""))
+        r["_block_key"]  = last.split()[0] if last.split() else BLANK_BLOCK_KEY
+
+    # ── Build blocks: same first-word-of-last-name ────────────────────────────
+    from collections import defaultdict
+    blocks = defaultdict(list)
+    for r in records:
+        blocks[r["_block_key"]].append(r)
+
+    # ── Email index: group records by email for exact-match pairs ─────────────
+    # We handle email-matched pairs separately to guarantee they always surface,
+    # even if their names are very different (e.g. nickname vs legal name).
+    email_index = defaultdict(list)
+    for r in records:
+        if r["_norm_email"]:
+            email_index[r["_norm_email"]].append(r)
+
+    seen  = set()
+    pairs = []
+
+    def _add_pair(a, b, name_score, extra_boosts: list[tuple[int, str]]):
+        """Helper: compute final score, build signals, append pair."""
+        key = tuple(sorted([a["Id"], b["Id"]]))
+        if key in seen:
+            return
+        seen.add(key)
+
+        signals = [f"Name similarity: {name_score}%"]
+        total_boost = 0
+        for boost_val, boost_label in extra_boosts:
+            total_boost += boost_val
+            signals.append(boost_label)
+
+        # Add phone signal if both have the same phone
+        phone_a = re.sub(r"\D", "", str(a.get("Phone", "") or ""))
+        phone_b = re.sub(r"\D", "", str(b.get("Phone", "") or ""))
+        if phone_a and phone_b and phone_a == phone_b:
+            total_boost += 10
+            signals.append("Same phone number")
+
+        # Safety cap: if the ONLY signal is name similarity (no email, account, or phone
+        # corroboration), cap the score at 89 so it never reaches bulk-eligible threshold.
+        # Two people at different companies can share a name — name alone is not enough.
+        has_corroboration = total_boost > 0
+        if has_corroboration:
+            final_score = min(100, name_score + total_boost)
+        else:
+            # Name-only pair: score stays at raw name similarity, capped at 89.
+            # This forces the pair into manual review regardless of how similar the names are.
+            final_score = min(89, name_score)
+            signals.append("⚠️ Name match only — manual review required")
+
+        if final_score < name_threshold:
+            return
+
+        pairs.append({
+            "score":         final_score,
+            "key":           f"{key[0]}_{key[1]}",
+            "rec_a":         a,
+            "rec_b":         b,
+            "match_signals": signals,
+        })
+
+    # ── Step 1: Email-exact pairs ─────────────────────────────────────────────
+    for email, group in email_index.items():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a = group[i]
+                b = group[j]
+                name_score = fuzz.token_sort_ratio(a["_norm_name"], b["_norm_name"])
+
+                boosts = [(email_boost, f"Same email address: {email}")]
+                # Same-account bonus stacks with email bonus
+                if (a.get("AccountId") and b.get("AccountId")
+                        and a["AccountId"] == b["AccountId"]):
+                    boosts.append((same_account_boost, f"Same Account: {a.get('Account.Name','')}"))
+
+                _add_pair(a, b, name_score, boosts)
+
+    # ── Step 2: Fuzzy-name pairs (within last-name blocks) ───────────────────
+    for block_records in blocks.values():
+        if len(block_records) < 2:
+            continue
+        for i in range(len(block_records)):
+            for j in range(i + 1, len(block_records)):
+                a = block_records[i]
+                b = block_records[j]
+
+                key = tuple(sorted([a["Id"], b["Id"]]))
+                if key in seen:
+                    continue  # already added via email match
+
+                name_score = fuzz.token_sort_ratio(a["_norm_name"], b["_norm_name"])
+                if name_score < name_threshold:
+                    continue  # not similar enough — skip before building boosts
+
+                boosts = []
+                if a["_norm_email"] and b["_norm_email"] and a["_norm_email"] == b["_norm_email"]:
+                    boosts.append((email_boost, f"Same email address: {a['_norm_email']}"))
+                if (a.get("AccountId") and b.get("AccountId")
+                        and a["AccountId"] == b["AccountId"]):
+                    boosts.append((same_account_boost, f"Same Account: {a.get('Account.Name','')}"))
+
+                _add_pair(a, b, name_score, boosts)
+
+    pairs.sort(key=lambda x: x["score"], reverse=True)
+    return pairs
+
+
+def execute_contact_merge(
+    sf,
+    master_id: str,
+    duplicate_id: str,
+    dry_run: bool = True,
+) -> dict:
+    """
+    Merges a duplicate Contact into a master Contact by:
+      1. Re-parenting child records (Tasks, Events, CampaignMembers, Cases)
+         from the duplicate to the master.
+      2. Deleting the duplicate Contact.
+
+    In dry_run mode, only counts what WOULD be moved — nothing changes.
+
+    Returns:
+      {
+        "children_moved": { "Task": 2, "CampaignMember": 1, ... },
+        "errors": [],
+        "dry_run": True/False
+      }
+    """
+    children_moved = {}
+    errors         = []
+
+    for child_obj, parent_field in CONTACT_CHILD_OBJECTS:
+        try:
+            result = sf.query(
+                f"SELECT Id FROM {child_obj} "
+                f"WHERE {parent_field} = '{duplicate_id}' LIMIT 2000"
+            )
+            child_records = result.get("records", [])
+            if not child_records:
+                continue
+
+            children_moved[child_obj] = len(child_records)
+
+            if not dry_run:
+                payload = [{"Id": r["Id"], parent_field: master_id} for r in child_records]
+                obj_api = getattr(sf.bulk, child_obj)
+                results = obj_api.update(payload)
+                failed  = [r for r in results if not r.get("success")]
+                if failed:
+                    errors.append(f"{child_obj}: {len(failed)} re-parent failures")
+
+        except Exception as e:
+            err_str = str(e)
+            # Silently skip objects that don't exist in this org
+            if "sObject type" not in err_str and "INVALID_TYPE" not in err_str:
+                errors.append(f"{child_obj}: {e}")
+
+    if not dry_run and not errors:
+        try:
+            sf.Contact.delete(duplicate_id)
+        except Exception as e:
+            errors.append(f"Delete duplicate: {e}")
+
+    return {
+        "children_moved": children_moved,
+        "errors":         errors,
+        "dry_run":        dry_run,
+    }
+
+
+def get_contact_ai_recommendation(
+    rec_a: dict,
+    rec_b: dict,
+    match_signals: list[str],
+) -> dict:
+    """
+    Calls Claude to determine whether two Contact records represent the SAME PERSON
+    and, if so, which record is the better master.
+
+    Unlike Account deduplication, web search is generally not useful for individuals.
+    Instead the prompt relies entirely on field-level evidence:
+      - Same email address?
+      - Same phone number?
+      - Same employer (Account)?
+      - Same job title?
+      - Name variations (nickname, maiden name, middle name)?
+      - Which record has more complete / more recent data?
+
+    Returns the same JSON schema as get_ai_merge_recommendation:
+      { same_company (aliased as same_person), master, confidence, reasoning,
+        field_picks, warnings }
+    """
+    client = get_anthropic_client()
+
+    # Build field comparison block
+    field_rows = []
+    for api, label in CONTACT_MERGE_DISPLAY_FIELDS:
+        va = rec_a.get(api, "")
+        vb = rec_b.get(api, "")
+        va = "" if va is None or str(va).strip() in ("None", "nan") else str(va)
+        vb = "" if vb is None or str(vb).strip() in ("None", "nan") else str(vb)
+        field_rows.append(f"  {label}: A={va!r}  B={vb!r}")
+
+    field_block = "\n".join(field_rows)
+    signals_block = "\n".join(f"  - {s}" for s in match_signals)
+
+    prompt = f"""You are a Salesforce data quality expert. Your job is to determine whether two Contact records represent the SAME REAL PERSON, and if so, which record has better data quality.
+
+CANDIDATE DUPLICATE PAIR
+=========================
+Fuzzy match signals that flagged these as potential duplicates:
+{signals_block}
+
+Field comparison (Record A vs Record B):
+{field_block}
+
+YOUR TASK — TWO STAGES
+=======================
+
+STAGE 1: ARE THESE THE SAME PERSON?
+-------------------------------------
+Use the field data above to determine whether Record A and Record B represent the same individual.
+
+Strong signals that these ARE the same person:
+- Identical or very similar email address
+- Identical or very similar phone number
+- Same employer (Account) and same or similar job title
+- Name is clearly a variation: nickname vs legal name, maiden vs married name,
+  middle name included in one but not the other, minor typo or spelling difference
+- Both records appear to represent the same role at the same company
+
+Strong signals that these are DIFFERENT people:
+- Different email domains pointing to different companies
+- Different employers (Account) with no obvious relationship
+- Different cities or countries with no reason to overlap
+- Different job titles suggesting different individuals at the same company
+- One or both records have complete, clearly distinct contact details
+
+IMPORTANT: Two people can have the same name at a large company and NOT be duplicates.
+Pay close attention to email addresses, phone numbers, and employer when names are common.
+
+If you determine these are DIFFERENT people, return this JSON and nothing else:
+{{
+  "same_person": false,
+  "confidence": "High",
+  "reasoning": "Clear explanation of why these are different people. Cite specific field evidence — different emails, different employers, different locations, etc.",
+  "web_findings": ""
+}}
+
+STAGE 2: WHICH RECORD IS THE BETTER MASTER? (only if same_person = true)
+--------------------------------------------------------------------------
+If these ARE the same person, determine which Salesforce record should be kept.
+Base this decision ONLY on data quality:
+- Which record has a more accurate, complete email address?
+- Which record has more fields populated?
+- Which record has a more recent LastModifiedDate?
+- Which record has a more accurate job title or phone number?
+
+If same_person = true, return this JSON and nothing else:
+{{
+  "same_person": true,
+  "master": "A",
+  "confidence": "High",
+  "reasoning": "Explanation of why these are the same person AND why A is the better master record.",
+  "web_findings": "",
+  "field_picks": {{
+    "Email": "A",
+    "Title": "B"
+  }},
+  "warnings": []
+}}
+
+Rules for field_picks:
+- Only include fields where A and B have DIFFERENT values
+- Pick the value that appears more accurate or complete
+- Omit fields that are blank on both sides
+- Never include read-only fields: Name, Account.Name, CreatedDate, LastModifiedDate
+
+RESPONSE FORMAT
+===============
+Return ONLY the JSON object. No text before or after it. No markdown fences.
+"""
+
+    response = client.messages.create(
+        model=AI_MODEL,
+        max_tokens=1200,
+        # No web_search tool — field-level evidence is sufficient for contact identity
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text_blocks = [b.text for b in response.content if hasattr(b, "text") and b.text]
+    if not text_blocks:
+        raise RuntimeError("AI returned no text response.")
+
+    raw = text_blocks[-1].strip()
+
+    # Strip any preamble before the JSON
+    json_start = raw.find("{")
+    if json_start > 0:
+        raw = raw[json_start:]
+    elif json_start == -1:
+        raise RuntimeError(f"NO_JSON:{raw}")
+
+    raw = re.sub(r"^```(?:json)?", "", raw).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+
+    try:
+        result = json.loads(raw)
+        # Normalise: map same_person → same_company so the rest of the UI
+        # can share the same rendering helper with minor tweaks
+        if "same_person" in result and "same_company" not in result:
+            result["same_company"] = result["same_person"]
+        return result
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Could not parse AI response as JSON: {e}\n\nRaw: {raw[:500]}")
+
+
+def render_contact_ai_recommendation_panel(
+    pair: dict,
+    rec_a: dict,
+    rec_b: dict,
+) -> dict | None:
+    """
+    Renders the AI Research & Recommendation panel for a Contact pair.
+
+    Mirrors render_ai_recommendation_panel (Account version) but:
+    - Uses get_contact_ai_recommendation (no web search, field-level only)
+    - Labels use "person" language instead of "company"
+    - No holding-account pair type to handle
+    """
+    cache_key = f"contact_ai_rec_{pair['key']}"
+
+    st.markdown("---")
+
+    col_title, col_btn = st.columns([4, 1])
+    with col_title:
+        st.markdown("### 🤖  AI Recommendation")
+        st.caption(
+            "Claude analyses the field data to determine whether these are the same person "
+            "and recommends which record has better data quality."
+        )
+    with col_btn:
+        gen_btn = st.button(
+            "🔍  Analyse & Recommend",
+            type="primary",
+            key=f"contact_ai_btn_{pair['key']}",
+        )
+
+    if gen_btn:
+        st.session_state.pop(cache_key, None)
+        with st.spinner("Analysing both records — this takes a few seconds..."):
+            try:
+                result = get_contact_ai_recommendation(
+                    rec_a, rec_b, pair["match_signals"]
+                )
+                st.session_state[cache_key] = result
+            except RuntimeError as e:
+                err_str = str(e)
+                if err_str.startswith("NO_JSON:"):
+                    st.session_state[cache_key] = {
+                        "same_company": False,
+                        "confidence": "Low",
+                        "reasoning": err_str[len("NO_JSON:"):].strip(),
+                        "web_findings": "",
+                    }
+                else:
+                    st.error(f"AI analysis failed: {err_str}")
+                    return None
+
+    rec = st.session_state.get(cache_key)
+    if not rec:
+        st.info(
+            "Click **Analyse & Recommend** to have Claude compare these records "
+            "and determine whether they represent the same person."
+        )
+        return None
+
+    confidence = rec.get("confidence", "Medium")
+    conf_color = {"High": COLOR_SUCCESS, "Medium": COLOR_WARNING, "Low": COLOR_ERROR}.get(confidence, "#7a9485")
+    same       = rec.get("same_company", rec.get("same_person", True))
+
+    # ── OUTCOME A: Different people — DO NOT MERGE ────────────────────────────
+    if not same:
+        name_a = f"{rec_a.get('FirstName','')} {rec_a.get('LastName','')}".strip() or "Record A"
+        name_b = f"{rec_b.get('FirstName','')} {rec_b.get('LastName','')}".strip() or "Record B"
+        st.markdown(
+            f'''<div style="background:#1a0f0a;border:2px solid {COLOR_ERROR};border-radius:6px;'''
+            f'''padding:20px 24px;margin-bottom:12px;">'''
+            f'''<div style="font-family:IBM Plex Mono,monospace;font-size:0.75rem;'''
+            f'''color:{COLOR_ERROR};letter-spacing:0.08em;margin-bottom:10px;">'''
+            f'''⛔  AI FINDING: DO NOT MERGE</div>'''
+            f'''<div style="font-size:1rem;font-weight:600;color:#e6f3ec;margin-bottom:6px;">'''
+            f'''These appear to be <span style="color:{COLOR_ERROR};">two different people</span></div>'''
+            f'''<div style="font-size:0.85rem;color:#7a9485;margin-bottom:12px;">'''
+            f'''<strong style="color:#c9d9cf;">{name_a}</strong> and '''
+            f'''<strong style="color:#c9d9cf;">{name_b}</strong> should both be kept.</div>'''
+            f'''<span style="background:{conf_color}22;color:{conf_color};font-family:IBM Plex Mono,monospace;'''
+            f'''font-size:0.72rem;padding:2px 10px;border-radius:12px;border:1px solid {conf_color}55;">'''
+            f'''{confidence} confidence</span>'''
+            f'''</div>''',
+            unsafe_allow_html=True,
+        )
+
+        if rec.get("reasoning"):
+            with st.expander("📋  Why AI says these are different people", expanded=True):
+                st.markdown(rec["reasoning"])
+
+        st.caption(
+            "If you believe this is incorrect, you can still use the merge controls below. "
+            "Otherwise, click **Skip This Pair** to remove it from the queue."
+        )
+        return None
+
+    # ── OUTCOME B: Same person — show merge recommendation ────────────────────
+    master      = rec.get("master", "A")
+    master_name = (
+        f"{rec_a.get('FirstName','')} {rec_a.get('LastName','')}".strip()
+        if master == "A"
+        else f"{rec_b.get('FirstName','')} {rec_b.get('LastName','')}".strip()
+    )
+    dupl_name = (
+        f"{rec_b.get('FirstName','')} {rec_b.get('LastName','')}".strip()
+        if master == "A"
+        else f"{rec_a.get('FirstName','')} {rec_a.get('LastName','')}".strip()
+    )
+
+    st.markdown(
+        f'''<div style="background:#0a1f12;border:2px solid {COLOR_SUCCESS};border-radius:6px;'''
+        f'''padding:20px 24px;margin-bottom:12px;">'''
+        f'''<div style="font-family:IBM Plex Mono,monospace;font-size:0.75rem;'''
+        f'''color:{COLOR_SUCCESS};letter-spacing:0.08em;margin-bottom:10px;">'''
+        f'''✅  AI FINDING: SAME PERSON — MERGE RECOMMENDED</div>'''
+        f'''<div style="font-size:1rem;font-weight:600;color:#e6f3ec;margin-bottom:12px;">'''
+        f'''Keep <span style="color:{COLOR_INFO};">{master_name}</span> · '''
+        f'''Remove <span style="color:{COLOR_ERROR};">{dupl_name}</span></div>'''
+        f'''<span style="background:{conf_color}22;color:{conf_color};font-family:IBM Plex Mono,monospace;'''
+        f'''font-size:0.72rem;padding:2px 10px;border-radius:12px;border:1px solid {conf_color}55;">'''
+        f'''{confidence} confidence</span>'''
+        f'''</div>''',
+        unsafe_allow_html=True,
+    )
+
+    if rec.get("reasoning"):
+        with st.expander("📋  Reasoning", expanded=True):
+            st.markdown(rec["reasoning"])
+
+    if rec.get("warnings"):
+        for w in rec["warnings"]:
+            st.markdown(f'''<div class="safety-banner">⚠️ {w}</div>''', unsafe_allow_html=True)
+
+    st.markdown(
+        '''<div style="font-family:IBM Plex Mono,monospace;font-size:0.75rem;color:#6e8c7a;margin-top:8px;">'''
+        '''Field selections below have been pre-set to the AI recommendation. Override any field freely.'''
+        '''</div>''',
+        unsafe_allow_html=True,
+    )
+
+    return rec
+
+
+def fetch_open_case_contact_ids(contact_ids: list[str]) -> set[str]:
+    """
+    Given a list of Contact IDs, returns the subset that have at least one
+    open Case (i.e. Status != 'Closed') assigned to them.
+
+    This is the Contact equivalent of the Account open-Opportunity check —
+    it flags contacts with live support activity that warrant extra care
+    during a merge.
+    """
+    if not contact_ids:
+        return set()
+
+    sf = get_sf_connection()
+    affected = set()
+
+    for i in range(0, len(contact_ids), 200):
+        chunk   = contact_ids[i : i + 200]
+        id_list = ", ".join(f"'{cid}'" for cid in chunk)
+        try:
+            result = sf.query_all(
+                f"SELECT ContactId FROM Case "
+                f"WHERE ContactId IN ({id_list}) AND Status != 'Closed' AND IsDeleted = false"
+            )
+            for r in result.get("records", []):
+                if r.get("ContactId"):
+                    affected.add(r["ContactId"])
+        except Exception:
+            pass  # fail safe — don't block bulk review if query fails
+
+    return affected
+
+
+def _bulk_triage_contact_pairs(
+    active_pairs: list[dict],
+    open_case_contact_ids: set[str],
+) -> tuple[list[dict], list[dict]]:
+    """
+    Splits Contact pairs into bulk_eligible vs manual_only.
+
+    A pair goes to manual_only if ANY of these are true:
+      1. score < 90                       — not confident enough to auto-merge
+      2. Either contact has an open Case  — live support activity risk
+
+    Unlike Account triage, there is no holding-account classification.
+
+    Returns (bulk_eligible, manual_only).
+    """
+    bulk_eligible = []
+    manual_only   = []
+
+    for p in active_pairs:
+        score   = p.get("score", 0)
+        id_a    = p["rec_a"].get("Id", "")
+        id_b    = p["rec_b"].get("Id", "")
+        signals = p.get("match_signals", [])
+
+        # Check whether ANY corroborating signal beyond pure name similarity exists.
+        # "Name similarity: X%" is always present — we need at least one more signal
+        # (same email, same account, same phone) before the pair is safe to bulk-merge.
+        has_corroboration = any(
+            s for s in signals
+            if not s.startswith("Name similarity:")
+        )
+
+        reasons = []
+        if score < 90:
+            reasons.append(f"Match score {score}% is below the 90% bulk threshold")
+        if not has_corroboration:
+            reasons.append(
+                "Name match only — no corroborating signal (email, account, or phone). "
+                "Two people can share a name; manual confirmation required."
+            )
+        if id_a in open_case_contact_ids:
+            reasons.append(
+                f"'{p['rec_a'].get('FirstName','')} {p['rec_a'].get('LastName','')}' has open Cases"
+            )
+        if id_b in open_case_contact_ids:
+            reasons.append(
+                f"'{p['rec_b'].get('FirstName','')} {p['rec_b'].get('LastName','')}' has open Cases"
+            )
+
+        if reasons:
+            manual_only.append({**p, "_manual_reasons": reasons})
+        else:
+            bulk_eligible.append(p)
+
+    return bulk_eligible, manual_only
+
+
+def render_contact_bulk_review_panel(
+    active_pairs: list[dict],
+    auto_backup: bool,
+    dry_run_mode: bool,
+):
+    """
+    Renders the Bulk Review panel for Contact deduplication.
+
+    Mirrors render_bulk_review_panel (Account version) with these differences:
+    - Open Case check instead of open Opportunity check
+    - No holding-account logic
+    - Backup queries Contact fields instead of Account fields
+    - Calls execute_contact_merge instead of execute_account_merge
+    """
+    sf = get_sf_connection()
+
+    st.markdown("### Bulk Review")
+    st.caption(
+        "Pairs are triaged automatically. To reach **Bulk Eligible**, a pair must: "
+        "(1) score ≥90%, (2) have at least one corroborating signal beyond name similarity "
+        "(matching email, same account, or same phone), and (3) have no open Cases on either contact. "
+        "Everything else goes to **Manual Review** below."
+    )
+
+    # ── Step 1: Open Case check ───────────────────────────────────────────────
+    CASE_CACHE_KEY = "contact_bulk_open_case_ids"
+
+    if CASE_CACHE_KEY not in st.session_state:
+        all_ids = list({
+            cid
+            for p in active_pairs
+            for cid in [p["rec_a"].get("Id",""), p["rec_b"].get("Id","")]
+            if cid
+        })
+        with st.spinner(f"Checking {len(all_ids)} contacts for open Cases..."):
+            st.session_state[CASE_CACHE_KEY] = fetch_open_case_contact_ids(all_ids)
+
+    open_case_ids = st.session_state[CASE_CACHE_KEY]
+
+    if st.button("↻  Re-check Cases", key="contact_bulk_case_recheck"):
+        del st.session_state[CASE_CACHE_KEY]
+        st.rerun()
+
+    # ── Step 2: Triage ────────────────────────────────────────────────────────
+    bulk_eligible, manual_only = _bulk_triage_contact_pairs(active_pairs, open_case_ids)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Active Pairs",  len(active_pairs))
+    c2.metric("Bulk Eligible",       len(bulk_eligible),
+              help="Score ≥90%, no open Cases")
+    c3.metric("Manual Review Only",  len(manual_only),
+              help="Below 90% score or contact has open Cases")
+
+    st.markdown("---")
+
+    # ── Step 3: Bulk-eligible grid ────────────────────────────────────────────
+    st.markdown("#### ✅  Bulk-Eligible Pairs")
+
+    if not bulk_eligible:
+        st.info("No pairs meet the bulk criteria — all require individual review below.")
+    else:
+        st.caption(
+            "Master is pre-set to the most recently modified record. "
+            "Change the **Master →** column for any row if you prefer the other record. "
+            "Uncheck **Include** to exclude a pair from the bulk action."
+        )
+
+        def _pick_contact_master(p: dict) -> str:
+            lm_a = str(p["rec_a"].get("LastModifiedDate", "") or "")
+            lm_b = str(p["rec_b"].get("LastModifiedDate", "") or "")
+            return "A" if lm_a >= lm_b else "B"
+
+        # ── Select All / Deselect All ─────────────────────────────────────────
+        CONTACT_BULK_INCLUDE_STATES = "contact_bulk_include_states"
+        include_states = st.session_state.setdefault(CONTACT_BULK_INCLUDE_STATES, {})
+        for p in bulk_eligible:
+            include_states.setdefault(p["key"], True)
+
+        col_sel, col_desel, _ = st.columns([1, 1, 5])
+        with col_sel:
+            if st.button("☑  Select All", key="contact_bulk_sel_all"):
+                for p in bulk_eligible:
+                    include_states[p["key"]] = True
+                st.rerun()
+        with col_desel:
+            if st.button("☐  Deselect All", key="contact_bulk_desel_all"):
+                for p in bulk_eligible:
+                    include_states[p["key"]] = False
+                st.rerun()
+
+        grid_rows = []
+        for p in bulk_eligible:
+            m = _pick_contact_master(p)
+            include_val = include_states.get(p["key"], True)
+            name_a = f"{p['rec_a'].get('FirstName','')} {p['rec_a'].get('LastName','')}".strip()
+            name_b = f"{p['rec_b'].get('FirstName','')} {p['rec_b'].get('LastName','')}".strip()
+            acct_a = p["rec_a"].get("Account.Name") or p["rec_a"].get("AccountId") or ""
+            acct_b = p["rec_b"].get("Account.Name") or p["rec_b"].get("AccountId") or ""
+            grid_rows.append({
+                "Include":       include_val,
+                "Score":         p["score"],
+                "Why a match":   " · ".join(p.get("match_signals", [])),
+                "Master →":      m,
+                "Keep (Master)": name_a if m == "A" else name_b,
+                "Remove (Dup)":  name_b if m == "A" else name_a,
+                "Email A":       p["rec_a"].get("Email", "") or "",
+                "Email B":       p["rec_b"].get("Email", "") or "",
+                "Account A":     acct_a,
+                "Account B":     acct_b,
+                "pair_key":      p["key"],
+            })
+
+        grid_df = pd.DataFrame(grid_rows)
+
+        col_cfg = {
+            "Include":     st.column_config.CheckboxColumn("Include", default=True, width="small"),
+            "Score":       st.column_config.NumberColumn("Score", format="%d%%", width="small"),
+            "Why a match": st.column_config.Column(
+                "Why a match",
+                disabled=True,
+                help="Signals that caused these records to be flagged as duplicates",
+            ),
+            "Master →": st.column_config.SelectboxColumn(
+                "Master →", options=["A","B"], width="small",
+                help="A = keep left record, B = keep right record",
+            ),
+            "Keep (Master)": st.column_config.Column("Keep (Master)", disabled=True),
+            "Remove (Dup)":  st.column_config.Column("Remove (Dup)",  disabled=True),
+            "Email A":       st.column_config.Column("Email A",   disabled=True),
+            "Email B":       st.column_config.Column("Email B",   disabled=True),
+            "Account A":     st.column_config.Column("Account A", disabled=True),
+            "Account B":     st.column_config.Column("Account B", disabled=True),
+            "pair_key":      st.column_config.Column("pair_key",  disabled=True),
+        }
+
+        edited_grid = st.data_editor(
+            grid_df,
+            column_config=col_cfg,
+            column_order=[
+                "Include", "Score", "Why a match",
+                "Keep (Master)", "Remove (Dup)", "Master →",
+                "Email A", "Email B", "Account A", "Account B",
+            ],
+            hide_index=True,
+            width="stretch",
+            height=min(600, 44 + len(bulk_eligible) * 36),
+            key="contact_bulk_grid_editor",
+        )
+
+        # Persist per-row include state back to session_state after every render
+        for _, row in edited_grid.iterrows():
+            include_states[row["pair_key"]] = bool(row["Include"])
+
+        # ── Export CSV ────────────────────────────────────────────────────────
+        with st.columns([1, 6])[0]:
+            pair_lookup = {p["key"]: p for p in bulk_eligible}
+            export_rows = []
+            for _, row in edited_grid.iterrows():
+                p = pair_lookup.get(row["pair_key"], {})
+                export_rows.append({
+                    "Include":       row["Include"],
+                    "Score":         row["Score"],
+                    "Master":        row["Master →"],
+                    "Keep (Master)": row["Keep (Master)"],
+                    "Remove (Dup)":  row["Remove (Dup)"],
+                    "Master ID":     (p.get("rec_a",{}).get("Id","") if row["Master →"] == "A"
+                                      else p.get("rec_b",{}).get("Id","")),
+                    "Duplicate ID":  (p.get("rec_b",{}).get("Id","") if row["Master →"] == "A"
+                                      else p.get("rec_a",{}).get("Id","")),
+                    "Signals":       " · ".join(p.get("match_signals", [])),
+                })
+            csv_bytes = pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇  Export CSV",
+                data=csv_bytes,
+                file_name=f"contact_dedupe_bulk_{datetime.datetime.now().strftime(TIMESTAMP_FMT)}.csv",
+                mime="text/csv",
+                key="contact_bulk_export_csv",
+            )
+
+        # ── Dismiss and Merge buttons ─────────────────────────────────────────
+        st.markdown("---")
+        selected = edited_grid[edited_grid["Include"] == True]
+        n_sel    = len(selected)
+
+        col_dismiss, col_merge, _ = st.columns([1, 2, 4])
+
+        with col_dismiss:
+            dismiss_btn = st.button(
+                f"🚫  Dismiss ({n_sel})",
+                key="contact_bulk_dismiss_btn",
+                disabled=(n_sel == 0),
+                help="Mark selected pairs as not duplicates — removes them from the queue without merging.",
+            )
+
+        with col_merge:
+            merge_label = f"⚡  Bulk Merge {n_sel} pair{'s' if n_sel != 1 else ''}"
+            if dry_run_mode:
+                merge_label += "  [DRY RUN]"
+            merge_btn = st.button(
+                merge_label,
+                type="primary",
+                key="contact_bulk_merge_btn",
+                disabled=(n_sel == 0),
+            )
+
+        # ── Dismiss handler ───────────────────────────────────────────────────
+        if dismiss_btn:
+            to_dismiss = set(selected["pair_key"].tolist())
+            st.session_state.contact_dedupe_dismissed.update(to_dismiss)
+            st.session_state.pop(CASE_CACHE_KEY, None)
+            st.success(f"✅ {len(to_dismiss)} pair(s) dismissed.")
+            st.rerun()
+
+        # ── Merge handler ─────────────────────────────────────────────────────
+        if merge_btn:
+            pair_lookup = {p["key"]: p for p in bulk_eligible}
+
+            merge_plan = []
+            for _, row in selected.iterrows():
+                p = pair_lookup.get(row["pair_key"])
+                if not p:
+                    continue
+                master_rec = p["rec_a"] if row["Master →"] == "A" else p["rec_b"]
+                dupl_rec   = p["rec_b"] if row["Master →"] == "A" else p["rec_a"]
+                merge_plan.append({
+                    "pair_key":    p["key"],
+                    "master_id":   master_rec["Id"],
+                    "master_name": f"{master_rec.get('FirstName','')} {master_rec.get('LastName','')}".strip(),
+                    "dupl_id":     dupl_rec["Id"],
+                    "dupl_name":   f"{dupl_rec.get('FirstName','')} {dupl_rec.get('LastName','')}".strip(),
+                })
+
+            if dry_run_mode:
+                st.warning(f"**DRY RUN** — {len(merge_plan)} merge(s) planned. No changes will be made.")
+                st.dataframe(
+                    pd.DataFrame([
+                        {"Keep": m["master_name"], "Remove": m["dupl_name"],
+                         "Master ID": m["master_id"], "Duplicate ID": m["dupl_id"]}
+                        for m in merge_plan
+                    ]),
+                    width="stretch", hide_index=True,
+                )
+                st.info("Toggle off **Dry Run Mode** in the sidebar to execute.")
+            else:
+                # Backup duplicate records before touching anything
+                backup_path = ""
+                if auto_backup:
+                    backup_ids = [m["dupl_id"] for m in merge_plan]
+                    try:
+                        _chunks = []
+                        for _ci in range(0, len(backup_ids), 200):
+                            _chunk   = backup_ids[_ci: _ci + 200]
+                            _id_list = ", ".join(f"'{i}'" for i in _chunk)
+                            _chunks.append(run_soql(
+                                f"SELECT Id, FirstName, LastName, Email, Phone, Title, "
+                                f"AccountId, OwnerId, CreatedDate, LastModifiedDate "
+                                f"FROM Contact WHERE Id IN ({_id_list})"
+                            ))
+                        backup_df   = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame()
+                        backup_path = backup_records(backup_df, "contact_bulk_merge_duplicates", "Contact")
+                        st.success(f"✅ Backup saved → `{backup_path}`")
+                    except Exception as e:
+                        st.error(f"Backup failed: {e} — aborting for safety.")
+                        return
+
+                results_log = []
+                progress    = st.progress(0, text="Merging...")
+
+                for i, m in enumerate(merge_plan):
+                    progress.progress(i / len(merge_plan),
+                                      text=f"Merging {i+1}/{len(merge_plan)}: {m['master_name']}")
+                    try:
+                        result = execute_contact_merge(
+                            sf,
+                            master_id=m["master_id"],
+                            duplicate_id=m["dupl_id"],
+                            dry_run=False,
+                        )
+                        status = "✅ Success" if not result["errors"] else "⚠️ Partial"
+                        moved  = ", ".join(f"{v} {k}" for k,v in result["children_moved"].items()) or "—"
+                        results_log.append({
+                            "Pair":   f"{m['master_name']} ← {m['dupl_name']}",
+                            "Status": status,
+                            "Moved":  moved,
+                            "Errors": "; ".join(result["errors"]),
+                        })
+                        if not result["errors"]:
+                            st.session_state.contact_dedupe_merged.add(m["pair_key"])
+                    except Exception as e:
+                        results_log.append({
+                            "Pair":   f"{m['master_name']} ← {m['dupl_name']}",
+                            "Status": "❌ Failed",
+                            "Moved":  "—",
+                            "Errors": str(e),
+                        })
+
+                progress.progress(1.0, text="Done.")
+
+                n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
+                n_err = len(results_log) - n_ok
+                if n_err == 0:
+                    st.success(f"✅ All {n_ok} pair(s) merged successfully.")
+                else:
+                    st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
+                st.dataframe(pd.DataFrame(results_log), width="stretch", hide_index=True)
+
+                # Write merge log
+                log_path = write_merge_log("Contact", results_log, backup_path)
+                st.info(f"📋 Merge log saved → `{log_path}`")
+
+                # Re-query Salesforce so the pair count reflects the true post-merge state
+                params = st.session_state.get("contact_dedupe_last_scan_params", {})
+                if params:
+                    with st.spinner("Re-scanning for duplicates after merge…"):
+                        try:
+                            fetch_contacts_for_dedupe.clear()
+                            df_fresh = fetch_contacts_for_dedupe(sf.sf_instance)
+                            st.session_state.contact_dedupe_candidates = find_contact_duplicate_candidates(
+                                df_fresh,
+                                name_threshold=params.get("name_threshold", 85),
+                                same_account_boost=params.get("same_account_boost", 10),
+                                email_boost=params.get("email_boost", 15),
+                            )
+                            st.session_state.contact_dedupe_review_idx = 0
+                            st.session_state.contact_dedupe_dismissed  = set()
+                            st.session_state.pop("contact_bulk_include_states", None)
+                        except Exception as e:
+                            st.warning(f"Re-scan failed ({e}) — click Scan to refresh manually.")
+
+                st.session_state.pop(CASE_CACHE_KEY, None)
+                st.rerun()
+
+    # ── Step 4: Manual-only pairs ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🔍  Requires Individual Review")
+    st.caption("Switch to the **Individual Review** tab to handle these pairs one at a time.")
+
+    if not manual_only:
+        st.info("All pairs were eligible for bulk processing — nothing needs individual review.")
+    else:
+        manual_rows = []
+        for p in manual_only:
+            name_a = f"{p['rec_a'].get('FirstName','')} {p['rec_a'].get('LastName','')}".strip()
+            name_b = f"{p['rec_b'].get('FirstName','')} {p['rec_b'].get('LastName','')}".strip()
+            manual_rows.append({
+                "Score":             f"{p['score']}%",
+                "Record A":          name_a,
+                "Email A":           p["rec_a"].get("Email", "") or "",
+                "Record B":          name_b,
+                "Email B":           p["rec_b"].get("Email", "") or "",
+                "Match signals":     " · ".join(p.get("match_signals", [])),
+                "Why Manual Review": " · ".join(p.get("_manual_reasons", [])),
+            })
+        st.dataframe(
+            pd.DataFrame(manual_rows),
+            column_order=["Score", "Record A", "Email A", "Record B", "Email B",
+                          "Match signals", "Why Manual Review"],
+            width="stretch",
+            hide_index=True,
+            height=min(500, 44 + len(manual_only) * 36),
+        )
+
+
+# ── Website Cleanup ────────────────────────────────────────────────────────────
+
+def render_website_cleanup_tab(auto_backup: bool, dry_run_mode: bool):
+    """
+    Two-phase bad-website cleanup utility.
+
+    Phase 1 — Scan:
+        Builds a SOQL query from JUNK_WEBSITE_DOMAINS using LIKE clauses so only
+        accounts with known junk website values are returned by Salesforce directly.
+
+    Phase 2 — Review & Cleanup:
+        Shows metric cards, a domain-frequency table, an editable st.data_editor
+        grid, and action buttons (Export CSV, Null Selected Websites).
+        Respects dry_run_mode and auto_backup.
+    """
+    st.subheader("🌐  Website Cleanup")
+    st.caption(
+        "Shows only accounts where the Website field contains a known junk domain — "
+        "reference sites, business directories, and data enrichment artifacts that should "
+        "be cleared. Legitimate company websites will not appear here."
+    )
+
+    sf = get_sf_connection()
+    if sf is None:
+        st.error("No Salesforce connection. Please authenticate in the sidebar.")
+        return
+
+    # ── Filter description ────────────────────────────────────────────────────
+
+    with st.expander("ℹ️  What does this scan flag?", expanded=False):
+        st.markdown(
+            "Records appear here because their Website field contains one of the "
+            "following known junk values. To update the list, edit `JUNK_WEBSITE_DOMAINS` "
+            "in `sf_query_tool.py`.\n\n"
+            "**Site builders & placeholders** — "
+            + ", ".join(["wordpress.com", "wix.com", "squarespace.com", "weebly.com",
+                         "godaddy.com", "sites.google.com", "webflow.io", "jimdo.com",
+                         "yolasite.com", "strikingly.com"])
+            + "\n\n"
+            "**Social / not a company website** — "
+            + ", ".join(["facebook.com", "twitter.com",
+                         "linkedin.com", "instagram.com", "youtube.com", "youtu.be",
+                         "tiktok.com", "pinterest.com"])
+            + "\n\n"
+            "**Reference / mapping sites** — mapquest.com\n\n"
+            "**Literal junk values** — "
+            + ", ".join(["example.com", "google.com", "bing.com",
+                         "n/a", "na", "none", "null", "tbd", "http://", "https://"])
+        )
+
+    # ── Phase 1: Scan ────────────────────────────────────────────────────────
+
+    scan_done = st.session_state.get("website_cleanup_scan_done", False)
+    btn_label = "🔄  Re-scan" if scan_done else "🔍  Scan for Bad Websites"
+
+    if st.button(btn_label, key="website_cleanup_scan_btn", type="primary"):
+        def _soql_clause(domain: str) -> str:
+            # Entries containing a dot are domain fragments — use substring match.
+            # Short literal values (na, n/a, null, http://, etc.) use exact match
+            # so they don't become catastrophic substring hits on real domains.
+            if "." in domain:
+                return f"Website LIKE '%{domain}%'"
+            return f"Website LIKE '{domain}'"
+
+        like_clauses = " OR ".join(_soql_clause(d) for d in JUNK_WEBSITE_DOMAINS)
+        soql = f"""
+            SELECT Id, Name, Website, BillingCity, BillingCountry,
+                   LastModifiedDate, LastActivityDate
+            FROM Account
+            WHERE IsDeleted = false
+            AND ({like_clauses})
+            ORDER BY Website ASC
+            LIMIT 2000
+        """
+        with st.spinner("Scanning for junk website domains…"):
+            try:
+                df_junk = run_soql(soql)
+            except Exception as e:
+                st.error(f"Scan failed: {e}")
+                return
+
+        if df_junk.empty:
+            st.info("No Account records with junk websites found.")
+            st.session_state.website_cleanup_results = df_junk
+            st.session_state.website_cleanup_scan_done = True
+            st.rerun()
+            return
+
+        df_junk = df_junk.reset_index(drop=True)
+
+        st.session_state.website_cleanup_results = df_junk
+        st.session_state.website_cleanup_scan_done = True
+        st.rerun()
+
+    # ── Phase 2: Review & Cleanup ────────────────────────────────────────────
+
+    df_junk = st.session_state.get("website_cleanup_results")
+    if df_junk is None or not st.session_state.get("website_cleanup_scan_done", False):
+        st.info("Click **🔍 Scan for Bad Websites** to begin.")
+        return
+
+    if df_junk.empty:
+        st.success("✅ No junk websites found — your Account Website data looks clean!")
+        return
+
+    # ── Metric cards ──────────────────────────────────────────────────────────
+    domain_series = df_junk["Website"].str.lower().str.extract(
+        r"(?:https?://)?(?:www\.)?([^/\s]+)", expand=False
+    ).fillna(df_junk["Website"].str.lower())
+
+    n_junk    = len(df_junk)
+    n_domains = domain_series.nunique()
+
+    mc1, mc2 = st.columns(2)
+    mc1.metric("Junk Websites Found", f"{n_junk:,}")
+    mc2.metric("Unique Junk Domains",  f"{n_domains:,}")
+
+    st.divider()
+
+    # ── Domain frequency table ────────────────────────────────────────────────
+    with st.expander(f"📋  Domain Breakdown ({n_domains:,} unique domains)", expanded=False):
+        freq = (
+            domain_series.value_counts()
+            .reset_index()
+            .rename(columns={"index": "Domain", 0: "Count", "Website": "Domain", "count": "Count"})
+        )
+        st.dataframe(freq, width='stretch', hide_index=True)
+
+    # ── Editable review grid ──────────────────────────────────────────────────
+    st.markdown("#### Review & Select Records")
+    st.caption(
+        "Uncheck rows you want to **keep**. "
+        "Only checked rows will be nulled when you click 'Null Selected Websites'."
+    )
+
+    editor_df = df_junk[["Id", "Name", "Website"]].copy()
+    editor_df.insert(0, "Include", True)
+
+    edited = st.data_editor(
+        editor_df,
+        width='stretch',
+        hide_index=True,
+        disabled=["Id", "Name", "Website"],
+        column_config={
+            "Include": st.column_config.CheckboxColumn("Include", default=True),
+            "Id":      st.column_config.TextColumn("Account ID"),
+            "Name":    st.column_config.TextColumn("Account Name"),
+            "Website": st.column_config.TextColumn("Current Website"),
+        },
+        key="website_cleanup_editor",
+        height=420,
+    )
+
+    selected   = edited[edited["Include"] == True]
+    n_selected = len(selected)
+
+    st.caption(f"{n_selected:,} of {n_junk:,} records selected for cleanup.")
+
+    # ── Action buttons ────────────────────────────────────────────────────────
+    col_exp, col_null = st.columns([1, 2])
+
+    with col_exp:
+        csv_bytes = editor_df.drop(columns=["Include"]).to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇  Export CSV",
+            data=csv_bytes,
+            file_name=f"website_cleanup_{datetime.datetime.now().strftime(TIMESTAMP_FMT)}.csv",
+            mime="text/csv",
+            key="website_cleanup_export_csv",
+            width='stretch',
+        )
+
+    with col_null:
+        null_label = (
+            f"🚫  Null {n_selected:,} Website(s)  [DRY RUN]"
+            if dry_run_mode
+            else f"🚫  Null {n_selected:,} Website(s)"
+        )
+        null_btn = st.button(
+            null_label,
+            key="website_cleanup_null_btn",
+            type="primary",
+            disabled=(n_selected == 0),
+            width='stretch',
+        )
+
+    if null_btn:
+        if n_selected == 0:
+            st.warning("No records selected.")
+            return
+
+        payload = [{"Id": row["Id"], "Website": None} for _, row in selected.iterrows()]
+
+        # Dry-run: preview only
+        if dry_run_mode:
+            st.warning(
+                f"**DRY RUN** — {n_selected:,} Account Website(s) would be set to null. "
+                "No changes will be made."
+            )
+            preview_df = selected[["Name", "Website"]].copy()
+            preview_df.columns = ["Account Name", "Website (to be nulled)"]
+            st.dataframe(preview_df, width='stretch', hide_index=True)
+            st.info("Toggle off **Dry Run Mode** in the sidebar to execute.")
+            return
+
+        # Live run — optional backup from in-memory data (no extra query needed)
+        backup_path = ""
+        if auto_backup:
+            try:
+                os.makedirs(BACKUP_DIR, exist_ok=True)
+                ts          = datetime.datetime.now().strftime(TIMESTAMP_FMT)
+                backup_path = f"{BACKUP_DIR}/Account_Website_Cleanup_{ts}.csv"
+                selected[["Id", "Name", "Website"]].to_csv(backup_path, index=False)
+                st.success(f"✅ Backup saved → `{backup_path}`")
+            except Exception as e:
+                st.warning(f"Backup failed (continuing anyway): {e}")
+
+        with st.spinner(f"Nulling {n_selected:,} Website field(s)…"):
+            try:
+                result = execute_update(sf, "Account", payload)
+            except Exception as e:
+                st.error(f"Bulk update failed: {e}")
+                return
+
+        soql_logged = (
+            "SELECT Id, Name, Website FROM Account "
+            "WHERE IsDeleted = false AND (Website LIKE '%<junk_domain>%' ...) "
+            "ORDER BY Website ASC LIMIT 2000"
+        )
+        write_operation_log(
+            operation      = "Update",
+            object_name    = "Account",
+            soql           = soql_logged,
+            payload        = payload,
+            result         = result,
+            backup_path    = backup_path,
+            excluded_count = n_junk - n_selected,
+        )
+
+        if result["failed"] == 0:
+            st.success(f"✅ {result['success']:,} Account Website(s) cleared successfully.")
+        else:
+            st.warning(
+                f"⚠️ {result['success']:,} succeeded, {result['failed']:,} failed. "
+                "Check the audit log for details."
+            )
+
+        # Clear cached results so the next scan reflects updated data
+        st.session_state.pop("website_cleanup_results", None)
+        st.session_state.pop("website_cleanup_scan_done", None)
+
+
+def render_contact_dedupe_tab(auto_backup: bool, dry_run_mode: bool):
+    """
+    Renders the full Contact Deduplication tab.
+
+    Structure mirrors render_dedupe_tab (Account version):
+      1. Scan Controls — threshold sliders + Scan button
+      2. Stats bar — pairs found / remaining / merged / skipped
+      3. Sub-tabs: Bulk Review + Individual Review
+         - Individual Review: clickable pair queue → merge dialog
+    """
+    sf        = get_sf_connection()
+    candidates = st.session_state.contact_dedupe_candidates
+    dismissed  = st.session_state.contact_dedupe_dismissed
+    merged     = st.session_state.contact_dedupe_merged
+
+    st.subheader("Contact Deduplication")
+    st.caption(
+        "Finds likely duplicate Contacts using fuzzy name matching, exact email matching, "
+        "and same-Account signals. Review each pair side-by-side before merging."
+    )
+
+    # ── Phase 1: Scan Controls ────────────────────────────────────────────────
+    with st.expander("⚙️  Scan Settings", expanded=(candidates is None)):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            threshold = st.slider(
+                "Minimum match score",
+                min_value=70, max_value=99, value=85, step=1,
+                help="Higher = fewer but more confident matches. 85 is a good starting point.",
+                key="contact_dedupe_threshold",
+            )
+        with col2:
+            same_account_boost = st.slider(
+                "Same Account bonus",
+                min_value=0, max_value=20, value=10, step=1,
+                help="Extra points when both contacts belong to the same Account — a strong duplicate signal.",
+                key="contact_dedupe_acct_boost",
+            )
+        with col3:
+            email_boost = st.slider(
+                "Same email bonus",
+                min_value=0, max_value=20, value=15, step=1,
+                help="Extra points when both contacts share the same email address — the strongest duplicate signal.",
+                key="contact_dedupe_email_boost",
+            )
+
+        scan_btn = st.button("🔍  Scan for Duplicates", type="primary", key="contact_dedupe_scan")
+
+    if scan_btn:
+        with st.spinner("Fetching all Contacts and running fuzzy matching — this may take 30–90 seconds for large orgs..."):
+            try:
+                df_contacts = fetch_contacts_for_dedupe(sf.sf_instance)
+                st.session_state.contact_dedupe_candidates = find_contact_duplicate_candidates(
+                    df_contacts,
+                    name_threshold=threshold,
+                    same_account_boost=same_account_boost,
+                    email_boost=email_boost,
+                )
+                st.session_state.contact_dedupe_review_idx = 0
+                st.session_state.contact_dedupe_dismissed  = set()
+                st.session_state.pop("contact_bulk_include_states", None)
+                st.session_state["contact_dedupe_last_scan_params"] = {
+                    "name_threshold":     threshold,
+                    "same_account_boost": same_account_boost,
+                    "email_boost":        email_boost,
+                }
+                st.rerun()
+            except RuntimeError as e:
+                st.error(str(e))
+                return
+
+    if candidates is None:
+        st.info("Click **Scan for Duplicates** above to begin. Contacts are fetched fresh each scan.")
+        return
+
+    # Filter out dismissed and merged pairs
+    active = [
+        p for p in candidates
+        if p["key"] not in dismissed and p["key"] not in merged
+    ]
+
+    # ── Phase 2: Candidate Queue ──────────────────────────────────────────────
+    total_found   = len(candidates)
+    total_active  = len(active)
+    total_merged  = len(merged)
+    total_skipped = len(dismissed)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Pairs Found",  total_found)
+    col2.metric("Remaining",    total_active)
+    col3.metric("Merged",       total_merged)
+    col4.metric("Skipped",      total_skipped)
+
+    if not active:
+        if total_merged > 0 or total_skipped > 0:
+            st.success("✅ All duplicate pairs have been reviewed. Re-scan to check for new duplicates.")
+        else:
+            st.success("✅ No duplicate pairs found above the current threshold. Try lowering the match score.")
+        return
+
+    st.markdown("---")
+
+    # ── Review mode: Bulk Review (default) vs Individual Review ──────────────────
+    _contact_dedupe_view = st.radio(
+        "Review mode",
+        ["⚡  Bulk Review", "🔍  Individual Review"],
+        key="contact_dedupe_view",
+        label_visibility="collapsed",
+    )
+    st.markdown("---")
+
+    if _contact_dedupe_view == "⚡  Bulk Review":
+        render_contact_bulk_review_panel(active, auto_backup, dry_run_mode)
+
+    if _contact_dedupe_view == "🔍  Individual Review":
+        st.caption(
+            "Review one pair at a time. Use this for pairs the Bulk Review flagged "
+            "as manual-only, or any pair you want to inspect closely."
+        )
+
+        st.markdown("**Click a row to open the merge dialog below**")
+
+        queue_rows = []
+        for i, p in enumerate(active):
+            name_a = f"{p['rec_a'].get('FirstName','')} {p['rec_a'].get('LastName','')}".strip()
+            name_b = f"{p['rec_b'].get('FirstName','')} {p['rec_b'].get('LastName','')}".strip()
+            queue_rows.append({
+                "#":       i + 1,
+                "Score":   f"{p['score']}%",
+                "Record A": name_a,
+                "Record B": name_b,
+                "Signals":  " · ".join(p["match_signals"]),
+            })
+        queue_df = pd.DataFrame(queue_rows)
+
+        idx = st.session_state.contact_dedupe_review_idx
+        idx = min(idx, len(active) - 1)
+
+        selected_row = st.dataframe(
+            queue_df,
+            width="stretch",
+            hide_index=True,
+            height=min(200, 40 + len(active) * 35),
+            on_select="rerun",
+            selection_mode="single-row",
+            key="contact_dedupe_queue_table",
+        )
+
+        if selected_row and selected_row.selection.rows:
+            idx = selected_row.selection.rows[0]
+            st.session_state.contact_dedupe_review_idx = idx
+
+        pair  = active[idx]
+
+        # ── Merge Dialog ──────────────────────────────────────────────────────
+        st.markdown("---")
+        rec_a = pair["rec_a"]
+        rec_b = pair["rec_b"]
+
+        name_a_full = f"{rec_a.get('FirstName','')} {rec_a.get('LastName','')}".strip()
+        name_b_full = f"{rec_b.get('FirstName','')} {rec_b.get('LastName','')}".strip()
+
+        st.markdown(f"### Merge: **{name_a_full}** ↔ **{name_b_full}**")
+        st.caption(
+            f"Match confidence: **{pair['score']}%** · "
+            + " · ".join(pair["match_signals"])
+        )
+
+        # ── Fetch child counts (cached per pair) ──────────────────────────────
+        child_cache_key = f"contact_children_{pair['key']}"
+        if child_cache_key not in st.session_state:
+            children_a, children_b = {}, {}
+            for child_obj, parent_field in CONTACT_CHILD_OBJECTS:
+                try:
+                    for side, rec_id, dest in [("A", rec_a["Id"], children_a),
+                                                ("B", rec_b["Id"], children_b)]:
+                        r = sf.query(
+                            f"SELECT COUNT() FROM {child_obj} "
+                            f"WHERE {parent_field} = '{rec_id}'"
+                        )
+                        count = r.get("totalSize", 0)
+                        if count > 0:
+                            dest[child_obj] = count
+                except Exception:
+                    pass
+            st.session_state[child_cache_key] = (children_a, children_b)
+        else:
+            children_a, children_b = st.session_state[child_cache_key]
+
+        # ── AI Recommendation Panel ───────────────────────────────────────────
+        ai_rec = render_contact_ai_recommendation_panel(pair, rec_a, rec_b)
+
+        # Determine effective master
+        score_fields     = [f for f, _ in CONTACT_MERGE_DISPLAY_FIELDS if f not in CONTACT_READ_ONLY_FIELDS]
+        completeness_a   = _completeness_score(rec_a, score_fields)
+        completeness_b   = _completeness_score(rec_b, score_fields)
+        suggested_master = "A" if completeness_a >= completeness_b else "B"
+
+        ai_master        = ai_rec.get("master") if ai_rec else None
+        effective_master = ai_master if ai_master in ("A","B") else suggested_master
+
+        def _contact_master_label(x):
+            ai_badge   = " 🤖" if (ai_rec and x == ai_master) else ""
+            comp_badge = " ⭐" if (not ai_rec and x == suggested_master) else ""
+            name  = name_a_full if x == "A" else name_b_full
+            comp  = completeness_a if x == "A" else completeness_b
+            kids  = children_a if x == "A" else children_b
+            child_summary = f", {sum(kids.values())} child records" if kids else ""
+            return f"Record {x}{ai_badge}{comp_badge}: {name} ({comp} fields filled{child_summary})"
+
+        col_master_label, col_master_pick = st.columns([2, 3])
+        with col_master_label:
+            st.markdown("**Which record survives as master?**")
+            st.caption("The master keeps its ID and all child records are re-parented to it.")
+        with col_master_pick:
+            master_choice = st.radio(
+                "Master record",
+                options=["A", "B"],
+                format_func=_contact_master_label,
+                index=0 if effective_master == "A" else 1,
+                horizontal=False,
+                key=f"contact_master_{pair['key']}",
+                label_visibility="collapsed",
+            )
+
+        master_rec = rec_a if master_choice == "A" else rec_b
+        dupl_rec   = rec_b if master_choice == "A" else rec_a
+
+        st.markdown("---")
+
+        # ── Field-by-field comparison ─────────────────────────────────────────
+        ai_field_picks = ai_rec.get("field_picks", {}) if ai_rec else {}
+        ai_master_for_badge = ai_master if ai_rec else None
+
+        ai_badge_a = "🤖 " if (ai_rec and ai_master == "A") else ("⭐ " if not ai_rec and master_choice == "A" else "")
+        ai_badge_b = "🤖 " if (ai_rec and ai_master == "B") else ("⭐ " if not ai_rec and master_choice == "B" else "")
+        header_note = " (🤖 = AI pick · radio pre-set, override freely)" if ai_rec else ""
+        st.markdown(f"**Field-by-field comparison — select which value to keep:{header_note}**")
+        st.markdown(
+            '<div style="display:grid;grid-template-columns:160px 1fr 40px 1fr;'
+            'gap:4px 12px;align-items:center;padding:6px 0;'
+            'font-family:\'IBM Plex Mono\',monospace;font-size:0.75rem;color:#6e8c7a;">'
+            '<div>FIELD</div>'
+            f'<div>{ai_badge_a}RECORD A: {name_a_full[:30]}</div>'
+            '<div></div>'
+            f'<div>{ai_badge_b}RECORD B: {name_b_full[:30]}</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        field_selections = {}
+
+        def _fmt_contact(v):
+            if v is None or str(v).strip() in ("", "None", "nan", "NaN"):
+                return "—"
+            return str(v)
+
+        for field_api, field_label in CONTACT_MERGE_DISPLAY_FIELDS:
+            val_a = rec_a.get(field_api, "")
+            val_b = rec_b.get(field_api, "")
+
+            disp_a = _fmt_contact(val_a)
+            disp_b = _fmt_contact(val_b)
+            same   = (disp_a == disp_b)
+
+            cols = st.columns([2, 4, 1, 4])
+            with cols[0]:
+                st.markdown(
+                    f'<div style="font-family:\'IBM Plex Mono\',monospace;font-size:0.75rem;'
+                    f'color:#7a9485;padding:6px 0;">{field_label}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            if same:
+                with cols[1]:
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 0;color:#c9d9cf;">{disp_a}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    st.markdown(
+                        f'<div style="text-align:center;padding:6px 0;color:{COLOR_SUCCESS};font-size:0.75rem;">✓</div>',
+                        unsafe_allow_html=True,
+                    )
+                with cols[3]:
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 0;color:#c9d9cf;">{disp_b}</div>',
+                        unsafe_allow_html=True,
+                    )
+                field_selections[field_api] = master_choice
+            else:
+                default_pick = ai_field_picks.get(field_api, master_choice)
+                if default_pick not in ("A", "B"):
+                    default_pick = master_choice
+
+                ai_picked_this = field_api in ai_field_picks
+                indicator_a = "🤖 " if (ai_picked_this and default_pick == "A") else ""
+                indicator_b = "🤖 " if (ai_picked_this and default_pick == "B") else ""
+
+                # Read-only fields: show both values but don't render a radio
+                if field_api in CONTACT_READ_ONLY_FIELDS:
+                    with cols[1]:
+                        st.markdown(
+                            f'<div style="font-size:0.82rem;padding:6px 8px;border-radius:4px;'
+                            f'background:#0f1a15;border:1px solid #1a2d22;color:#7a9485;">'
+                            f'{disp_a} <span style="font-size:0.68rem;">(read-only)</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                    with cols[3]:
+                        st.markdown(
+                            f'<div style="font-size:0.82rem;padding:6px 8px;border-radius:4px;'
+                            f'background:#0f1a15;border:1px solid #1a2d22;color:#7a9485;">'
+                            f'{disp_b} <span style="font-size:0.68rem;">(read-only)</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                    field_selections[field_api] = master_choice
+                    continue
+
+                with cols[1]:
+                    bg_a     = "#0d2a1f" if (ai_picked_this and default_pick == "A") else ("#0a3022" if default_pick == "A" else "#0f1a15")
+                    border_a = "#017551" if (ai_picked_this and default_pick == "A") else (COLOR_SUCCESS if default_pick == "A" else "#1a2d22")
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 8px;border-radius:4px;'
+                        f'background:{bg_a};border:1px solid {border_a};color:#c9d9cf;">'
+                        f'{indicator_a}{disp_a}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    picked = st.radio(
+                        f"contact_pick_{field_api}",
+                        ["A", "B"],
+                        index=0 if default_pick == "A" else 1,
+                        key=f"contact_field_{pair['key']}_{field_api}",
+                        label_visibility="collapsed",
+                        horizontal=False,
+                    )
+                    field_selections[field_api] = picked
+                with cols[3]:
+                    bg_b     = "#0d2a1f" if (ai_picked_this and default_pick == "B") else ("#0a3022" if default_pick == "B" else "#0f1a15")
+                    border_b = "#017551" if (ai_picked_this and default_pick == "B") else (COLOR_SUCCESS if default_pick == "B" else "#1a2d22")
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;padding:6px 8px;border-radius:4px;'
+                        f'background:{bg_b};border:1px solid {border_b};color:#c9d9cf;">'
+                        f'{indicator_b}{disp_b}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        # ── Surviving record preview ───────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("**Surviving record preview** — what the master will look like after merge:")
+
+        preview_data = []
+        for field_api, field_label in CONTACT_MERGE_DISPLAY_FIELDS:
+            chosen_rec  = rec_a if field_selections.get(field_api, master_choice) == "A" else rec_b
+            chosen_val  = chosen_rec.get(field_api, "")
+            source_name = name_a_full if field_selections.get(field_api, master_choice) == "A" else name_b_full
+            preview_data.append({
+                "Field":      field_label,
+                "Kept Value": _fmt_contact(chosen_val),
+                "Source":     source_name[:35],
+            })
+        st.dataframe(pd.DataFrame(preview_data), width="stretch", hide_index=True, height=340)
+
+        # ── Child records summary ─────────────────────────────────────────────
+        st.markdown("**Child records that will be re-parented to master:**")
+        dupl_children   = children_b if master_choice == "A" else children_a
+        master_children = children_a if master_choice == "A" else children_b
+        if dupl_children:
+            child_rows = [
+                {
+                    "Object":              obj,
+                    "On Duplicate (moves)": count,
+                    "Already on Master":    master_children.get(obj, 0),
+                }
+                for obj, count in dupl_children.items()
+            ]
+            st.dataframe(pd.DataFrame(child_rows), width="stretch", hide_index=True)
+        else:
+            st.info("No child records found on the duplicate — safe to delete.")
+
+        # ── Action Buttons ────────────────────────────────────────────────────
+        st.markdown("---")
+        col1, col2, col3, _ = st.columns([2, 2, 2, 4])
+
+        with col1:
+            merge_btn = st.button(
+                "✅  Merge Records",
+                type="primary",
+                key=f"contact_merge_btn_{pair['key']}",
+                help="Re-parents all child records to master, updates field values, then deletes the duplicate.",
+            )
+        with col2:
+            skip_btn = st.button(
+                "⏭️  Skip This Pair",
+                key=f"contact_skip_btn_{pair['key']}",
+                help="Mark as not a duplicate and move to the next pair.",
+            )
+        with col3:
+            next_btn = st.button(
+                "→  Next Pair",
+                key=f"contact_next_btn_{pair['key']}",
+                help="Move to the next pair without deciding.",
+            )
+
+        if skip_btn:
+            st.session_state.contact_dedupe_dismissed.add(pair["key"])
+            st.session_state.contact_dedupe_review_idx = max(0, idx - 1)
+            st.rerun()
+
+        if next_btn:
+            st.session_state.contact_dedupe_review_idx = (idx + 1) % len(active)
+            st.rerun()
+
+        if merge_btn:
+            # Build field update payload (skip read-only fields)
+            field_updates = {}
+            for field_api, _ in CONTACT_MERGE_DISPLAY_FIELDS:
+                if field_api in CONTACT_READ_ONLY_FIELDS:
+                    continue
+                chosen_rec = rec_a if field_selections.get(field_api, master_choice) == "A" else rec_b
+                new_val    = chosen_rec.get(field_api)
+                curr_val   = master_rec.get(field_api)
+                if new_val != curr_val:
+                    field_updates[field_api] = new_val
+
+            # Auto-backup
+            if auto_backup:
+                backup_df   = pd.DataFrame([master_rec, dupl_rec])
+                backup_path = backup_records(backup_df, "contact_merge", "Contact")
+                st.success(f"✅ Backup saved → `{backup_path}`")
+
+            with st.spinner("Merging..."):
+                errors = []
+
+                # Step 1: Apply field updates to master
+                if field_updates:
+                    try:
+                        sf.Contact.update(master_rec["Id"], field_updates)
+                    except Exception as e:
+                        errors.append(f"Field update: {e}")
+
+                # Step 2: Re-parent children + delete duplicate
+                result = execute_contact_merge(
+                    sf, master_rec["Id"], dupl_rec["Id"], dry_run=False
+                )
+                errors.extend(result["errors"])
+
+            if errors:
+                st.error("Merge completed with errors:\n" + "\n".join(errors))
+            else:
+                moved_summary = ", ".join(
+                    f"{v} {k}" for k, v in result["children_moved"].items()
+                ) or "no child records"
+                st.success(
+                    f"✅ Merged successfully! Re-parented {moved_summary} to "
+                    f"**{name_a_full if master_choice == 'A' else name_b_full}**. "
+                    f"Duplicate deleted."
+                )
+
+            st.session_state.contact_dedupe_merged.add(pair["key"])
+            st.session_state.contact_dedupe_review_idx = max(0, idx - 1)
+            fetch_contacts_for_dedupe.clear()
+            st.rerun()
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TERRITORY MANAGEMENT MODULE
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TERRITORY MANAGEMENT
+# Classifies Salesforce Accounts into sales territories based on the billing
+# state/province of the ULTIMATE PARENT account.
+#
+# Business rules:
+#   - Territory__c is driven by the highest-level parent's BillingState (NA)
+#     or BillingCountry (Europe).
+#   - Italy is explicitly excluded from any territory assignment.
+#   - Accounts with no billing location at any parent level are surfaced for
+#     manual review.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Territory definitions — loaded from JSON, editable at runtime ─────────────
+_TERRITORY_JSON = os.path.join(os.path.dirname(__file__), "territory_definitions.json")
+
+_TERRITORY_MAP_FALLBACK: dict[str, list[str]] = {
+    "Territory 1": [
+        "Maryland", "Massachusetts", "Connecticut", "New York", "Rhode Island",
+        "Nova Scotia", "Quebec", "Ontario", "New Jersey", "District of Columbia",
+        "New Hampshire", "Maine", "Prince Edward Island", "New Brunswick",
+        "Newfoundland/Labrador", "Delaware", "Vermont",
+    ],
+    "Territory 2": [
+        "Washington", "Oregon", "California", "Arizona", "Hawaii", "New Mexico",
+        "Nevada", "Idaho", "British Columbia", "Alberta", "Utah", "Wyoming",
+        "Montana", "Alaska",
+    ],
+    "Territory 3": [
+        "Saskatchewan", "Manitoba", "Wisconsin", "Minnesota", "Iowa", "Illinois",
+        "Kentucky", "Ohio", "Pennsylvania", "Michigan", "Missouri", "Colorado",
+        "Kansas", "Nebraska", "Indiana", "North Dakota", "South Dakota",
+    ],
+    "Territory 4": [
+        "North Carolina", "Florida", "Texas", "Virginia", "Georgia", "Tennessee",
+        "Louisiana", "Oklahoma", "Alabama", "Arkansas", "South Carolina",
+        "Mississippi", "West Virginia",
+    ],
+    "Europe 1": [
+        "United Kingdom", "Ireland", "Norway", "Denmark", "Finland",
+        "Iceland", "Sweden",
+    ],
+}
+
+
+def _load_territory_map() -> dict[str, list[str]]:
+    """Load territory definitions from Supabase app_config, falling back to the JSON file,
+    then to the hardcoded dict if both are unavailable."""
+    # 1. Supabase
+    data = db_get_config("territory_definitions")
+    if isinstance(data, dict) and data:
+        return {k: list(v) for k, v in data.items()}
+    # 2. Local JSON file
+    try:
+        with open(_TERRITORY_JSON, "r", encoding="utf-8") as _f:
+            _data = json.load(_f)
+        if isinstance(_data, dict):
+            return {k: list(v) for k, v in _data.items()}
+    except Exception:
+        pass
+    return dict(_TERRITORY_MAP_FALLBACK)
+
+
+def _save_territory_map(new_map: dict[str, list[str]]) -> None:
+    """Persist territory definitions to Supabase app_config and rebuild the
+    module-level STATE_TO_TERRITORY reverse-lookup. Also updates the local JSON file."""
+    global TERRITORY_MAP, STATE_TO_TERRITORY
+    # Primary: Supabase
+    user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    db_save_config("territory_definitions", new_map, user)
+    # Fallback: local JSON file
+    try:
+        with open(_TERRITORY_JSON, "w", encoding="utf-8") as _f:
+            json.dump(new_map, _f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    TERRITORY_MAP = new_map
+    STATE_TO_TERRITORY = {}
+    for _terr, _states in TERRITORY_MAP.items():
+        for _s in _states:
+            STATE_TO_TERRITORY[_s.lower().strip()] = _terr
+
+
+TERRITORY_MAP: dict[str, list[str]] = _load_territory_map()
+
+# Territory badge colours — extended palette for dynamic territories
+_TERRITORY_COLOUR_DEFAULTS: dict[str, str] = {
+    "Territory 1": "#1E6FBA",
+    "Territory 2": "#27AE60",
+    "Territory 3": "#E67E22",
+    "Territory 4": "#8E44AD",
+    "Europe 1":    "#C0392B",
+}
+_TERRITORY_COLOUR_CYCLE = [
+    "#16A085", "#D35400", "#2C3E50", "#7D3C98", "#1A5276",
+    "#117A65", "#784212", "#212F3D", "#4A235A", "#154360",
+]
+
+TERRITORY_COLOURS: dict[str, str] = {}
+_cycle_idx = 0
+for _terr_name in TERRITORY_MAP:
+    if _terr_name in _TERRITORY_COLOUR_DEFAULTS:
+        TERRITORY_COLOURS[_terr_name] = _TERRITORY_COLOUR_DEFAULTS[_terr_name]
+    else:
+        TERRITORY_COLOURS[_terr_name] = _TERRITORY_COLOUR_CYCLE[
+            _cycle_idx % len(_TERRITORY_COLOUR_CYCLE)
+        ]
+        _cycle_idx += 1
+
+# ── Build a fast reverse-lookup: normalised name → territory ──────────────────
+STATE_TO_TERRITORY: dict[str, str] = {}
+for _terr, _states in TERRITORY_MAP.items():
+    for _s in _states:
+        STATE_TO_TERRITORY[_s.lower().strip()] = _terr
+
+# ── Abbreviation expansion dict ───────────────────────────────────────────────
+# Maps two-letter codes to canonical full names used in TERRITORY_MAP.
+_ABBREVIATIONS: dict[str, str] = {
+    # US states
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+    "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+    "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine",
+    "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota",
+    "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska",
+    "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico",
+    "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio",
+    "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island",
+    "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas",
+    "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+    # Canadian provinces
+    "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba",
+    "NB": "New Brunswick", "NL": "Newfoundland/Labrador", "NS": "Nova Scotia",
+    "NT": "Northwest Territories", "NU": "Nunavut", "ON": "Ontario",
+    "PE": "Prince Edward Island", "QC": "Quebec", "SK": "Saskatchewan",
+    "YT": "Yukon",
+    # European ISO country codes (Europe 1)
+    "GB": "United Kingdom", "UK": "United Kingdom",
+    "IE": "Ireland",
+    "NO": "Norway",
+    "DK": "Denmark",
+    "FI": "Finland",
+    "IS": "Iceland",
+    "SE": "Sweden",
+    # Italy — always excluded
+    "IT": "Italy",
+}
+
+# Italy names (checked by classify_state and the coverage analysis)
+_ITALY_NAMES: frozenset[str] = frozenset({"italy", "it", "italia"})
+
+# Account types that are legitimate sales targets (used by Reassign Wizard,
+# Territory Sync, and Executive Report).
+WORKABLE_TYPES: list[str] = [
+    "Prospect", "Prospect Logo", "Customer", "Customer Holding Account",
+    "Previous Customer", "Previous Customer Holding Account",
+    "Legal Entity", "Partner", "Prospective Partner",
+    "Previous Pilot Customer", "Pilot Customer",
+    "Exclusivity Contract - Can't Sell to", "Other",
+]
+
+
+def classify_state(value: str) -> str:
+    """
+    Return the territory name for a given state, province, or country value.
+
+    Accepts full names ("Ontario") or two-letter abbreviations ("ON", "TX").
+    Case-insensitive; leading/trailing whitespace is stripped.
+
+    Returns one of:
+        - A territory name string (e.g. "Territory 1", "Europe 1")
+        - "Italy - Excluded"   — Italy is never assigned a territory
+        - "Unclassified"       — location is known but not in any territory
+        - "No State/Province"  — value is None, blank, or whitespace only
+    """
+    if not value or not str(value).strip():
+        return "No State/Province"
+
+    raw = str(value).strip()
+
+    # Expand abbreviation if recognised
+    expanded = _ABBREVIATIONS.get(raw.upper(), raw)
+
+    key = expanded.lower().strip()
+
+    if key in _ITALY_NAMES:
+        return "Italy - Excluded"
+
+    territory = STATE_TO_TERRITORY.get(key)
+    if territory:
+        return territory
+
+    return "Unclassified"
+
+
+def _resolve_ultimate_parent(row: "pd.Series") -> tuple[str, str]:
+    """
+    Walk the pre-fetched ParentId chain columns to find the ultimate parent's
+    billing location.  Returns (billing_state, billing_country).
+
+    Column names expected (as returned by the Rep Coverage SOQL):
+        BillingState, BillingCountry
+        Parent.BillingState, Parent.BillingCountry
+        Parent.Parent.BillingState, Parent.Parent.BillingCountry
+        Parent.Parent.Parent.BillingState, Parent.Parent.Parent.BillingCountry
+
+    We walk from deepest ancestor downward; the first non-null level whose
+    ParentId chain terminates is the ultimate parent.  Because SOQL only
+    returns data for parents that *exist*, the deepest non-null set of billing
+    fields belongs to the ultimate parent.
+    """
+    # Level order from deepest to shallowest: we want the HIGHEST-level parent.
+    levels = [
+        ("Parent.Parent.Parent.BillingState", "Parent.Parent.Parent.BillingCountry"),
+        ("Parent.Parent.BillingState",        "Parent.Parent.BillingCountry"),
+        ("Parent.BillingState",               "Parent.BillingCountry"),
+        ("BillingState",                      "BillingCountry"),
+    ]
+    for state_col, country_col in levels:
+        state   = row.get(state_col)   or ""
+        country = row.get(country_col) or ""
+        if state or country:
+            return str(state).strip(), str(country).strip()
+    return "", ""
+
+
+def _walk_hierarchy_for_territory(
+    sf,
+    account_id: str,
+    id_to_record: dict,
+    max_depth: int = 10,
+) -> tuple[str, str, str]:
+    """
+    Walk up the ParentId chain from account_id until an ancestor is found
+    with either a Territory__c value or a BillingState/BillingCountry.
+
+    Used as a fallback for accounts whose billing location is null at all
+    SOQL-reachable levels (i.e. hierarchies deeper than 3 levels).
+
+    Parameters:
+        sf            — active Salesforce connection from get_sf_connection()
+        account_id    — Salesforce Account Id to start the walk from
+        id_to_record  — dict {Id: record} of accounts already in memory;
+                        avoids re-fetching records we already hold
+        max_depth     — circuit breaker; stops after this many hops upward
+
+    Returns a 3-tuple:
+        (territory, billing_state, billing_country)
+    Any element may be "" if nothing was found at any level.
+    Territory__c is checked first; billing location is used only if no
+    Territory__c is found, so that intentional manual assignments are honoured.
+    """
+    visited:    set   = set()
+    current_id: str   = account_id
+    depth:      int   = 0
+
+    while current_id and depth < max_depth:
+        if current_id in visited:
+            break                              # loop guard — corrupt hierarchy
+        visited.add(current_id)
+
+        record = id_to_record.get(current_id)
+        if not record:
+            try:
+                result = sf.query(
+                    f"SELECT Id, Name, ParentId, Territory__c, "
+                    f"BillingState, BillingCountry "
+                    f"FROM Account WHERE Id = '{current_id}'"
+                )
+                recs = result.get("records", [])
+                if not recs:
+                    break
+                record = recs[0]
+                id_to_record[current_id] = record   # cache for reuse
+            except Exception:
+                break
+
+        # Prefer Territory__c — honours intentional manual assignments
+        terr = record.get("Territory__c") or ""
+        if terr.strip():
+            return terr.strip(), "", ""
+
+        # Fall back to billing location
+        state   = record.get("BillingState")   or ""
+        country = record.get("BillingCountry") or ""
+        if state.strip() or country.strip():
+            return "", state.strip(), country.strip()
+
+        # Nothing here — climb one level higher
+        current_id = record.get("ParentId") or ""
+        depth += 1
+
+    return "", "", ""   # nothing found at any level — manual review needed
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN RENDER FUNCTION
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+
+
+
+
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TERRITORY REASSIGNMENT WIZARD
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── SOP default rep/BDR alignment (used as initial defaults for the
+#    editable alignment table; matched by name against active SF users) ────────
+_SOP_DEFAULT_ALIGNMENT = {
+    "Territory 1": {"ae": "",                "bdr": "Aman Lokhandwala"},
+    "Territory 2": {"ae": "Kelly Wasden",    "bdr": "Jonathan Markle"},
+    "Territory 3": {"ae": "Adam George",     "bdr": "Jonathan Markle"},
+    "Territory 4": {"ae": "Jen Tolbert",     "bdr": "Lexxi Himes"},
+    "Europe 1":    {"ae": "Grant McNulty",   "bdr": "Lexxi Himes"},
+}
+
+NO_CHANGE = "— No change —"
+_ALIGNMENT_FILE = "territory_alignment.json"
+
+
+def _load_alignment_from_disk() -> dict | None:
+    """Load saved alignment from Supabase app_config, falling back to the JSON file."""
+    # 1. Supabase
+    data = db_get_config("territory_alignment")
+    if isinstance(data, dict) and data:
+        return data
+    # 2. Local JSON file
+    try:
+        with open(_ALIGNMENT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _save_alignment_to_disk(alignment: dict):
+    """Persist alignment dict to Supabase app_config and the local JSON file."""
+    user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    db_save_config("territory_alignment", alignment, user)
+    try:
+        with open(_ALIGNMENT_FILE, "w", encoding="utf-8") as f:
+            json.dump(alignment, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_active_users_for_reassign() -> list[dict]:
+    """Fetch all active users for the reassignment rep pickers. Cached 5 min."""
+    sf = get_sf_connection()
+    res = sf.query(
+        "SELECT Id, Name, Email FROM User "
+        "WHERE IsActive = true ORDER BY Name LIMIT 500"
+    )
+    return [
+        {
+            "id":    r["Id"],
+            "name":  r["Name"],
+            "email": r.get("Email") or "",
+        }
+        for r in res.get("records", [])
+    ]
+
+
+def _build_alignment_defaults(users: list[dict]) -> dict:
+    """
+    Build the initial alignment table state from SOP defaults.
+    Returns {territory: {"ae_label": ..., "bdr_label": ...}}.
+    """
+    name_to_label = {u["name"].lower(): f"{u['name']} ({u['email']})" for u in users}
+    result = {}
+    for terr in TERRITORY_MAP:
+        sop = _SOP_DEFAULT_ALIGNMENT.get(terr, {})
+        ae_name = sop.get("ae", "")
+        bdr_name = sop.get("bdr", "")
+        ae_label = name_to_label.get(ae_name.lower(), NO_CHANGE) if ae_name else NO_CHANGE
+        bdr_label = name_to_label.get(bdr_name.lower(), NO_CHANGE) if bdr_name else NO_CHANGE
+        result[terr] = {"ae_label": ae_label, "bdr_label": bdr_label}
+    return result
+
+
+def render_alignment_subtab():
+    """
+    Editable Rep/BDR alignment table.
+    Each territory row has selectbox columns for Account Owner (AE) and
+    BDR on Account, populated from active Salesforce users.
+    Saved to territory_alignment.json so changes persist across sessions.
+    The Reassign wizard reads from this table to pre-populate its pickers.
+    """
+    import pandas as pd
+
+    st.markdown("### Rep / BDR Alignment")
+    st.caption(
+        "Configure which AE and BDR should be assigned per territory. "
+        "These selections pre-populate the Reassign wizard and are saved "
+        "automatically."
+    )
+
+    with st.spinner("Loading active users…"):
+        users = _get_active_users_for_reassign()
+    user_labels = [f"{u['name']} ({u['email']})" for u in users]
+    options = [NO_CHANGE] + user_labels
+
+    # Load alignment: disk file → SOP defaults as fallback
+    if "territory_rep_alignment" not in st.session_state:
+        disk_data = _load_alignment_from_disk()
+        if disk_data:
+            # Validate that saved labels still exist in active user list
+            valid_options_set = set(options)
+            validated = {}
+            for terr in TERRITORY_MAP:
+                saved = disk_data.get(terr, {})
+                ae_l  = saved.get("ae_label", NO_CHANGE)
+                bdr_l = saved.get("bdr_label", NO_CHANGE)
+                if ae_l not in valid_options_set:
+                    ae_l = NO_CHANGE
+                if bdr_l not in valid_options_set:
+                    bdr_l = NO_CHANGE
+                validated[terr] = {"ae_label": ae_l, "bdr_label": bdr_l}
+            st.session_state.territory_rep_alignment = validated
+        else:
+            st.session_state.territory_rep_alignment = _build_alignment_defaults(users)
+
+    alignment = st.session_state.territory_rep_alignment
+
+    rows = []
+    for terr in TERRITORY_MAP:
+        a = alignment.get(terr, {"ae_label": NO_CHANGE, "bdr_label": NO_CHANGE})
+        rows.append({
+            "Territory":            terr,
+            "Account Owner (AE)":   a["ae_label"],
+            "BDR on Account":       a["bdr_label"],
+        })
+
+    df = pd.DataFrame(rows)
+
+    edited = st.data_editor(
+        df,
+        column_config={
+            "Territory": st.column_config.TextColumn("Territory", disabled=True),
+            "Account Owner (AE)": st.column_config.SelectboxColumn(
+                "Account Owner (AE)",
+                options=options,
+                required=True,
+            ),
+            "BDR on Account": st.column_config.SelectboxColumn(
+                "BDR on Account",
+                options=options,
+                required=True,
+            ),
+        },
+        width="stretch",
+        hide_index=True,
+        key="alignment_editor",
+    )
+
+    # Persist edits to session state AND disk
+    new_alignment = {}
+    for _, row in edited.iterrows():
+        new_alignment[row["Territory"]] = {
+            "ae_label":  row["Account Owner (AE)"],
+            "bdr_label": row["BDR on Account"],
+        }
+
+    # Save to disk if changed
+    if new_alignment != st.session_state.territory_rep_alignment:
+        _save_alignment_to_disk(new_alignment)
+        st.session_state.territory_rep_alignment = new_alignment
+    elif not os.path.exists(_ALIGNMENT_FILE):
+        # First load with defaults — save them too
+        _save_alignment_to_disk(new_alignment)
+
+    st.session_state.territory_rep_alignment = new_alignment
+
+    # ── Current alignment summary ────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Current Alignment Summary")
+    for terr in TERRITORY_MAP:
+        a = new_alignment.get(terr, {})
+        ae = a.get("ae_label", NO_CHANGE)
+        bdr = a.get("bdr_label", NO_CHANGE)
+        colour = TERRITORY_COLOURS.get(terr, "#555")
+        st.markdown(
+            f'<span style="background:{colour};color:#fff;padding:2px 10px;'
+            f'border-radius:12px;font-size:0.8rem;font-weight:600;">{terr}</span>'
+            f'&nbsp; AE: **{ae}** &nbsp;|&nbsp; BDR: **{bdr}**',
+            unsafe_allow_html=True,
+        )
+
+
+def render_reassign_subtab():
+    """
+    4-step wizard for bulk-reassigning account ownership (AE) and/or
+    BDR on Account within a single territory.
+
+    Supports two scopes:
+      - "From a specific rep"  — filters by current OwnerId
+      - "All accounts in territory" — targets all qualifying accounts
+
+    Enforces SOP exclusion rules:
+      - Non-workable types (No Longer in Business, Competitor, Press,
+        Industry Association, Influencer) are always excluded
+      - User-selected type filter (rz_type_filter) further restricts scope
+      - Accounts owned by Axonify or inactive users are auto-included
+      - Accounts owned by other active users are flagged for manual review
+
+    Session state keys consumed:
+        rz_step, rz_territory, rz_scope,
+        rz_from_user_id, rz_ae_user_id, rz_bdr_user_id,
+        rz_accounts_df, rz_excluded_df, rz_excluded_ids,
+        rz_migrate_contacts, rz_migrate_opps, rz_result, rz_type_filter
+    """
+    import pandas as pd
+
+    CLOSED_STAGES = {"Closed Won", "Closed - Won", "Closed Lost", "Closed - Lost", "Abandoned"}
+
+    dry_run_mode = st.session_state.get("dry_run_mode", True)
+    auto_backup  = st.session_state.get("auto_backup",  True)
+
+    # ── Defaults guard ────────────────────────────────────────────────────────
+    _rz_defaults = {
+        "rz_step": 1, "rz_territory": "", "rz_scope": "all_accounts",
+        "rz_from_user_id": "", "rz_ae_user_id": "", "rz_bdr_user_id": "",
+        "rz_accounts_df": None, "rz_excluded_df": None,
+        "rz_excluded_ids": set(), "rz_migrate_contacts": True,
+        "rz_migrate_opps": True, "rz_result": None,
+        "rz_type_filter": None,
+    }
+    for _k, _v in _rz_defaults.items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v if not isinstance(_v, set) else set()
+
+    def _reset():
+        for _k, _v in _rz_defaults.items():
+            st.session_state[_k] = _v if not isinstance(_v, set) else set()
+        st.rerun()
+
+    # ── Persistent top bar ────────────────────────────────────────────────────
+    _hd_col, _reset_col = st.columns([9, 1])
+    with _hd_col:
+        st.subheader("Territory Reassignment Wizard")
+    with _reset_col:
+        if st.button("↺ Reset", key="rz_reset", help="Clear all wizard state and start over"):
+            _reset()
+
+    # ── Step indicator ────────────────────────────────────────────────────────
+    step = st.session_state.rz_step
+    _step_labels = ["Configure", "Preview Records", "Set Scope", "Confirm & Execute"]
+    _ind_cols = st.columns(4)
+    for _si, (_col, _lbl) in enumerate(zip(_ind_cols, _step_labels), 1):
+        with _col:
+            if _si < step:
+                _fg, _bg, _icon = "#34d399", "rgba(52,211,153,0.08)", "✓"
+                _border = "#34d399"
+            elif _si == step:
+                _fg, _bg, _icon = "#7aaaff", "rgba(122,170,255,0.10)", str(_si)
+                _border = "#7aaaff"
+            else:
+                _fg, _bg, _icon = "#4a5a6e", "transparent", str(_si)
+                _border = "#2a3340"
+            st.markdown(
+                f'<div style="text-align:center;padding:8px 4px;border-radius:6px;'
+                f'background:{_bg};border:1px solid {_border};">'
+                f'<div style="font-size:1rem;font-weight:600;color:{_fg};">{_icon}</div>'
+                f'<div style="font-size:0.68rem;color:{_fg};margin-top:3px;">{_lbl}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("---")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 1 — CONFIGURE TERRITORY, SCOPE, AE & BDR
+    # ══════════════════════════════════════════════════════════════════════════
+    if step == 1:
+        with st.spinner("Loading active users…"):
+            users = _get_active_users_for_reassign()
+        user_labels   = [f"{u['name']} ({u['email']})" for u in users]
+        user_by_label = {f"{u['name']} ({u['email']})": u for u in users}
+
+        # ── Territory selection ──────────────────────────────────────────────
+        territory = st.selectbox(
+            "Territory to reassign",
+            list(TERRITORY_MAP.keys()),
+            key="rz_territory_sel",
+        )
+
+        _terr_values = TERRITORY_MAP.get(territory, [])
+        _is_europe   = (territory == "Europe 1")
+        _desc_prefix = "Countries" if _is_europe else "States / Provinces"
+        st.info(f"**{territory}**\n\n{_desc_prefix}: {', '.join(_terr_values)}")
+
+        # ── Scope toggle ─────────────────────────────────────────────────────
+        scope = st.radio(
+            "Reassignment scope",
+            ["All accounts in territory", "From a specific rep"],
+            key="rz_scope_sel",
+            horizontal=False,
+            help=(
+                "**All accounts** targets every qualifying account in the territory "
+                "(with SOP exclusion rules applied). "
+                "**From a specific rep** filters to accounts currently owned by one person."
+            ),
+        )
+        _scope_key = "all_accounts" if scope == "All accounts in territory" else "specific_rep"
+
+        # ── Outgoing rep (only for specific_rep mode) ────────────────────────
+        from_label = None
+        _from_user = None
+        if _scope_key == "specific_rep":
+            from_label = st.selectbox(
+                "Outgoing rep (current owner)",
+                user_labels,
+                key="rz_from_sel",
+            )
+            _from_user = user_by_label.get(from_label)
+
+        st.markdown("---")
+
+        # ── AE / BDR pickers ─────────────────────────────────────────────────
+        st.markdown("#### Assignment")
+
+        # Read defaults from alignment table if available
+        alignment = st.session_state.get("territory_rep_alignment", {})
+        terr_align = alignment.get(territory, {})
+        _default_ae_label  = terr_align.get("ae_label", NO_CHANGE)
+        _default_bdr_label = terr_align.get("bdr_label", NO_CHANGE)
+
+        ae_options  = [NO_CHANGE] + user_labels
+        bdr_options = [NO_CHANGE] + user_labels
+
+        # Find default index for AE
+        _ae_idx = 0
+        if _default_ae_label in ae_options:
+            _ae_idx = ae_options.index(_default_ae_label)
+
+        # Find default index for BDR
+        _bdr_idx = 0
+        if _default_bdr_label in bdr_options:
+            _bdr_idx = bdr_options.index(_default_bdr_label)
+
+        _col_ae, _col_bdr = st.columns(2)
+        with _col_ae:
+            ae_label = st.selectbox(
+                "Assign Account Owner (AE)",
+                ae_options,
+                index=_ae_idx,
+                key="rz_ae_sel",
+                help="Set OwnerId on selected accounts. Choose 'No change' to skip.",
+            )
+        with _col_bdr:
+            bdr_label = st.selectbox(
+                "Assign BDR on Account",
+                bdr_options,
+                index=_bdr_idx,
+                key="rz_bdr_sel",
+                help="Set BDR_on_Account__c on selected accounts. Choose 'No change' to skip.",
+            )
+
+        _ae_user  = user_by_label.get(ae_label)  if ae_label  != NO_CHANGE else None
+        _bdr_user = user_by_label.get(bdr_label) if bdr_label != NO_CHANGE else None
+
+        _no_assignment = (_ae_user is None and _bdr_user is None)
+        if _no_assignment:
+            st.warning("Select at least one of AE or BDR to assign.")
+
+        # Validation for specific_rep mode: outgoing rep shouldn't equal incoming AE
+        _same_rep = False
+        if _scope_key == "specific_rep" and _from_user and _ae_user:
+            _same_rep = _from_user["id"] == _ae_user["id"]
+            if _same_rep:
+                st.warning("Outgoing rep and incoming AE cannot be the same person.")
+
+        st.markdown("---")
+
+        # ── Account Type Filter ───────────────────────────────────────────────
+        st.markdown("#### Account Types to Include")
+        _type_default = st.session_state.rz_type_filter or WORKABLE_TYPES
+        selected_types = st.multiselect(
+            "Account Types to Include",
+            options=WORKABLE_TYPES,
+            default=_type_default,
+            help=(
+                "Only accounts of these types will be fetched. "
+                "Types not listed here (e.g. No Longer in Business, Competitor) "
+                "are never workable and are always excluded."
+            ),
+            label_visibility="collapsed",
+        )
+        if not selected_types:
+            st.warning("Select at least one account type.")
+
+        if st.button(
+            "Next: Preview Records →",
+            type="primary",
+            key="rz_next_1",
+            disabled=(_no_assignment or _same_rep or not selected_types),
+        ):
+            st.session_state.rz_territory    = territory
+            st.session_state.rz_scope        = _scope_key
+            st.session_state.rz_from_user_id = _from_user["id"] if _from_user else ""
+            st.session_state.rz_ae_user_id   = _ae_user["id"]   if _ae_user   else ""
+            st.session_state.rz_bdr_user_id  = _bdr_user["id"]  if _bdr_user  else ""
+            st.session_state.rz_type_filter  = selected_types
+            st.session_state.rz_accounts_df  = None
+            st.session_state.rz_excluded_df  = None
+            st.session_state.rz_step         = 2
+            st.rerun()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 2 — PREVIEW AFFECTED RECORDS (with exclusion rules)
+    # ══════════════════════════════════════════════════════════════════════════
+    elif step == 2:
+        territory    = st.session_state.rz_territory
+        scope        = st.session_state.rz_scope
+        from_user_id = st.session_state.rz_from_user_id
+        ae_user_id   = st.session_state.rz_ae_user_id
+        bdr_user_id  = st.session_state.rz_bdr_user_id
+
+        with st.spinner("Loading users…"):
+            _all_users  = _get_active_users_for_reassign()
+        _user_by_id = {u["id"]: u for u in _all_users}
+
+        # Build the banner description
+        _parts = [f"📍 <b>{territory}</b>"]
+        if scope == "specific_rep":
+            from_name = _user_by_id.get(from_user_id, {}).get("name", from_user_id)
+            _parts.append(f"From: <b>{from_name}</b>")
+        else:
+            _parts.append("Scope: <b>All accounts</b>")
+        if ae_user_id:
+            ae_name = _user_by_id.get(ae_user_id, {}).get("name", ae_user_id)
+            _parts.append(f"AE → <b>{ae_name}</b>")
+        if bdr_user_id:
+            bdr_name = _user_by_id.get(bdr_user_id, {}).get("name", bdr_user_id)
+            _parts.append(f"BDR → <b>{bdr_name}</b>")
+
+        st.markdown(
+            f'<div class="safety-banner" style="'
+            f'background:rgba(30,50,90,0.4);border-color:#2a4a7f;color:var(--text-secondary);">'
+            f'{" &nbsp;|&nbsp; ".join(_parts)}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Load accounts once, cache in session state ────────────────────────
+        if st.session_state.rz_accounts_df is None:
+            with st.spinner("Querying Salesforce…"):
+                sf           = get_sf_connection()
+                _is_europe   = (territory == "Europe 1")
+                _values      = TERRITORY_MAP[territory]
+                _vals_clause = ", ".join(f"'{v}'" for v in _values)
+
+                if _is_europe:
+                    _loc_filter  = f"BillingCountry IN ({_vals_clause})"
+                    _state_field = "BillingCountry"
+                    _loc_col     = "BillingCountry"
+                    _par_col     = "Parent.BillingCountry"
+                    _pp_col      = "Parent.Parent.BillingCountry"
+                    _ppp_col     = "Parent.Parent.Parent.BillingCountry"
+                else:
+                    _loc_filter  = f"BillingState IN ({_vals_clause})"
+                    _state_field = "BillingState"
+                    _loc_col     = "BillingState"
+                    _par_col     = "Parent.BillingState"
+                    _pp_col      = "Parent.Parent.BillingState"
+                    _ppp_col     = "Parent.Parent.Parent.BillingState"
+
+                _owner_filter = ""
+                if scope == "specific_rep" and from_user_id:
+                    _owner_filter = f"AND OwnerId = '{from_user_id}' "
+
+                # Common SELECT — includes parent billing fields for CHA check
+                # and parent-hierarchy matching
+                _select_fields = (
+                    "Id, Name, BillingState, BillingCountry, Type, "
+                    "Owner.Name, Owner.IsActive, BDR_on_Account__c, Key_Account__c, "
+                    "Parent.Name, Parent.BillingState, Parent.BillingCountry, Parent.Type, "
+                    "Parent.Parent.Type, Parent.Parent.BillingState, Parent.Parent.BillingCountry, "
+                    "Parent.Parent.Parent.Type, Parent.Parent.Parent.BillingState, "
+                    "Parent.Parent.Parent.BillingCountry"
+                )
+
+                # ── Build type IN clause from the user's selected types ───────
+                _selected_types     = st.session_state.get("rz_type_filter") or WORKABLE_TYPES
+                _selected_types_set = set(_selected_types)
+                _type_clause        = ", ".join(f"'{t.replace(chr(39), chr(92)+chr(39))}'" for t in _selected_types)
+
+                # ── Pass 1: own billing location in territory ─────────────────
+                _pass1_records = sf.query_all(
+                    f"SELECT {_select_fields} "
+                    f"FROM Account "
+                    f"WHERE IsDeleted = false "
+                    f"AND {_loc_filter} "
+                    f"{_owner_filter}"
+                    f"AND Type IN ({_type_clause}) "
+                    f"ORDER BY Name"
+                ).get("records", [])
+                for r in _pass1_records:
+                    r["_match_source"] = "direct"
+
+                # ── Pass 2: ancestor billing location in territory, own is NOT
+                # NULL safety: "col NOT IN (...)" evaluates to FALSE when col
+                # is NULL, so we must OR the null case explicitly.
+                _not_own    = f"({_loc_col} NOT IN ({_vals_clause}) OR {_loc_col} = null)"
+                _par_not_in = f"({_par_col} NOT IN ({_vals_clause}) OR {_par_col} = null)"
+                _pp_not_in  = f"({_pp_col}  NOT IN ({_vals_clause}) OR {_pp_col}  = null)"
+
+                # Level 1 — direct parent in territory
+                _p1_records = sf.query_all(
+                    f"SELECT {_select_fields} FROM Account "
+                    f"WHERE IsDeleted = false "
+                    f"AND {_par_col} IN ({_vals_clause}) "
+                    f"AND {_not_own} "
+                    f"{_owner_filter}"
+                    f"AND Type IN ({_type_clause}) "
+                    f"ORDER BY Name"
+                ).get("records", [])
+
+                # Level 2 — grandparent in territory
+                _p2_records = sf.query_all(
+                    f"SELECT {_select_fields} FROM Account "
+                    f"WHERE IsDeleted = false "
+                    f"AND {_pp_col} IN ({_vals_clause}) "
+                    f"AND {_par_not_in} "
+                    f"AND {_not_own} "
+                    f"{_owner_filter}"
+                    f"AND Type IN ({_type_clause}) "
+                    f"ORDER BY Name"
+                ).get("records", [])
+
+                # Level 3 — great-grandparent in territory
+                _p3_records = sf.query_all(
+                    f"SELECT {_select_fields} FROM Account "
+                    f"WHERE IsDeleted = false "
+                    f"AND {_ppp_col} IN ({_vals_clause}) "
+                    f"AND {_pp_not_in} "
+                    f"AND {_par_not_in} "
+                    f"AND {_not_own} "
+                    f"{_owner_filter}"
+                    f"AND Type IN ({_type_clause}) "
+                    f"ORDER BY Name"
+                ).get("records", [])
+
+                _pass2_records = _p1_records + _p2_records + _p3_records
+                for r in _pass2_records:
+                    r["_match_source"] = "parent_hierarchy"
+
+                # Merge passes 1 + 2 — Pass 1 takes precedence for dedup
+                _seen_ids = set()
+                _acct_records = []
+                for r in (_pass1_records + _pass2_records):
+                    if r["Id"] not in _seen_ids:
+                        _seen_ids.add(r["Id"])
+                        _acct_records.append(r)
+
+                # ── Pass 3: deep hierarchy walk-up ────────────────────────────
+                # Fetches accounts with no billing state at any SOQL-reachable
+                # level, then walks the ParentId chain via Python API calls to
+                # see if a deeper ancestor resolves to the target territory.
+                # Bulk-prefetches known parent IDs first to minimise API calls.
+                _p3_walk_status = st.empty()
+                _p3_walk_status.caption("⏳ Running deep hierarchy walk-up…")
+
+                _no_billing_candidates = sf.query_all(
+                    f"SELECT {_select_fields}, ParentId FROM Account "
+                    f"WHERE IsDeleted = false "
+                    f"AND (BillingState = null OR BillingState = '') "
+                    f"AND (BillingCountry = null OR BillingCountry = '') "
+                    f"AND ParentId != null "
+                    f"{_owner_filter}"
+                    f"AND Type IN ({_type_clause}) "
+                    f"ORDER BY Name"
+                ).get("records", [])
+
+                _walk_candidates = [
+                    r for r in _no_billing_candidates
+                    if r["Id"] not in _seen_ids
+                ]
+
+                _pass3_records: list = []
+
+                if _walk_candidates:
+                    # Build id_to_record cache from already-fetched records
+                    _id_to_record: dict = {
+                        r["Id"]: r
+                        for r in (_pass1_records + _pass2_records + _no_billing_candidates)
+                    }
+
+                    # Bulk-prefetch all unique parent IDs not yet in cache
+                    _unknown_pids = {
+                        r.get("ParentId")
+                        for r in _walk_candidates
+                        if r.get("ParentId") and r.get("ParentId") not in _id_to_record
+                    }
+                    if _unknown_pids:
+                        _CHUNK_P = 200
+                        _pid_list = list(_unknown_pids)
+                        for _ci in range(0, len(_pid_list), _CHUNK_P):
+                            _chunk = _pid_list[_ci : _ci + _CHUNK_P]
+                            _ids_str = ", ".join(f"'{x}'" for x in _chunk)
+                            _pres = sf.query_all(
+                                f"SELECT Id, Name, ParentId, Territory__c, "
+                                f"BillingState, BillingCountry "
+                                f"FROM Account WHERE Id IN ({_ids_str})"
+                            )
+                            for _pr in _pres.get("records", []):
+                                _id_to_record[_pr["Id"]] = _pr
+
+                    # Walk up each candidate — progress bar for large batches
+                    _n_walk = len(_walk_candidates)
+                    _walk_bar = st.progress(0, text=f"Walking hierarchies… 0/{_n_walk:,}")
+                    for _wi, _r in enumerate(_walk_candidates):
+                        _walk_bar.progress(
+                            (_wi + 1) / _n_walk,
+                            text=f"Walking hierarchies… {_wi + 1:,}/{_n_walk:,}",
+                        )
+                        _parent_id = _r.get("ParentId") or ""
+                        if not _parent_id:
+                            continue
+
+                        _inh_terr, _anc_state, _anc_country = (
+                            _walk_hierarchy_for_territory(sf, _parent_id, _id_to_record)
+                        )
+
+                        if _inh_terr:
+                            # Ancestor has Territory__c — inherit directly
+                            if _inh_terr == territory:
+                                _r["_match_source"] = "deep_hierarchy"
+                                _r["_match_detail"] = f"Inherited from ancestor: {_inh_terr}"
+                                _pass3_records.append(_r)
+                        elif _anc_state or _anc_country:
+                            # Derive territory from ancestor's billing location
+                            _is_eur = classify_state(_anc_country) == "Europe 1"
+                            _loc_val = _anc_country if _is_eur else (_anc_state or _anc_country)
+                            _derived = classify_state(_loc_val)
+                            if _derived == territory:
+                                _r["_match_source"] = "deep_hierarchy"
+                                _r["_match_detail"] = (
+                                    f"Derived from ancestor billing: "
+                                    f"{_anc_state or _anc_country}"
+                                )
+                                _pass3_records.append(_r)
+
+                    _walk_bar.empty()
+
+                _p3_walk_status.empty()
+
+                # Add pass 3 records (deep hierarchy) to the merged set
+                for r in _pass3_records:
+                    if r["Id"] not in _seen_ids:
+                        _seen_ids.add(r["Id"])
+                        _acct_records.append(r)
+
+                if not _acct_records:
+                    _msg = f"No qualifying accounts found in **{territory}**."
+                    if scope == "specific_rep":
+                        _fn = _user_by_id.get(from_user_id, {}).get("name", from_user_id)
+                        _msg = (
+                            f"No qualifying accounts found for **{_fn}** in **{territory}**. "
+                            "They may not own any accounts in this territory, or all of "
+                            "their accounts were excluded by type or SOP rules."
+                        )
+                    st.info(_msg)
+                    if st.button("← Back", key="rz_back_2_empty"):
+                        st.session_state.rz_step = 1
+                        st.rerun()
+                    return
+
+                # ── Pre-check: accounts with open opps owned by active users ─
+                # These accounts are excluded from reassignment.
+                _all_acct_ids = [r["Id"] for r in _acct_records]
+                _CHUNK = 200
+                _stage_not_in = ", ".join(f"'{s}'" for s in CLOSED_STAGES)
+
+                # { account_id: [opp_owner_name, ...] }
+                _active_opp_owners: dict[str, list[str]] = {}
+                for _ci in range(0, len(_all_acct_ids), _CHUNK):
+                    _chunk_ids = _all_acct_ids[_ci : _ci + _CHUNK]
+                    _ids_str   = ", ".join(f"'{x}'" for x in _chunk_ids)
+                    _aoo_res = sf.query_all(
+                        f"SELECT AccountId, Owner.Name FROM Opportunity "
+                        f"WHERE AccountId IN ({_ids_str}) "
+                        f"AND StageName NOT IN ({_stage_not_in}) "
+                        f"AND IsDeleted = false "
+                        f"AND Owner.IsActive = true"
+                    )
+                    for _r in _aoo_res.get("records", []):
+                        _aid = _r["AccountId"]
+                        _oname = (_r.get("Owner") or {}).get("Name", "Unknown")
+                        _active_opp_owners.setdefault(_aid, []).append(_oname)
+
+                # ── Classify each record by exclusion rules ──────────────────
+                _includable = []     # records that go into the editable grid
+                _excluded   = []     # records excluded by SOP rules
+
+                # Build set of active user IDs for BDR eligibility check
+                _active_user_ids = {u["id"] for u in _all_users}
+
+                for r in _acct_records:
+                    _owner_dict  = r.get("Owner") or {}
+                    if isinstance(_owner_dict, dict):
+                        _owner_name  = _owner_dict.get("Name", "")
+                        _owner_active = _owner_dict.get("IsActive", True)
+                    else:
+                        _owner_name  = ""
+                        _owner_active = True
+
+                    _acct_type = r.get("Type") or ""
+
+                    # Exclusion: Key Accounts are never reassigned
+                    if r.get("Key_Account__c"):
+                        _excluded.append({
+                            "Id":           r["Id"],
+                            "Account Name": r["Name"],
+                            "State":        r.get(_state_field) or "",
+                            "Type":         _acct_type,
+                            "Owner":        _owner_name,
+                            "Reason":       "Key Account — excluded from reassignment",
+                        })
+                        continue
+
+                    # Exclusion: type not in the user-selected workable types
+                    # (SOQL already filters this, but double-check in case of
+                    # data inconsistencies or SOQL null-coercion edge cases)
+                    if _acct_type not in _selected_types_set:
+                        _excluded.append({
+                            "Id":           r["Id"],
+                            "Account Name": r["Name"],
+                            "State":        r.get(_state_field) or "",
+                            "Type":         _acct_type,
+                            "Owner":        _owner_name,
+                            "Reason":       f"Type excluded: {_acct_type or '(blank)'}",
+                        })
+                        continue
+
+                    # Exclusion: account has open opportunities owned by
+                    # active users — should not be reassigned
+                    _opp_owners = _active_opp_owners.get(r["Id"])
+                    if _opp_owners:
+                        _unique_owners = sorted(set(_opp_owners))
+                        _owners_str = ", ".join(_unique_owners[:3])
+                        if len(_unique_owners) > 3:
+                            _owners_str += f" (+{len(_unique_owners) - 3} more)"
+                        _excluded.append({
+                            "Id":           r["Id"],
+                            "Account Name": r["Name"],
+                            "State":        r.get(_state_field) or "",
+                            "Type":         _acct_type,
+                            "Owner":        _owner_name,
+                            "Reason":       f"Open opps owned by active user(s): {_owners_str}",
+                        })
+                        continue
+
+                    # Determine auto-include vs manual review
+                    _is_axonify_owned = _owner_name.lower().strip() == "axonify"
+                    _is_inactive_owned = not _owner_active
+
+                    if _is_axonify_owned:
+                        _status = "Auto-include (Axonify-owned)"
+                        _include = True
+                    elif _is_inactive_owned:
+                        _status = "Auto-include (inactive owner)"
+                        _include = True
+                    else:
+                        _status = f"Review (active owner: {_owner_name})"
+                        _include = False
+
+                    # BDR eligibility: only update if current BDR is null
+                    # or belongs to an inactive user
+                    _current_bdr = r.get("BDR_on_Account__c") or ""
+                    if not _current_bdr:
+                        _bdr_eligible = True
+                        _bdr_status   = "Eligible (empty)"
+                    elif _current_bdr not in _active_user_ids:
+                        _bdr_eligible = True
+                        _bdr_status   = "Eligible (inactive BDR)"
+                    else:
+                        _bdr_eligible = False
+                        _bdr_name_match = _user_by_id.get(_current_bdr, {}).get("name", _current_bdr)
+                        _bdr_status   = f"Skipped (active: {_bdr_name_match})"
+
+                    _src = r.get("_match_source", "")
+                    if _src == "direct":
+                        _match_label = "Own address"
+                    elif _src == "deep_hierarchy":
+                        _match_label = r.get("_match_detail", "Via deep hierarchy walk-up")
+                    else:
+                        _match_label = "Via parent hierarchy"
+                    _includable.append({
+                        "Include":      _include,
+                        "Id":           r["Id"],
+                        "Account Name": r["Name"],
+                        "State":        r.get(_state_field) or "",
+                        "Type":         _acct_type,
+                        "Owner":        _owner_name,
+                        "Status":       _status,
+                        "Source":       _match_label,
+                        "BDR Eligible": _bdr_eligible,
+                        "BDR Status":   _bdr_status,
+                    })
+
+                # ── Batch contact & opp counts for includable records ────────
+                _incl_ids = [row["Id"] for row in _includable]
+                _CHUNK    = 200
+
+                _contact_counts: dict = {}
+                for _ci in range(0, len(_incl_ids), _CHUNK):
+                    _chunk_ids = _incl_ids[_ci : _ci + _CHUNK]
+                    _ids_str   = ", ".join(f"'{x}'" for x in _chunk_ids)
+                    _cres = sf.query_all(
+                        f"SELECT AccountId, COUNT(Id) cnt FROM Contact "
+                        f"WHERE AccountId IN ({_ids_str}) AND IsDeleted = false "
+                        f"GROUP BY AccountId"
+                    )
+                    for _r in _cres.get("records", []):
+                        _contact_counts[_r["AccountId"]] = _r["cnt"]
+
+                _opp_counts: dict = {}
+                _stage_not_in = ", ".join(f"'{s}'" for s in CLOSED_STAGES)
+                for _ci in range(0, len(_incl_ids), _CHUNK):
+                    _chunk_ids = _incl_ids[_ci : _ci + _CHUNK]
+                    _ids_str   = ", ".join(f"'{x}'" for x in _chunk_ids)
+                    _ores = sf.query_all(
+                        f"SELECT AccountId, COUNT(Id) cnt FROM Opportunity "
+                        f"WHERE AccountId IN ({_ids_str}) "
+                        f"AND StageName NOT IN ({_stage_not_in}) "
+                        f"AND IsDeleted = false GROUP BY AccountId"
+                    )
+                    for _r in _ores.get("records", []):
+                        _opp_counts[_r["AccountId"]] = _r["cnt"]
+
+                for row in _includable:
+                    row["Contacts"]  = _contact_counts.get(row["Id"], 0)
+                    row["Open Opps"] = _opp_counts.get(row["Id"], 0)
+
+                st.session_state.rz_accounts_df = pd.DataFrame(_includable) if _includable else pd.DataFrame()
+                st.session_state.rz_excluded_df = pd.DataFrame(_excluded) if _excluded else pd.DataFrame()
+
+        # ── Summary banner ───────────────────────────────────────────────────
+        _df          = st.session_state.rz_accounts_df
+        _excluded_df = st.session_state.rz_excluded_df
+
+        if _df is not None and not _df.empty:
+            _n_auto    = len(_df[_df["Status"].str.startswith("Auto-include")]) if "Status" in _df.columns else 0
+            _n_review  = len(_df[_df["Status"].str.startswith("Review")]) if "Status" in _df.columns else 0
+        else:
+            _n_auto = _n_review = 0
+        _n_excluded = len(_excluded_df) if _excluded_df is not None and not _excluded_df.empty else 0
+
+        _banner_parts = [
+            f'✅ <b>{_n_auto:,}</b> auto-included',
+            f'👁 <b>{_n_review:,}</b> flagged for manual review',
+            f'🚫 <b>{_n_excluded:,}</b> excluded by type or SOP rules',
+        ]
+
+        # BDR eligibility counts (when BDR assignment is selected)
+        if bdr_user_id and _df is not None and not _df.empty and "BDR Eligible" in _df.columns:
+            _n_bdr_eligible = int(_df["BDR Eligible"].sum())
+            _n_bdr_skipped  = len(_df) - _n_bdr_eligible
+            _banner_parts.append(
+                f'📝 <b>{_n_bdr_eligible:,}</b> BDR-eligible · '
+                f'<b>{_n_bdr_skipped:,}</b> BDR skipped (active BDR)'
+            )
+
+        st.markdown(
+            f'<div style="padding:8px 14px;background:rgba(20,40,70,0.3);'
+            f'border-radius:6px;margin-bottom:12px;font-size:0.85rem;">'
+            f'{" &nbsp;|&nbsp; ".join(_banner_parts)}</div>',
+            unsafe_allow_html=True,
+        )
+
+        if _df is None or _df.empty:
+            st.info("No qualifying accounts to display after applying exclusion rules.")
+            _be_col, _re_col = st.columns([1, 1])
+            with _be_col:
+                if st.button("← Back", key="rz_back_2_empty2"):
+                    st.session_state.rz_step = 1
+                    st.rerun()
+            with _re_col:
+                if st.button("🔄 Refresh", key="rz_refresh_2_empty", help="Re-query Salesforce"):
+                    st.session_state.rz_accounts_df = None
+                    st.session_state.rz_excluded_df = None
+                    st.rerun()
+            return
+
+        # ── Source-breakdown informational banner ─────────────────────────────
+        if "Source" in _df.columns:
+            _n_parent_hier  = int((_df["Source"] == "Via parent hierarchy").sum())
+            _n_deep_hier    = int(_df["Source"].str.startswith(
+                ("Inherited from ancestor", "Derived from ancestor"), na=False
+            ).sum())
+            _info_parts = []
+            if _n_parent_hier > 0:
+                _info_parts.append(
+                    f"{_n_parent_hier:,} via SOQL parent hierarchy (≤3 levels)"
+                )
+            if _n_deep_hier > 0:
+                _info_parts.append(
+                    f"{_n_deep_hier:,} via deep hierarchy walk-up (>3 levels)"
+                )
+            if _info_parts:
+                st.info(
+                    f"ℹ️  Accounts matched by ancestor billing location: "
+                    + " · ".join(_info_parts)
+                    + ". See the **Source** column for details."
+                )
+
+        # ── Editable grid ─────────────────────────────────────────────────────
+        _col_config = {
+            "Include":      st.column_config.CheckboxColumn("Include", default=True),
+            "Id":           st.column_config.TextColumn("Id",           disabled=True),
+            "Account Name": st.column_config.TextColumn("Account Name", disabled=True),
+            "State":        st.column_config.TextColumn("State",        disabled=True),
+            "Type":         st.column_config.TextColumn("Type",         disabled=True),
+            "Owner":        st.column_config.TextColumn("Owner",        disabled=True),
+            "Status":       st.column_config.TextColumn("Status",       disabled=True),
+            "Source":       st.column_config.TextColumn("Source",       disabled=True),
+            "Contacts":     st.column_config.NumberColumn("Contacts",   disabled=True),
+            "Open Opps":    st.column_config.NumberColumn("Open Opps",  disabled=True),
+            "BDR Eligible": None,  # hide boolean column from grid
+        }
+
+        # Show BDR Status column only when BDR assignment is selected
+        if bdr_user_id:
+            _col_config["BDR Status"] = st.column_config.TextColumn("BDR Status", disabled=True)
+        else:
+            _col_config["BDR Status"] = None  # hide when not relevant
+
+        _edited = st.data_editor(
+            _df,
+            column_config=_col_config,
+            width="stretch",
+            hide_index=True,
+            key="rz_accounts_editor",
+        )
+
+        _selected    = _edited[_edited["Include"] == True]
+        _excl_count  = len(_edited) - len(_selected)
+        _total_conts = int(_selected["Contacts"].sum()) if not _selected.empty else 0
+        _total_opps  = int(_selected["Open Opps"].sum()) if not _selected.empty else 0
+
+        st.caption(
+            f"{len(_selected):,} accounts selected · "
+            f"{_total_conts:,} contacts · "
+            f"{_total_opps:,} open opportunities · "
+            f"{_excl_count:,} unchecked"
+        )
+
+        # ── Show excluded records in collapsible ──────────────────────────────
+        if _excluded_df is not None and not _excluded_df.empty:
+            with st.expander(f"🚫 Excluded records ({len(_excluded_df):,})", expanded=False):
+                st.caption(
+                    "These accounts were automatically excluded per SOP rules "
+                    "(Customer/Customer Logo type or Customer Holding Account hierarchy). "
+                    "They will not be reassigned."
+                )
+                st.dataframe(_excluded_df, width="stretch", hide_index=True)
+
+        _b_col, _r_col, _n_col = st.columns([1, 1, 4])
+        with _b_col:
+            if st.button("← Back", key="rz_back_2"):
+                st.session_state.rz_step = 1
+                st.rerun()
+        with _r_col:
+            if st.button("🔄 Refresh", key="rz_refresh_2", help="Re-query Salesforce and rebuild the candidate list"):
+                st.session_state.rz_accounts_df = None
+                st.session_state.rz_excluded_df = None
+                st.rerun()
+        with _n_col:
+            if st.button(
+                "Next: Set Scope →",
+                type="primary",
+                key="rz_next_2",
+                disabled=(len(_selected) == 0),
+            ):
+                st.session_state.rz_accounts_df  = _edited
+                st.session_state.rz_excluded_ids = set(
+                    _edited[_edited["Include"] == False]["Id"].tolist()
+                )
+                st.session_state.rz_step = 3
+                st.rerun()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 3 — SET MIGRATION SCOPE
+    # ══════════════════════════════════════════════════════════════════════════
+    elif step == 3:
+        territory    = st.session_state.rz_territory
+        ae_user_id   = st.session_state.rz_ae_user_id
+        bdr_user_id  = st.session_state.rz_bdr_user_id
+
+        with st.spinner("Loading users…"):
+            _all_users  = _get_active_users_for_reassign()
+        _user_by_id = {u["id"]: u for u in _all_users}
+        ae_name  = _user_by_id.get(ae_user_id, {}).get("name", "No change") if ae_user_id else "No change"
+        bdr_name = _user_by_id.get(bdr_user_id, {}).get("name", "No change") if bdr_user_id else "No change"
+
+        _df       = st.session_state.rz_accounts_df
+        _selected = _df[_df["Include"] == True]
+        _n_accts  = len(_selected)
+        _n_conts  = int(_selected["Contacts"].sum()) if not _selected.empty else 0
+        _n_opps   = int(_selected["Open Opps"].sum()) if not _selected.empty else 0
+
+        # BDR eligibility counts
+        _n_bdr_eligible = 0
+        _n_bdr_skipped  = 0
+        if bdr_user_id and "BDR Eligible" in _selected.columns:
+            _n_bdr_eligible = int(_selected["BDR Eligible"].sum())
+            _n_bdr_skipped  = _n_accts - _n_bdr_eligible
+
+        # AE banner
+        if ae_user_id:
+            st.markdown(
+                f'<div class="safety-banner" style="'
+                f'background:rgba(30,50,90,0.4);border-color:#2a4a7f;color:var(--text-secondary);">'
+                f'🏢 <b>Account Owner (AE)</b> — <b>{_n_accts:,}</b> accounts · '
+                f'OwnerId → <b>{ae_name}</b></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="safety-banner" style="'
+                f'background:rgba(50,50,50,0.3);border-color:#444;color:var(--text-secondary);">'
+                f'🏢 <b>Account Owner (AE)</b> — <i>No change</i></div>',
+                unsafe_allow_html=True,
+            )
+
+        # BDR banner
+        if bdr_user_id:
+            st.markdown(
+                f'<div class="safety-banner" style="'
+                f'background:rgba(30,70,50,0.4);border-color:#2a7f4a;color:var(--text-secondary);">'
+                f'👤 <b>BDR on Account</b> — <b>{_n_bdr_eligible:,}</b> of '
+                f'{_n_accts:,} eligible · BDR_on_Account__c → <b>{bdr_name}</b>'
+                f'{"" if _n_bdr_skipped == 0 else f" · <i>{_n_bdr_skipped:,} skipped (active BDR already set)</i>"}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="safety-banner" style="'
+                f'background:rgba(50,50,50,0.3);border-color:#444;color:var(--text-secondary);">'
+                f'👤 <b>BDR on Account</b> — <i>No change</i></div>',
+                unsafe_allow_html=True,
+            )
+
+        # Contact/Opp migration toggles — only relevant when AE is changing
+        migrate_contacts = False
+        migrate_opps     = False
+        if ae_user_id:
+            migrate_contacts = st.toggle(
+                f"Migrate Contacts ({_n_conts:,} contacts at selected accounts)",
+                value=st.session_state.rz_migrate_contacts,
+                key="rz_contacts_toggle",
+                help="Contacts keep their current owner when OFF",
+            )
+            migrate_opps = st.toggle(
+                f"Migrate open Opportunities ({_n_opps:,} open opps at selected accounts)",
+                value=st.session_state.rz_migrate_opps,
+                key="rz_opps_toggle",
+                help="Closed Won/Lost opportunities are NEVER touched regardless of this setting",
+            )
+        else:
+            st.caption("ℹ️ Contact and Opportunity migration is only available when changing Account Owner (AE).")
+
+        # ── Pre-Run Summary ───────────────────────────────────────────────────
+        _active_types   = st.session_state.get("rz_type_filter") or WORKABLE_TYPES
+        _type_breakdown = (
+            _selected["Type"].value_counts().to_dict()
+            if not _selected.empty and "Type" in _selected.columns
+            else {}
+        )
+        _type_breakdown_str = ", ".join(
+            f"{t}: {n:,}" for t, n in sorted(_type_breakdown.items())
+        ) or "—"
+        st.info(
+            f"**Pre-Run Summary**\n\n"
+            f"- Accounts to be updated: **{_n_accts:,}**\n"
+            f"- Types included: {', '.join(_active_types)}\n"
+            f"- Type breakdown: {_type_breakdown_str}\n"
+            f"- Dry Run mode: {'**ON** ✅' if dry_run_mode else '**OFF** ⚠️'}"
+        )
+
+        _b_col, _n_col = st.columns([1, 5])
+        with _b_col:
+            if st.button("← Back", key="rz_back_3"):
+                st.session_state.rz_step = 2
+                st.rerun()
+        with _n_col:
+            if st.button("Next: Review & Confirm →", type="primary", key="rz_next_3"):
+                st.session_state.rz_migrate_contacts = migrate_contacts
+                st.session_state.rz_migrate_opps     = migrate_opps
+                st.session_state.rz_result           = None
+                st.session_state.rz_step             = 4
+                st.rerun()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 4 — CONFIRM & EXECUTE
+    # ══════════════════════════════════════════════════════════════════════════
+    elif step == 4:
+        territory        = st.session_state.rz_territory
+        ae_user_id       = st.session_state.rz_ae_user_id
+        bdr_user_id      = st.session_state.rz_bdr_user_id
+        migrate_contacts = st.session_state.rz_migrate_contacts
+        migrate_opps     = st.session_state.rz_migrate_opps
+        _df              = st.session_state.rz_accounts_df
+        _selected        = _df[_df["Include"] == True]
+        _n_accts         = len(_selected)
+        _n_conts         = int(_selected["Contacts"].sum()) if not _selected.empty else 0
+        _n_opps          = int(_selected["Open Opps"].sum()) if not _selected.empty else 0
+        _account_ids     = _selected["Id"].tolist()
+
+        # BDR-eligible subset: only accounts where current BDR is null or inactive
+        _bdr_eligible_ids = set()
+        if bdr_user_id and "BDR Eligible" in _selected.columns:
+            _bdr_eligible_ids = set(
+                _selected[_selected["BDR Eligible"] == True]["Id"].tolist()
+            )
+        _n_bdr_eligible = len(_bdr_eligible_ids)
+        _n_bdr_skipped  = _n_accts - _n_bdr_eligible if bdr_user_id else 0
+
+        # ── One-shot override: "Go Live" from dry-run results ─────────────────
+        _force_live = st.session_state.pop("rz_force_live", False)
+        if _force_live:
+            dry_run_mode = False
+
+        with st.spinner("Loading users…"):
+            _all_users  = _get_active_users_for_reassign()
+        _user_by_id = {u["id"]: u for u in _all_users}
+        ae_name  = _user_by_id.get(ae_user_id, {}).get("name", "No change") if ae_user_id else "No change"
+        bdr_name = _user_by_id.get(bdr_user_id, {}).get("name", "No change") if bdr_user_id else "No change"
+
+        # ── Show results if execution already ran ─────────────────────────────
+        if st.session_state.rz_result is not None and not _force_live:
+            _res = st.session_state.rz_result
+            if _res.get("dry_run"):
+                # ── Dry-run results: offer Go Live path ───────────────────────
+                st.info(
+                    "**Dry Run** — no records were changed. "
+                    "Review the preview below, then execute for real."
+                )
+                for _obj, _r in _res.get("objects", {}).items():
+                    if _r["failed"] > 0:
+                        st.warning(
+                            f"⚠️ {_obj}: {_r['success']:,} would succeed, "
+                            f"{_r['failed']:,} would fail"
+                        )
+                        for _err in _r["errors"][:10]:
+                            st.caption(f"  • {_err}")
+                    else:
+                        st.markdown(
+                            f"🔍 **{_obj}**: {_r['success']:,} records would be updated"
+                        )
+                st.divider()
+                _go_live_confirmed = st.checkbox(
+                    "I have reviewed the dry-run results and want to execute on live data.",
+                    key="rz_go_live_confirm",
+                )
+                _gl_col, _reset_col = st.columns([1, 1])
+                with _gl_col:
+                    if st.button(
+                        "⚡ Execute for Real",
+                        type="primary",
+                        key="rz_go_live_btn",
+                        disabled=(not _go_live_confirmed),
+                    ):
+                        st.session_state.rz_result     = None
+                        st.session_state.rz_force_live = True
+                        st.rerun()
+                with _reset_col:
+                    if st.button("↺ Start a new reassignment", key="rz_done_dry"):
+                        _reset()
+                return
+            else:
+                # ── Live execution results ────────────────────────────────────
+                st.success(
+                    f"✅ Reassignment complete · {territory}"
+                )
+                for _obj, _r in _res.get("objects", {}).items():
+                    if _r["failed"] > 0:
+                        st.warning(
+                            f"⚠️ {_obj}: {_r['success']:,} succeeded, "
+                            f"{_r['failed']:,} failed"
+                        )
+                        for _err in _r["errors"][:10]:
+                            st.caption(f"  • {_err}")
+                    else:
+                        st.markdown(
+                            f"📋 **{_obj}**: {_r['success']:,} records updated"
+                        )
+                if st.button("↺ Start a new reassignment", key="rz_done"):
+                    _reset()
+                return
+
+        # ── Summary table ─────────────────────────────────────────────────────
+        _summary_rows = []
+
+        if ae_user_id:
+            _summary_rows.append({
+                "Object":  "Account (Owner)",
+                "Records": _n_accts,
+                "Field":   "OwnerId",
+                "New Value": ae_name,
+                "Action":  "✅ Will update",
+            })
+        if bdr_user_id:
+            _bdr_action = f"✅ Will update ({_n_bdr_skipped:,} skipped — active BDR)" if _n_bdr_skipped else "✅ Will update"
+            _summary_rows.append({
+                "Object":  "Account (BDR)",
+                "Records": _n_bdr_eligible,
+                "Field":   "BDR_on_Account__c",
+                "New Value": bdr_name,
+                "Action":  _bdr_action,
+            })
+        if ae_user_id:
+            _summary_rows.append({
+                "Object":  "Contact",
+                "Records": _n_conts,
+                "Field":   "OwnerId",
+                "New Value": ae_name if migrate_contacts else "—",
+                "Action":  "✅ Will migrate" if migrate_contacts else "⊘ Skipped",
+            })
+            _summary_rows.append({
+                "Object":  "Opportunity (open only)",
+                "Records": _n_opps,
+                "Field":   "OwnerId",
+                "New Value": ae_name if migrate_opps else "—",
+                "Action":  "✅ Will migrate" if migrate_opps else "⊘ Skipped",
+            })
+
+        st.dataframe(pd.DataFrame(_summary_rows), width="stretch", hide_index=True)
+
+        _fields_changing = []
+        if ae_user_id:
+            _fields_changing.append("OwnerId")
+        if bdr_user_id:
+            _fields_changing.append("BDR_on_Account__c")
+
+        # ── "Go Live" path: skip confirmation, execute immediately ────────────
+        _should_execute = False
+        if _force_live:
+            st.info("🔄 Executing live reassignment from dry-run preview…")
+            _should_execute = True
+        else:
+            st.error(
+                f"⚠️ This operation updates **{', '.join(_fields_changing)}** in bulk "
+                f"on live Salesforce records. "
+                "It cannot be automatically reversed. Verify the summary above before proceeding."
+            )
+
+            _confirmed = st.checkbox(
+                "I have reviewed the summary and want to proceed.",
+                key="rz_confirm_chk",
+            )
+            _btn_label = (
+                "🔍 Preview (Dry Run)" if dry_run_mode
+                else "⚡ Execute Reassignment"
+            )
+
+            _b_col, _exec_col = st.columns([1, 4])
+            with _b_col:
+                if st.button("← Back", key="rz_back_4"):
+                    st.session_state.rz_step = 3
+                    st.rerun()
+            with _exec_col:
+                if st.button(
+                    _btn_label,
+                    type="primary",
+                    key="rz_execute",
+                    disabled=(not _confirmed),
+                ):
+                    _should_execute = True
+
+        if _should_execute:
+            _result_objects: dict = {}
+            _CHUNK = 200
+
+            # ── Determine total phases for progress tracking ───────────
+            _total_phases = 1  # Account update is always phase 1
+            if ae_user_id and migrate_contacts:
+                _total_phases += 1
+            if ae_user_id and migrate_opps:
+                _total_phases += 1
+            _phase = 0
+
+            _progress_bar = st.progress(0, text="Preparing…")
+
+            with st.status("Running reassignment…", expanded=True) as _status:
+                sf = get_sf_connection()
+
+                # ── 1. Account updates (AE + BDR) ─────────────────────────
+                # BDR is only set on accounts where the current BDR is
+                # null or belongs to an inactive user.
+                _phase += 1
+                _progress_bar.progress(
+                    (_phase - 1) / _total_phases,
+                    text=f"Phase {_phase}/{_total_phases} — Updating accounts…",
+                )
+                st.write(f"⏳ **Phase {_phase}/{_total_phases}** — Updating {len(_account_ids):,} accounts…")
+
+                _acct_payload = []
+                for _aid in _account_ids:
+                    _rec = {"Id": _aid}
+                    if ae_user_id:
+                        _rec["OwnerId"] = ae_user_id
+                    if bdr_user_id and _aid in _bdr_eligible_ids:
+                        _rec["BDR_on_Account__c"] = bdr_user_id
+                    # Only include if there's something to update
+                    if len(_rec) > 1:
+                        _acct_payload.append(_rec)
+
+                if not dry_run_mode:
+                    if auto_backup:
+                        _backup_cols = [c for c in ["Id", "Account Name", "State", "Type", "Owner"] if c in _selected.columns]
+                        backup_records(
+                            _selected[_backup_cols].copy(),
+                            "Reassign_Account",
+                            "Account",
+                        )
+                    _acct_result = execute_update(sf, "Account", _acct_payload)
+                else:
+                    _acct_result = {
+                        "success": len(_acct_payload), "failed": 0, "errors": [],
+                    }
+                _acct_label = "Account"
+                if ae_user_id and bdr_user_id:
+                    _acct_label = "Account (Owner + BDR)"
+                elif ae_user_id:
+                    _acct_label = "Account (Owner)"
+                elif bdr_user_id:
+                    _acct_label = "Account (BDR)"
+                _result_objects[_acct_label] = _acct_result
+                st.write(f"✅ Accounts — {_acct_result['success']:,} succeeded, {_acct_result['failed']:,} failed")
+
+                # ── 2. Contacts (only if AE is changing) ──────────────────
+                if ae_user_id and migrate_contacts:
+                    _phase += 1
+                    _progress_bar.progress(
+                        (_phase - 1) / _total_phases,
+                        text=f"Phase {_phase}/{_total_phases} — Migrating contacts…",
+                    )
+                    st.write(f"⏳ **Phase {_phase}/{_total_phases}** — Querying & migrating contacts…")
+
+                    _cont_ids = []
+                    for _ci in range(0, len(_account_ids), _CHUNK):
+                        _chunk   = _account_ids[_ci : _ci + _CHUNK]
+                        _ids_str = ", ".join(f"'{x}'" for x in _chunk)
+                        _cres    = sf.query_all(
+                            f"SELECT Id FROM Contact "
+                            f"WHERE AccountId IN ({_ids_str}) "
+                            f"AND IsDeleted = false"
+                        )
+                        _cont_ids.extend(r["Id"] for r in _cres.get("records", []))
+
+                    _cont_payload = [
+                        {"Id": _cid, "OwnerId": ae_user_id}
+                        for _cid in _cont_ids
+                    ]
+                    if _cont_payload and not dry_run_mode:
+                        st.write(f"   Updating {len(_cont_payload):,} contacts…")
+                        _cont_result = execute_update(sf, "Contact", _cont_payload)
+                    else:
+                        _cont_result = {
+                            "success": len(_cont_payload), "failed": 0, "errors": [],
+                        }
+                    _result_objects["Contact"] = _cont_result
+                    st.write(f"✅ Contacts — {_cont_result['success']:,} succeeded, {_cont_result['failed']:,} failed")
+
+                # ── 3. Open Opportunities (only if AE is changing) ────────
+                if ae_user_id and migrate_opps:
+                    _phase += 1
+                    _progress_bar.progress(
+                        (_phase - 1) / _total_phases,
+                        text=f"Phase {_phase}/{_total_phases} — Migrating opportunities…",
+                    )
+                    st.write(f"⏳ **Phase {_phase}/{_total_phases}** — Querying & migrating open opportunities…")
+
+                    _stage_not_in = ", ".join(f"'{s}'" for s in CLOSED_STAGES)
+                    _opp_ids      = []
+                    for _ci in range(0, len(_account_ids), _CHUNK):
+                        _chunk   = _account_ids[_ci : _ci + _CHUNK]
+                        _ids_str = ", ".join(f"'{x}'" for x in _chunk)
+                        _ores    = sf.query_all(
+                            f"SELECT Id FROM Opportunity "
+                            f"WHERE AccountId IN ({_ids_str}) "
+                            f"AND StageName NOT IN ({_stage_not_in}) "
+                            f"AND IsDeleted = false"
+                        )
+                        _opp_ids.extend(r["Id"] for r in _ores.get("records", []))
+
+                    _opp_payload = [
+                        {"Id": _oid, "OwnerId": ae_user_id}
+                        for _oid in _opp_ids
+                    ]
+                    if _opp_payload and not dry_run_mode:
+                        st.write(f"   Updating {len(_opp_payload):,} opportunities…")
+                        _opp_result = execute_update(sf, "Opportunity", _opp_payload)
+                    else:
+                        _opp_result = {
+                            "success": len(_opp_payload), "failed": 0, "errors": [],
+                        }
+                    _result_objects["Opportunity (open only)"] = _opp_result
+                    st.write(f"✅ Opportunities — {_opp_result['success']:,} succeeded, {_opp_result['failed']:,} failed")
+
+                # ── Complete ───────────────────────────────────────────────
+                _progress_bar.progress(1.0, text="Complete!")
+                _status.update(label="Reassignment complete!", state="complete", expanded=True)
+
+            st.session_state.rz_result = {
+                "dry_run": dry_run_mode,
+                "objects": _result_objects,
+            }
+            st.rerun()
+def render_territory_tab():
+    """
+    Renders the Territory Management tab — four sub-tabs:
+        📋  Territory Map     — static reference for the territory definitions
+        🔍  Instant Lookup    — offline classify_state() explorer
+        ⚠️  Territory Exception Analysis — live Salesforce exception finder
+        📊  Territory Queries — pre-built SOQL snippets for the Raw SOQL tab
+    """
+    import pandas as pd
+
+    st.subheader("Territory Management")
+    st.caption(
+        "Classify and audit Salesforce Accounts by sales territory. "
+        "Territory is determined by the billing location of the ultimate parent account."
+    )
+
+    st.warning(
+        "🇮🇹  **Italy Exclusion (effective February 2025):** Italian accounts "
+        "(BillingCountry = 'Italy' / 'IT') must **never** be assigned to any territory. "
+        "They are flagged separately in all analysis views.",
+        icon="⚠️",
+    )
+
+    _TERRITORY_SECTIONS = [
+        "📋  Territory Map",
+        "🔍  Instant Lookup",
+        "⚠️  Territory Exception Analysis",
+        "👥  Rep/BDR Alignment",
+        "🔄  Reassign",
+        "📊  Executive Report",
+        "📊  Territory Queries",
+        "🗺️  Territory Editor",
+        "🔄  Territory Sync",
+    ]
+    territory_section = st.selectbox(
+        "Section",
+        _TERRITORY_SECTIONS,
+        key="territory_section",
+        label_visibility="collapsed",
+    )
+
+    st.markdown("---")
+
+    if territory_section == "📋  Territory Map":
+        _render_territory_map()
+    elif territory_section == "🔍  Instant Lookup":
+        _render_instant_lookup(pd)
+    elif territory_section == "⚠️  Territory Exception Analysis":
+        _render_rep_coverage(pd)
+    elif territory_section == "👥  Rep/BDR Alignment":
+        render_alignment_subtab()
+    elif territory_section == "🔄  Reassign":
+        render_reassign_subtab()
+    elif territory_section == "📊  Executive Report":
+        _render_executive_report()
+    elif territory_section == "📊  Territory Queries":
+        _render_territory_queries()
+    elif territory_section == "🗺️  Territory Editor":
+        render_territory_editor_subtab()
+    elif territory_section == "🔄  Territory Sync":
+        render_territory_sync_subtab()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUB-TAB 1: TERRITORY MAP
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _territory_badge(territory: str) -> str:
+    """Return an HTML colour badge for the given territory name."""
+    colour = TERRITORY_COLOURS.get(territory, "#555")
+    return (
+        f'<span style="background:{colour};color:#fff;padding:2px 10px;'
+        f'border-radius:12px;font-size:0.8rem;font-weight:600;">{territory}</span>'
+    )
+
+
+def _render_territory_map():
+    """Renders static territory definitions with colour-coded expanders."""
+    for territory, states in TERRITORY_MAP.items():
+        colour = TERRITORY_COLOURS.get(territory, "#555")
+        header = (
+            f"{territory} &nbsp;"
+            f'<span style="background:{colour};color:#fff;padding:1px 8px;'
+            f'border-radius:10px;font-size:0.75rem;">{len(states)} regions</span>'
+        )
+        with st.expander(territory, expanded=True):
+            st.markdown(
+                f'<div style="margin-bottom:6px;">{header}</div>',
+                unsafe_allow_html=True,
+            )
+
+            is_europe = territory == "Europe 1"
+            label = "Countries" if is_europe else "States / Provinces"
+            st.caption(
+                f"{label} — classified by "
+                f"{'BillingCountry' if is_europe else 'BillingState/Province'}"
+            )
+
+            cols = st.columns(3)
+            for i, state in enumerate(sorted(states)):
+                cols[i % 3].markdown(f"• {state}")
+
+        if territory == "Europe 1":
+            st.info(
+                "Europe 1 classification is based on **BillingCountry**, "
+                "not BillingState/Province.",
+                icon="ℹ️",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUB-TAB 2: INSTANT LOOKUP
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_instant_lookup(pd):
+    """Renders the offline classify_state() explorer and reference tables."""
+    import pandas as pd  # local alias for clarity
+
+    st.markdown("### Classify a State or Country")
+    query = st.text_input(
+        "Type a state, province, or country",
+        placeholder="e.g.  Ontario  /  ON  /  United Kingdom  /  GB",
+        key="territory_lookup_input",
+    )
+
+    if query.strip():
+        result = classify_state(query.strip())
+        colour = TERRITORY_COLOURS.get(result, "#555555")
+        if result == "Italy - Excluded":
+            st.error(f"🇮🇹  **{query}** → {result}")
+        elif result in ("Unclassified", "No State/Province"):
+            st.warning(f"**{query}** → {result}")
+        else:
+            st.markdown(
+                f'<div style="padding:10px 16px;border-left:4px solid {colour};'
+                f'background:#0f1a15;border-radius:4px;margin-bottom:8px;">'
+                f'<span style="font-size:1rem;"><b>{query}</b> → '
+                f'<span style="color:{colour};font-weight:700;">{result}</span>'
+                f'</span></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+
+    # ── Full state → territory reference table ────────────────────────────────
+    st.markdown("### Full Reference Table")
+
+    ref_rows = []
+    for terr, states in TERRITORY_MAP.items():
+        for s in states:
+            ref_rows.append({"State / Province / Country": s, "Territory": terr})
+    ref_rows.append({"State / Province / Country": "Italy", "Territory": "Italy - Excluded"})
+
+    ref_df = pd.DataFrame(ref_rows).sort_values("State / Province / Country")
+    st.dataframe(ref_df, width='stretch', hide_index=True)
+
+    st.divider()
+
+    # ── Reverse lookup: territory → full list ─────────────────────────────────
+    st.markdown("### Find All Regions in a Territory")
+    territory_options = list(TERRITORY_MAP.keys()) + ["Italy - Excluded"]
+    selected_terr = st.selectbox(
+        "Select a territory",
+        territory_options,
+        key="territory_reverse_lookup",
+    )
+
+    if selected_terr == "Italy - Excluded":
+        st.info("Italy is excluded from all territory assignments as of February 2025.")
+    elif selected_terr:
+        states_in = TERRITORY_MAP[selected_terr]
+        colour = TERRITORY_COLOURS.get(selected_terr, "#555")
+        st.markdown(
+            _territory_badge(selected_terr) + f"&nbsp; **{len(states_in)} regions**",
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(3)
+        for i, s in enumerate(sorted(states_in)):
+            cols[i % 3].markdown(f"• {s}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUB-TAB 3: REP COVERAGE ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+
+_COVERAGE_SOQL_TEMPLATE = """SELECT
+    Id, Name, BillingState, BillingCountry,
+    Owner.Name, Owner.Email,
+    ParentId, Parent.Name,
+    Parent.ParentId, Parent.Parent.Name,
+    Parent.Parent.ParentId, Parent.Parent.Parent.Name,
+    Parent.BillingState, Parent.BillingCountry,
+    Parent.Parent.BillingState, Parent.Parent.BillingCountry,
+    Parent.Parent.Parent.BillingState, Parent.Parent.Parent.BillingCountry,
+    Territory__c, RecordType.Name
+FROM Account
+WHERE IsDeleted = false
+ORDER BY Owner.Name, Name
+LIMIT {limit}"""
+
+
+def _render_rep_coverage(pd):
+    """
+    Territory Exception Analysis.
+
+    Fetches accounts, resolves each to its ultimate parent's billing location,
+    classifies by territory, then surfaces exceptions:
+      - Summary counts per territory
+      - Mis-alignment report (Territory__c ≠ classified territory)
+      - Cross-territory hierarchy conflicts (parent in different territory)
+      - Rep × territory breakdown
+      - Owners spanning 3+ territories
+      - Italy accounts
+      - Unclassifiable accounts
+      - Full detail table + CSV export
+    """
+    st.markdown("### Territory Exception Analysis")
+    st.markdown(
+        "This tool pulls live account data from Salesforce and checks each account's "
+        "billing address against the territory definitions to find **exceptions** — "
+        "accounts that don't match where they should be. Use it to spot:"
+    )
+    st.markdown(
+        "- **Mis-aligned accounts** — the Territory field in Salesforce doesn't match "
+        "the territory implied by the account's billing address\n"
+        "- **Cross-territory hierarchy conflicts** — accounts whose parent or grandparent "
+        "is in a different territory, meaning the account may need to follow the parent's "
+        "territory assignment\n"
+        "- **Reps spanning multiple territories** — owners with accounts in 3+ territories, "
+        "which may indicate cleanup is needed\n"
+        "- **Unclassifiable accounts** — accounts whose billing address doesn't map to any "
+        "known territory\n"
+        "- **Italy accounts** — flagged separately since they must never be assigned to a territory"
+    )
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
+    with fcol1:
+        terr_filter = st.selectbox(
+            "Territory filter",
+            ["All Territories"] + list(TERRITORY_MAP.keys()),
+            key="coverage_terr_filter",
+        )
+    with fcol2:
+        owner_filter = st.text_input(
+            "Owner name contains",
+            placeholder="e.g.  Smith",
+            key="coverage_owner_filter",
+        )
+    with fcol3:
+        max_records = st.number_input(
+            "Max records",
+            min_value=100,
+            max_value=50_000,
+            value=10_000,
+            step=500,
+            key="coverage_max_records",
+        )
+
+    soql = _COVERAGE_SOQL_TEMPLATE.format(limit=int(max_records))
+
+    with st.expander("📄 SOQL that will run", expanded=False):
+        st.code(soql, language="sql")
+
+    run_btn = st.button("▶  Run Coverage Analysis", key="run_coverage_btn", type="primary")
+
+    if not run_btn:
+        st.info("Configure filters above then click **Run Coverage Analysis**.")
+        return
+
+    # ── Fetch ─────────────────────────────────────────────────────────────────
+    try:
+        with st.spinner("Fetching accounts from Salesforce…"):
+            sf = get_sf_connection()
+            raw = sf.query_all(soql)
+            records = raw.get("records", [])
+
+        if not records:
+            st.warning("No accounts returned.")
+            return
+
+        # ── Flatten Salesforce nested dicts ───────────────────────────────────
+        flat_rows = []
+        for rec in records:
+            row = {}
+            for k, v in rec.items():
+                if k == "attributes":
+                    continue
+                if isinstance(v, dict):
+                    attrs = v.get("attributes", {})
+                    for sk, sv in v.items():
+                        if sk == "attributes":
+                            continue
+                        if isinstance(sv, dict):
+                            for ssk, ssv in sv.items():
+                                if ssk != "attributes":
+                                    row[f"{k}.{sk}.{ssk}"] = ssv
+                        else:
+                            row[f"{k}.{sk}"] = sv
+                else:
+                    row[k] = v
+            flat_rows.append(row)
+
+        df = pd.DataFrame(flat_rows)
+
+        # Rename dotted columns to the relationship paths the resolver expects
+        # e.g. "Parent.BillingState" comes through as "Parent.BillingState" already
+        # Owner sub-fields come as "Owner.Name", "Owner.Email"
+        df = df.rename(columns={
+            c: c for c in df.columns  # identity — just ensure they exist
+        })
+
+        # ── Resolve ultimate parent + classify ────────────────────────────────
+        def _classify_location(state, country):
+            """Classify a state/country pair into a territory name."""
+            val = country if not state and country else state
+            if classify_state(country) == "Europe 1":
+                val = country
+            return classify_state(val) if val else "No State/Province"
+
+        # Hierarchy levels: (state_col, country_col, name_col, label)
+        _HIERARCHY_LEVELS = [
+            ("BillingState",                      "BillingCountry",                      None,                        "Self"),
+            ("Parent.BillingState",               "Parent.BillingCountry",               "Parent.Name",               "Parent"),
+            ("Parent.Parent.BillingState",        "Parent.Parent.BillingCountry",        "Parent.Parent.Name",        "Grandparent"),
+            ("Parent.Parent.Parent.BillingState", "Parent.Parent.Parent.BillingCountry", "Parent.Parent.Parent.Name", "Great-Grandparent"),
+        ]
+
+        with st.spinner("Classifying accounts…"):
+            results = []
+            for _, row in df.iterrows():
+                ult_state, ult_country = _resolve_ultimate_parent(row)
+                territory_classified = _classify_location(ult_state, ult_country)
+
+                # ── Hierarchy territory check ─────────────────────────
+                # Classify each level independently and detect when a
+                # parent/grandparent sits in a different territory.
+                _self_state   = str(row.get("BillingState") or "").strip()
+                _self_country = str(row.get("BillingCountry") or "").strip()
+                _self_terr    = _classify_location(_self_state, _self_country)
+
+                _hierarchy_conflict = ""
+                _conflict_ancestor  = ""
+                _conflict_ancestor_terr = ""
+
+                # Walk up from direct parent to great-grandparent
+                for _sc, _cc, _nc, _lvl in _HIERARCHY_LEVELS[1:]:
+                    _p_state   = str(row.get(_sc) or "").strip()
+                    _p_country = str(row.get(_cc) or "").strip()
+                    if not _p_state and not _p_country:
+                        continue  # no parent at this level
+                    _p_terr = _classify_location(_p_state, _p_country)
+                    # Only flag real territory mismatches (ignore unclassified/blank)
+                    _real_territories = set(TERRITORY_MAP.keys()) | {"Italy - Excluded"}
+                    if (
+                        _self_terr in _real_territories
+                        and _p_terr in _real_territories
+                        and _self_terr != _p_terr
+                    ):
+                        _anc_name = str(row.get(_nc) or "").strip() if _nc else ""
+                        _hierarchy_conflict = f"{_lvl} in {_p_terr}"
+                        _conflict_ancestor  = _anc_name or _lvl
+                        _conflict_ancestor_terr = _p_terr
+                        break  # report the closest conflicting ancestor
+
+                results.append({
+                    "Id":                row.get("Id", ""),
+                    "Account Name":      row.get("Name", ""),
+                    "Owner":             row.get("Owner.Name", ""),
+                    "Owner Email":       row.get("Owner.Email", ""),
+                    "BillingState":      row.get("BillingState", ""),
+                    "BillingCountry":    row.get("BillingCountry", ""),
+                    "Ult. Parent State": ult_state,
+                    "Ult. Parent Country": ult_country,
+                    "Territory__c":      row.get("Territory__c", ""),
+                    "Classified As":     territory_classified,
+                    "Record Type":       row.get("RecordType.Name", ""),
+                    "Hierarchy Conflict": _hierarchy_conflict,
+                    "Conflict Ancestor":  _conflict_ancestor,
+                    "Ancestor Territory": _conflict_ancestor_terr,
+                })
+
+            classified_df = pd.DataFrame(results)
+
+        # ── Apply filters ─────────────────────────────────────────────────────
+        if owner_filter.strip():
+            classified_df = classified_df[
+                classified_df["Owner"].str.contains(owner_filter.strip(), case=False, na=False)
+            ]
+
+        if terr_filter != "All Territories":
+            classified_df = classified_df[
+                classified_df["Classified As"] == terr_filter
+            ]
+
+        st.success(f"✓ Classified {len(classified_df):,} accounts.")
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 1. Accounts per Territory
+        # ─────────────────────────────────────────────────────────────────────
+        st.markdown("#### Accounts per Territory")
+        summary = (
+            classified_df.groupby("Classified As")
+            .size()
+            .reset_index(name="Account Count")
+            .sort_values("Account Count", ascending=False)
+        )
+        st.dataframe(summary, width='stretch', hide_index=True)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 2. Territory__c vs Classified Territory (mis-alignment report)
+        # ─────────────────────────────────────────────────────────────────────
+        st.markdown("#### Current Territory__c vs Classified Territory")
+        st.caption(
+            "Accounts where the stored Territory__c value does not match what "
+            "the classification logic would assign based on ultimate parent billing location."
+        )
+
+        misaligned = classified_df[
+            classified_df["Territory__c"].fillna("").str.strip()
+            != classified_df["Classified As"]
+        ][["Account Name", "Owner", "Territory__c", "Classified As",
+           "Ult. Parent State", "Ult. Parent Country", "BillingState", "BillingCountry"]]
+
+        if misaligned.empty:
+            st.success("✓ No mis-alignments detected — all Territory__c values match classified territory.")
+        else:
+            st.warning(f"⚠️  {len(misaligned):,} accounts have a mis-aligned Territory__c.")
+            st.dataframe(misaligned, width='stretch', hide_index=True)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 3. Cross-Territory Hierarchy Conflicts
+        # ─────────────────────────────────────────────────────────────────────
+        st.markdown("#### Cross-Territory Hierarchy Conflicts")
+        st.caption(
+            "Accounts whose parent, grandparent, or great-grandparent account "
+            "is in a different territory. These accounts may need to follow their "
+            "parent's territory assignment and should be reviewed manually."
+        )
+
+        hierarchy_conflicts = classified_df[
+            classified_df["Hierarchy Conflict"].fillna("").str.len() > 0
+        ][[
+            "Account Name", "Owner", "Classified As",
+            "Conflict Ancestor", "Ancestor Territory", "Hierarchy Conflict",
+            "BillingState", "BillingCountry",
+        ]]
+
+        if hierarchy_conflicts.empty:
+            st.success("✓ No cross-territory hierarchy conflicts detected.")
+        else:
+            st.warning(
+                f"⚠️  {len(hierarchy_conflicts):,} account(s) have a parent or "
+                f"grandparent in a different territory — manual review recommended."
+            )
+            st.dataframe(hierarchy_conflicts, width='stretch', hide_index=True)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 4. Rep Coverage Breakdown
+        # ─────────────────────────────────────────────────────────────────────
+        st.markdown("#### Rep Coverage Breakdown")
+        rep_breakdown = (
+            classified_df[~classified_df["Classified As"].isin(["Italy - Excluded", "No State/Province", "Unclassified"])]
+            .groupby(["Owner", "Classified As"])
+            .size()
+            .reset_index(name="Count")
+            .sort_values(["Owner", "Count"], ascending=[True, False])
+        )
+        if not rep_breakdown.empty:
+            pivot = rep_breakdown.pivot_table(
+                index="Owner", columns="Classified As", values="Count", fill_value=0
+            ).reset_index()
+            st.dataframe(pivot, width='stretch', hide_index=True)
+        else:
+            st.info("No classified accounts to show.")
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 5. Potential Mis-Alignments (owners in 3+ territories)
+        # ─────────────────────────────────────────────────────────────────────
+        st.markdown("#### ⚠️ Potential Mis-Alignments")
+        st.caption("Owners appearing in 3 or more territories — may indicate mis-assigned accounts.")
+
+        terr_counts = (
+            classified_df[~classified_df["Classified As"].isin(["Italy - Excluded", "No State/Province", "Unclassified"])]
+            .groupby("Owner")["Classified As"]
+            .nunique()
+            .reset_index(name="Territory Count")
+        )
+        spread_owners = terr_counts[terr_counts["Territory Count"] >= 3].sort_values(
+            "Territory Count", ascending=False
+        )
+
+        if spread_owners.empty:
+            st.success("✓ No owners span 3+ territories.")
+        else:
+            st.warning(f"{len(spread_owners)} owner(s) span 3+ territories.")
+            st.dataframe(spread_owners, width='stretch', hide_index=True)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 6. Italy Accounts
+        # ─────────────────────────────────────────────────────────────────────
+        italy_df = classified_df[classified_df["Classified As"] == "Italy - Excluded"]
+        with st.expander(f"🇮🇹 Italy Accounts ({len(italy_df):,})", expanded=False):
+            if italy_df.empty:
+                st.info("No Italian accounts found in this result set.")
+            else:
+                st.warning(
+                    f"{len(italy_df):,} Italian account(s) found. "
+                    "These must have no Territory__c value."
+                )
+                st.dataframe(
+                    italy_df[["Account Name", "Owner", "Territory__c", "BillingState", "BillingCountry"]],
+                    width='stretch',
+                    hide_index=True,
+                )
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 7. Unclassifiable Accounts
+        # ─────────────────────────────────────────────────────────────────────
+        unclass_df = classified_df[
+            classified_df["Classified As"].isin(["No State/Province", "Unclassified"])
+        ]
+        with st.expander(f"❓ Unclassifiable Accounts ({len(unclass_df):,})", expanded=False):
+            if unclass_df.empty:
+                st.info("No unclassifiable accounts found.")
+            else:
+                st.warning(
+                    f"{len(unclass_df):,} account(s) could not be classified — "
+                    "no billing location found at any parent level. Manual review required."
+                )
+                st.dataframe(
+                    unclass_df[["Account Name", "Owner", "Territory__c", "Classified As",
+                                "BillingState", "BillingCountry"]],
+                    width='stretch',
+                    hide_index=True,
+                )
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 8. Full detail table
+        # ─────────────────────────────────────────────────────────────────────
+        with st.expander("📋 Full Detail Table", expanded=False):
+            st.dataframe(classified_df, width='stretch', hide_index=True)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # 9. CSV export
+        # ─────────────────────────────────────────────────────────────────────
+        csv_bytes = classified_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇  Download CSV",
+            data=csv_bytes,
+            file_name="territory_coverage.csv",
+            mime="text/csv",
+            key="coverage_csv_download",
+        )
+
+    except Exception as e:
+        st.error(f"Error running coverage analysis: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUB-TAB 4: TERRITORY QUERIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_territory_queries():
+    """
+    Pre-built SOQL query cards for common territory management tasks.
+    Each query loads into st.session_state.last_soql for use in the Raw SOQL tab.
+    """
+    st.markdown("### Pre-Built Territory Queries")
+    st.caption(
+        "Click **Load** on any query to send it to the Raw SOQL tab for execution."
+    )
+
+    # Build the IN-clause lists for territory state values
+    def _in_list(states: list[str]) -> str:
+        return ", ".join(f"'{s}'" for s in states)
+
+    t1_states = _in_list(TERRITORY_MAP["Territory 1"])
+    t2_states = _in_list(TERRITORY_MAP["Territory 2"])
+    t3_states = _in_list(TERRITORY_MAP["Territory 3"])
+    t4_states = _in_list(TERRITORY_MAP["Territory 4"])
+    europe_countries = _in_list(TERRITORY_MAP["Europe 1"])
+
+    queries = [
+        {
+            "title": "1 — Accounts with no BillingState AND no BillingCountry",
+            "description": "Accounts that cannot be classified into any territory because they have no billing location at all.",
+            "soql": (
+                "SELECT Id, Name, Owner.Name, Owner.Email, ParentId, Territory__c, RecordType.Name\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                "  AND (BillingState = null OR BillingState = '')\n"
+                "  AND (BillingCountry = null OR BillingCountry = '')\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "2 — Accounts where Territory__c is blank but should have a value",
+            "description": "Has a billing location that maps to a territory, but Territory__c is empty. Excludes Italy.",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                "  AND (Territory__c = null OR Territory__c = '')\n"
+                "  AND (\n"
+                f"    BillingState IN ({t1_states},\n"
+                f"      {t2_states},\n"
+                f"      {t3_states},\n"
+                f"      {t4_states})\n"
+                f"    OR BillingCountry IN ({europe_countries})\n"
+                "  )\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "3a — Territory 1 Accounts",
+            "description": "All accounts whose BillingState is in Territory 1 (East Coast US + Eastern Canada).",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Owner.Email, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                f"  AND BillingState IN ({t1_states})\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "3b — Territory 2 Accounts",
+            "description": "All accounts whose BillingState is in Territory 2 (West Coast US + Western Canada).",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Owner.Email, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                f"  AND BillingState IN ({t2_states})\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "3c — Territory 3 Accounts",
+            "description": "All accounts whose BillingState is in Territory 3 (Central US + Central Canada).",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Owner.Email, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                f"  AND BillingState IN ({t3_states})\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "3d — Territory 4 Accounts",
+            "description": "All accounts whose BillingState is in Territory 4 (South US).",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Owner.Email, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                f"  AND BillingState IN ({t4_states})\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "3e — Europe 1 Accounts",
+            "description": "All accounts whose BillingCountry is in Europe 1 (UK, Ireland, Norway, Denmark, Finland, Iceland, Sweden).",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Owner.Email, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                f"  AND BillingCountry IN ({europe_countries})\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "4 — Territory__c value doesn't match BillingState-derived territory",
+            "description": "Accounts where the stored Territory__c likely doesn't match where their billing state falls. Shows both current and expected territory.",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                "  AND Territory__c != null\n"
+                "  AND Territory__c != ''\n"
+                "  AND (\n"
+                "    (Territory__c = 'Territory 1' AND BillingState NOT IN\n"
+                f"      ({t1_states}))\n"
+                "    OR (Territory__c = 'Territory 2' AND BillingState NOT IN\n"
+                f"      ({t2_states}))\n"
+                "    OR (Territory__c = 'Territory 3' AND BillingState NOT IN\n"
+                f"      ({t3_states}))\n"
+                "    OR (Territory__c = 'Territory 4' AND BillingState NOT IN\n"
+                f"      ({t4_states}))\n"
+                "    OR (Territory__c = 'Europe 1' AND BillingCountry NOT IN\n"
+                f"      ({europe_countries}))\n"
+                "  )\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "5 — Italian Accounts (should have no territory)",
+            "description": "Accounts with BillingCountry = Italy or IT. These must never have a Territory__c value.",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, Owner.Name, Territory__c\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                "  AND (BillingCountry = 'Italy' OR BillingCountry = 'IT' OR BillingCountry = 'Italia')\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+        {
+            "title": "6 — Full Account + Owner + Territory Cross-Reference",
+            "description": "Complete dump of all accounts with billing info, owner, and territory for export.",
+            "soql": (
+                "SELECT Id, Name, BillingState, BillingCountry, BillingCity,\n"
+                "       Owner.Name, Owner.Email,\n"
+                "       ParentId, Territory__c, RecordType.Name,\n"
+                "       CreatedDate, LastModifiedDate\n"
+                "FROM Account\n"
+                "WHERE IsDeleted = false\n"
+                "ORDER BY Owner.Name, Name"
+            ),
+        },
+    ]
+
+    for q in queries:
+        with st.container():
+            card_col, btn_col = st.columns([5, 1])
+            with card_col:
+                st.markdown(f"**{q['title']}**")
+                st.caption(q["description"])
+            with btn_col:
+                if st.button("Load →", key=f"load_query_{q['title'][:20]}"):
+                    st.session_state.last_soql   = q["soql"]
+                    st.session_state.last_object = "Account"
+                    st.success("✓ Loaded into Raw SOQL tab.")
+            with st.expander("Preview SOQL", expanded=False):
+                st.code(q["soql"], language="sql")
+            st.divider()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUB-TAB 6: EXECUTIVE REPORT
+# ══════════════════════════════════════════════════════════════════════════════
+
+# NOTE: Clay_ICP_Score__c is the assumed API name.  If the field does not exist
+# the fetch will silently omit it — the ICP columns will show as 0/None.
+# To verify:  SELECT QualifiedApiName, Label FROM FieldDefinition
+#             WHERE EntityDefinition.QualifiedApiName = 'Account'
+#             AND Label LIKE '%ICP%'
+_EXEC_REPORT_SOQL = """\
+SELECT
+    Id, Name, Type,
+    BillingState, BillingCountry,
+    Territory__c,
+    OwnerId, Owner.Name,
+    ParentId, Parent.Name, Parent.Territory__c,
+    NumberOfEmployees,
+    Clay_ICP_Score__c,
+    (SELECT Id FROM Opportunities
+        WHERE IsClosed = false),
+    (SELECT Id, ActivityDate
+        FROM ActivityHistories
+        WHERE ActivityDate = LAST_N_DAYS:{lookback}
+        LIMIT 1)
+FROM Account
+WHERE IsDeleted = false
+  AND Type NOT IN ('No Longer in Business', 'Competitor',
+                   'Press', 'Industry Association')
+LIMIT 50000"""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_exec_report_data(lookback_days: int) -> tuple[pd.DataFrame, str]:
+    """
+    Fetch and flatten account data for the executive report.
+    Cached for 1 hour — returns (df, loaded_at_timestamp).
+
+    If Clay_ICP_Score__c does not exist in the org, retries without it
+    and leaves the ICP column as NaN (all accounts show as 'Unscored').
+    """
+    sf = get_sf_connection()
+    soql = _EXEC_REPORT_SOQL.format(lookback=lookback_days)
+    try:
+        raw = sf.query_all(soql)
+    except Exception as _e:
+        _msg = str(_e)
+        if "Clay_ICP_Score__c" in _msg and "INVALID_FIELD" in _msg:
+            # Field not present in this org — retry without it
+            soql = soql.replace("\n    Clay_ICP_Score__c,", "")
+            raw  = sf.query_all(soql)
+        else:
+            raise
+    records = raw.get("records", [])
+
+    flat_rows = []
+    for rec in records:
+        row: dict = {}
+        for k, v in rec.items():
+            if k == "attributes":
+                continue
+            if isinstance(v, dict):
+                for sk, sv in v.items():
+                    if sk == "attributes":
+                        continue
+                    if isinstance(sv, dict):
+                        for ssk, ssv in sv.items():
+                            if ssk != "attributes":
+                                row[f"{k}.{sk}.{ssk}"] = ssv
+                    else:
+                        row[f"{k}.{sk}"] = sv
+            elif isinstance(v, dict) and "totalSize" in v:
+                # sub-query (Opportunities / ActivityHistories)
+                row[k] = v.get("totalSize", 0)
+            else:
+                row[k] = v
+        # Sub-queries come through as dicts with "totalSize" and "records"
+        for sub_field in ("Opportunities", "ActivityHistories"):
+            if sub_field in row and isinstance(row[sub_field], dict):
+                row[sub_field] = row[sub_field].get("totalSize", 0)
+        flat_rows.append(row)
+
+    df = pd.DataFrame(flat_rows) if flat_rows else pd.DataFrame()
+
+    # Normalise sub-query counts
+    if "Opportunities" in df.columns:
+        df["open_opp_count"] = pd.to_numeric(df["Opportunities"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["open_opp_count"] = 0
+
+    if "ActivityHistories" in df.columns:
+        df["had_activity"] = pd.to_numeric(df["ActivityHistories"], errors="coerce").fillna(0).gt(0)
+    else:
+        df["had_activity"] = False
+
+    # Numeric coercions
+    for col in ("NumberOfEmployees", "Clay_ICP_Score__c"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            df[col] = float("nan")
+
+    loaded_at = datetime.datetime.now().strftime("%H:%M")
+    return df, loaded_at
+
+
+def _render_executive_report():
+    """
+    Read-only executive dashboard.  Six sections powered by one cached SOQL fetch.
+    """
+    st.subheader("Executive Territory Report")
+    st.caption(
+        "Read-only dashboard — no changes are made to Salesforce. "
+        "All data is pulled live and cached for 1 hour."
+    )
+
+    # ── Top control bar ───────────────────────────────────────────────────────
+    col_refresh, col_lookback, col_export = st.columns([2, 3, 2])
+    with col_lookback:
+        lookback = st.selectbox(
+            "Activity lookback window",
+            options=[30, 60, 90],
+            format_func=lambda x: f"{x} days",
+            index=2,
+            key="exec_lookback",
+        )
+    with col_refresh:
+        run_btn = st.button("▶  Load Report", type="primary", key="exec_load_btn")
+        if not run_btn and "exec_df" not in st.session_state:
+            st.info("Click **Load Report** to fetch data.")
+            return
+
+    # ── Fetch / cache ─────────────────────────────────────────────────────────
+    if run_btn:
+        # Clear cache so a manual refresh always re-queries
+        _fetch_exec_report_data.clear()
+
+    if run_btn or "exec_df" not in st.session_state:
+        with st.spinner("Fetching account data from Salesforce…"):
+            try:
+                _df, _loaded_at = _fetch_exec_report_data(int(lookback))
+                st.session_state.exec_df             = _df
+                st.session_state.exec_loaded_at      = _loaded_at
+                st.session_state.exec_fetched_lookback = int(lookback)
+            except Exception as _ex:
+                st.error(f"Data fetch failed: {_ex}")
+                return
+
+    df: pd.DataFrame = st.session_state.exec_df
+    loaded_at: str   = st.session_state.get("exec_loaded_at", "—")
+    _used_lookback   = st.session_state.get("exec_fetched_lookback", int(lookback))
+
+    with col_refresh:
+        st.caption(f"Data loaded at **{loaded_at}** — click Load Report to refresh.")
+
+    if df.empty:
+        st.warning("No accounts returned from Salesforce.")
+        return
+
+    # ── Classify each account's territory from billing location ───────────────
+    def _exec_classify(row):
+        state   = str(row.get("BillingState")   or "").strip()
+        country = str(row.get("BillingCountry") or "").strip()
+        if classify_state(country) == "Europe 1":
+            return classify_state(country)
+        return classify_state(state or country)
+
+    df["_classified_terr"] = df.apply(_exec_classify, axis=1)
+    df["_territory_label"] = df["Territory__c"].fillna("").str.strip()
+
+    # ── Multi-sheet CSV export (all sections) ─────────────────────────────────
+    with col_export:
+        _export_cols = [
+            "Id", "Name", "Type", "BillingState", "BillingCountry",
+            "Territory__c", "_classified_terr", "Owner.Name",
+            "NumberOfEmployees", "Clay_ICP_Score__c",
+            "open_opp_count", "had_activity",
+        ]
+        _export_df = df[[c for c in _export_cols if c in df.columns]].copy()
+        st.download_button(
+            "⬇️ Export all data (CSV)",
+            data=_export_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"exec_territory_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+            key="exec_export_all",
+        )
+
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 1 — DATA CONFIDENCE SCORECARD
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📊 Section 1 — Data Confidence Scorecard", expanded=True):
+        n_total = len(df)
+
+        # Territory Coverage
+        n_has_terr    = df["_territory_label"].ne("").sum()
+        pct_terr      = 100 * n_has_terr / n_total if n_total else 0
+
+        # Billing Location Fill
+        has_billing   = df["BillingState"].fillna("").ne("") | df["BillingCountry"].fillna("").ne("")
+        pct_billing   = 100 * has_billing.sum() / n_total if n_total else 0
+
+        # Map Alignment
+        _real_terrs   = set(TERRITORY_MAP.keys())
+        _has_both     = df["_territory_label"].ne("") & df["_classified_terr"].isin(_real_terrs)
+        _aligned      = _has_both & (df["_territory_label"] == df["_classified_terr"])
+        pct_aligned   = 100 * _aligned.sum() / _has_both.sum() if _has_both.sum() else 100.0
+
+        # Hierarchy Conflicts
+        _child_mask   = (
+            df["Parent.Territory__c"].fillna("").ne("") &
+            df["_territory_label"].ne("") &
+            df["_territory_label"].ne(df["Parent.Territory__c"].fillna(""))
+        )
+        pct_hier_conf = 100 * _child_mask.sum() / n_total if n_total else 0
+
+        def _tile_delta(val, green, amber):
+            """Return delta string for metric colouring (Streamlit uses delta for colour)."""
+            if val >= green:
+                return f"+{val:.1f}%"   # green
+            elif val >= amber:
+                return f"~{val:.1f}%"   # no colour change — use caption instead
+            else:
+                return f"-{val:.1f}%"   # red
+
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric(
+            "Territory Coverage",
+            f"{pct_terr:.1f}%",
+            delta=_tile_delta(pct_terr, 90, 75),
+            help="% of accounts with Territory__c set",
+        )
+        _m2.metric(
+            "Billing Location Fill",
+            f"{pct_billing:.1f}%",
+            delta=_tile_delta(pct_billing, 85, 65),
+            help="% of accounts with BillingState or BillingCountry",
+        )
+        _m3.metric(
+            "Map Alignment",
+            f"{pct_aligned:.1f}%",
+            delta=_tile_delta(pct_aligned, 95, 85),
+            help="% where Territory__c matches classify_state(billing location)",
+        )
+        _m4.metric(
+            "Hierarchy Conflicts",
+            f"{pct_hier_conf:.1f}%",
+            delta=(
+                f"+{pct_hier_conf:.1f}%"  # low = good for this one
+                if pct_hier_conf < 5 else f"-{pct_hier_conf:.1f}%"
+            ),
+            help="% of child accounts with a different territory to their parent",
+        )
+
+        _overall = (pct_terr + pct_billing + pct_aligned + max(0, 100 - pct_hier_conf * 5)) / 4
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        st.caption(
+            f"This report is based on **{n_total:,}** accounts as of {ts}. "
+            f"Data confidence score: **{_overall:.0f}%**."
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 2 — TERRITORY SIZING COMPARISON
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("🗺️ Section 2 — Territory Sizing Comparison", expanded=True):
+        # Build per-territory summary
+        _df_terr = df[df["_territory_label"].isin(_real_terrs)].copy()
+
+        # ICP buckets (quartile-based)
+        _icp_vals = _df_terr["Clay_ICP_Score__c"].dropna()
+        if len(_icp_vals) >= 4:
+            _q25, _q50, _q75 = _icp_vals.quantile([0.25, 0.50, 0.75])
+        else:
+            _q25, _q50, _q75 = 0, 0, 0
+
+        def _icp_bucket(v):
+            if pd.isna(v):
+                return "Unscored"
+            if v >= _q75:
+                return "High ICP"
+            if v >= _q50:
+                return "Medium ICP"
+            if v >= _q25:
+                return "Low ICP"
+            return "Unscored"
+
+        _df_terr["_icp_bucket"] = _df_terr["Clay_ICP_Score__c"].apply(_icp_bucket)
+
+        _terr_summary = (
+            _df_terr.groupby("_territory_label")
+            .agg(
+                Accounts        = ("Id",              "count"),
+                Total_Employees = ("NumberOfEmployees", lambda x: int(x.fillna(0).sum())),
+                High_ICP        = ("_icp_bucket",     lambda x: (x == "High ICP").sum()),
+                Open_Opps       = ("open_opp_count",  "sum"),
+            )
+            .reset_index()
+            .rename(columns={"_territory_label": "Territory"})
+        )
+        _terr_summary["Pct_Worked"] = (
+            _df_terr[_df_terr["had_activity"]].groupby("_territory_label")["Id"].count()
+            .reindex(_terr_summary["Territory"])
+            .fillna(0)
+            .values
+            / _terr_summary["Accounts"].clip(lower=1)
+            * 100
+        ).round(1)
+
+        _c1, _c2, _c3 = st.columns(3)
+
+        with _c1:
+            _fig_a = px.bar(
+                _terr_summary,
+                x="Territory", y="Accounts",
+                color="Territory",
+                color_discrete_map=TERRITORY_COLOURS,
+                title="Accounts per Territory",
+                labels={"Accounts": "Account Count"},
+            )
+            _fig_a.update_layout(showlegend=False, margin=dict(t=40, b=0))
+            st.plotly_chart(_fig_a, width='stretch')
+
+        with _c2:
+            _fig_b = px.bar(
+                _terr_summary,
+                x="Territory", y="Total_Employees",
+                color="Territory",
+                color_discrete_map=TERRITORY_COLOURS,
+                title="Total Employees (Market Size)",
+                labels={"Total_Employees": "Total Employees"},
+            )
+            _fig_b.update_layout(showlegend=False, margin=dict(t=40, b=0))
+            st.plotly_chart(_fig_b, width='stretch')
+
+        with _c3:
+            # Stacked bar: ICP buckets per territory
+            _icp_pivot = (
+                _df_terr.groupby(["_territory_label", "_icp_bucket"])["Id"]
+                .count()
+                .reset_index()
+                .rename(columns={"_territory_label": "Territory", "Id": "Count"})
+            )
+            _icp_order = ["High ICP", "Medium ICP", "Low ICP", "Unscored"]
+            _icp_colours = {
+                "High ICP":   "#2ECC71",
+                "Medium ICP": "#F39C12",
+                "Low ICP":    "#E74C3C",
+                "Unscored":   "#95A5A6",
+            }
+            _fig_c = px.bar(
+                _icp_pivot,
+                x="Territory", y="Count",
+                color="_icp_bucket",
+                color_discrete_map=_icp_colours,
+                category_orders={"_icp_bucket": _icp_order},
+                title="ICP Score Distribution",
+                labels={"_icp_bucket": "ICP Tier", "Count": "Accounts"},
+            )
+            _fig_c.update_layout(margin=dict(t=40, b=0))
+            st.plotly_chart(_fig_c, width='stretch')
+
+        # Summary table
+        _summary_display = _terr_summary.rename(columns={
+            "Total_Employees": "Total Employees",
+            "High_ICP":        "High ICP",
+            "Open_Opps":       "Open Opps",
+            "Pct_Worked":      f"% Worked ({_used_lookback}d)",
+        })
+        st.dataframe(_summary_display, width='stretch', hide_index=True)
+        st.download_button(
+            "⬇️ Export sizing data",
+            data=_summary_display.to_csv(index=False).encode("utf-8"),
+            file_name="exec_territory_sizing.csv",
+            mime="text/csv",
+            key="exec_dl_sizing",
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 3 — COVERAGE GAPS
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("🚨 Section 3 — Coverage Gaps", expanded=True):
+
+        # Panel A — Unassigned accounts
+        _unassigned = df[df["_territory_label"] == ""].copy()
+        _n_unassigned = len(_unassigned)
+        _badge_a = "🔴" if _n_unassigned > 0 else "✅"
+        with st.expander(f"{_badge_a} Unassigned accounts ({_n_unassigned:,})", expanded=(_n_unassigned > 0)):
+            if not _unassigned.empty:
+                _ua_cols = ["Name", "Type", "BillingState", "Owner.Name", "Parent.Territory__c"]
+                _ua_disp = _unassigned[[c for c in _ua_cols if c in _unassigned.columns]].rename(
+                    columns={"Owner.Name": "Owner", "Parent.Territory__c": "Parent Territory"}
+                )
+                st.dataframe(_ua_disp, width='stretch', hide_index=True)
+                st.download_button(
+                    "⬇️ Export unassigned",
+                    data=_ua_disp.to_csv(index=False).encode("utf-8"),
+                    file_name="exec_unassigned_accounts.csv",
+                    mime="text/csv",
+                    key="exec_dl_unassigned",
+                )
+            else:
+                st.success("No unassigned accounts — full territory coverage.")
+
+        # Panel B — Queue-owned accounts
+        _queue_mask  = df["Owner.Name"].fillna("").str.lower() == "axonify"
+        _queue_owned = df[_queue_mask].copy()
+        _n_queue     = len(_queue_owned)
+        _badge_b     = "🟡" if _n_queue > 0 else "✅"
+        with st.expander(f"{_badge_b} Queue-owned accounts ({_n_queue:,})", expanded=(_n_queue > 0)):
+            if not _queue_owned.empty:
+                _q_cols = ["Name", "_territory_label", "Type", "BillingState"]
+                _q_disp = _queue_owned[[c for c in _q_cols if c in _queue_owned.columns]].rename(
+                    columns={"_territory_label": "Territory"}
+                )
+                st.dataframe(_q_disp, width='stretch', hide_index=True)
+                st.download_button(
+                    "⬇️ Export queue-owned",
+                    data=_q_disp.to_csv(index=False).encode("utf-8"),
+                    file_name="exec_queue_owned_accounts.csv",
+                    mime="text/csv",
+                    key="exec_dl_queue",
+                )
+            else:
+                st.success("No queue-owned accounts.")
+
+        # Panel C — Hierarchy conflicts
+        _hconf = df[_child_mask].copy()
+        _n_hconf = len(_hconf)
+        _badge_c = "🟡" if _n_hconf > 0 else "✅"
+        with st.expander(f"{_badge_c} Hierarchy conflicts ({_n_hconf:,})", expanded=(_n_hconf > 0)):
+            if not _hconf.empty:
+                _hc_cols = ["Name", "_territory_label", "Parent.Name", "Parent.Territory__c"]
+                _hc_disp = _hconf[[c for c in _hc_cols if c in _hconf.columns]].rename(columns={
+                    "_territory_label":    "Own Territory",
+                    "Parent.Name":         "Parent Name",
+                    "Parent.Territory__c": "Parent Territory",
+                })
+                st.dataframe(_hc_disp, width='stretch', hide_index=True)
+                st.download_button(
+                    "⬇️ Export hierarchy conflicts",
+                    data=_hc_disp.to_csv(index=False).encode("utf-8"),
+                    file_name="exec_hierarchy_conflicts.csv",
+                    mime="text/csv",
+                    key="exec_dl_hconf",
+                )
+            else:
+                st.success("No hierarchy conflicts found.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 4 — REP ACTIVITY VS TERRITORY
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander(f"👤 Section 4 — Rep Activity vs Territory ({_used_lookback}d)", expanded=True):
+        _active_terrs = sorted(_real_terrs)
+        _df_reps = df[
+            df["_territory_label"].isin(_real_terrs) &
+            df["Owner.Name"].notna() &
+            df["Owner.Name"].ne("Axonify")
+        ].copy()
+
+        if not _df_reps.empty:
+            # Build rep × territory pivot: % of accounts touched
+            _rep_terr = (
+                _df_reps.groupby(["Owner.Name", "_territory_label"])
+                .agg(total=("Id", "count"), worked=("had_activity", "sum"))
+                .reset_index()
+            )
+            _rep_terr["pct_worked"] = (_rep_terr["worked"] / _rep_terr["total"].clip(lower=1) * 100).round(1)
+
+            _pivot = _rep_terr.pivot(
+                index="Owner.Name",
+                columns="_territory_label",
+                values="pct_worked",
+            ).reindex(columns=_active_terrs)
+
+            # Format cells
+            def _fmt_cell(v):
+                if pd.isna(v):
+                    return "—"
+                return f"{v:.0f}%"
+
+            _pivot_display = _pivot.map(_fmt_cell)
+            _pivot_display.index.name = "Rep"
+
+            # Colour map via Plotly heatmap
+            _pivot_numeric = _pivot.fillna(-1)
+            _fig_heat = go.Figure(
+                data=go.Heatmap(
+                    z=_pivot_numeric.values,
+                    x=_pivot_numeric.columns.tolist(),
+                    y=_pivot_numeric.index.tolist(),
+                    text=_pivot_display.values,
+                    texttemplate="%{text}",
+                    colorscale=[
+                        [0,    "#2C3E50"],   # -1 = no accounts (dark)
+                        [0.01, "#E74C3C"],   # near-0 = red
+                        [0.25, "#F39C12"],   # 25% = amber
+                        [0.75, "#2ECC71"],   # 75%+ = green
+                        [1,    "#1A8A4A"],
+                    ],
+                    zmin=-1, zmax=100,
+                    showscale=False,
+                )
+            )
+            _fig_heat.update_layout(
+                title=f"% Accounts Worked — Last {_used_lookback} Days",
+                margin=dict(t=50, b=0),
+                xaxis_title="Territory",
+                yaxis_title="Rep",
+            )
+            st.plotly_chart(_fig_heat, width='stretch')
+            st.download_button(
+                "⬇️ Export activity heatmap",
+                data=_pivot_display.reset_index().to_csv(index=False).encode("utf-8"),
+                file_name="exec_rep_activity_heatmap.csv",
+                mime="text/csv",
+                key="exec_dl_heatmap",
+            )
+        else:
+            st.info("No rep/territory data available.")
+
+        # Top 10 unworked high-ICP accounts
+        st.markdown(f"#### Top 10 Unworked High-ICP Accounts (no activity in last {_used_lookback}d)")
+        _unworked_icp = (
+            df[
+                ~df["had_activity"] &
+                df["Clay_ICP_Score__c"].notna() &
+                df["_territory_label"].isin(_real_terrs)
+            ]
+            .sort_values("Clay_ICP_Score__c", ascending=False)
+            .head(10)
+        )
+        if not _unworked_icp.empty:
+            _ui_cols = ["Name", "_territory_label", "Clay_ICP_Score__c", "Type", "Owner.Name"]
+            _ui_disp = _unworked_icp[[c for c in _ui_cols if c in _unworked_icp.columns]].rename(columns={
+                "_territory_label":  "Territory",
+                "Clay_ICP_Score__c": "ICP Score",
+                "Owner.Name":        "Owner",
+            })
+            st.dataframe(_ui_disp, width='stretch', hide_index=True)
+            st.download_button(
+                "⬇️ Export unworked high-ICP",
+                data=_ui_disp.to_csv(index=False).encode("utf-8"),
+                file_name="exec_unworked_high_icp.csv",
+                mime="text/csv",
+                key="exec_dl_unworked",
+            )
+        else:
+            st.info("No unworked accounts with ICP scores found.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 5 — TERRITORY CHANGE LOG
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📋 Section 5 — Territory Change Log", expanded=False):
+        st.caption(
+            "Pulls from AccountHistory — requires Territory__c field history "
+            "tracking to be enabled in Salesforce."
+        )
+        if st.button("Load Change Log", key="exec_load_changelog"):
+            sf = get_sf_connection()
+            try:
+                _hist_recs = sf.query_all(
+                    f"SELECT AccountId, Account.Name, Field, OldValue, NewValue, "
+                    f"CreatedDate, CreatedBy.Name "
+                    f"FROM AccountHistory "
+                    f"WHERE Field = 'Territory__c' "
+                    f"AND CreatedDate = LAST_N_DAYS:{_used_lookback} "
+                    f"ORDER BY CreatedDate DESC "
+                    f"LIMIT 1000"
+                ).get("records", [])
+
+                if not _hist_recs:
+                    st.info(
+                        "No territory change history found. This either means no Territory__c "
+                        "changes were made in the selected period, or field history tracking "
+                        "is not enabled.\n\n"
+                        "**To enable:** Setup → Object Manager → Account → "
+                        "Fields & Relationships → Territory__c → Set History Tracking."
+                    )
+                else:
+                    _hist_rows = []
+                    for _hr in _hist_recs:
+                        _acc = _hr.get("Account") or {}
+                        _by  = _hr.get("CreatedBy") or {}
+                        _hist_rows.append({
+                            "Account Name":   _acc.get("Name", _hr.get("AccountId", "")),
+                            "Old Territory":  _hr.get("OldValue", ""),
+                            "New Territory":  _hr.get("NewValue", ""),
+                            "Changed By":     _by.get("Name", ""),
+                            "Date":           str(_hr.get("CreatedDate", ""))[:10],
+                        })
+                    _hist_df = pd.DataFrame(_hist_rows)
+                    st.dataframe(_hist_df, width='stretch', hide_index=True)
+                    st.download_button(
+                        "⬇️ Export change log",
+                        data=_hist_df.to_csv(index=False).encode("utf-8"),
+                        file_name="exec_territory_change_log.csv",
+                        mime="text/csv",
+                        key="exec_dl_changelog",
+                    )
+            except Exception as _ex:
+                if "AccountHistory" in str(_ex) or "INVALID_TYPE" in str(_ex):
+                    st.info(
+                        "AccountHistory is not available or Territory__c history tracking "
+                        "is not enabled.\n\n"
+                        "**To enable:** Setup → Object Manager → Account → "
+                        "Fields & Relationships → Territory__c → Set History Tracking."
+                    )
+                else:
+                    st.error(f"Error loading change log: {_ex}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 6 — WHITESPACE (HIGHEST POTENTIAL UNTOUCHED ACCOUNTS)
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("🌟 Section 6 — Whitespace: Highest Potential Untouched Accounts", expanded=True):
+        st.caption(
+            f"Prospects and Prospect Logos with above-median ICP score "
+            f"and no activity in the last {_used_lookback} days."
+        )
+
+        _terr_filter_ws = st.selectbox(
+            "Filter by territory",
+            ["All Territories"] + sorted(_real_terrs),
+            key="exec_ws_terr_filter",
+        )
+
+        _ws_mask = (
+            df["Type"].isin(["Prospect", "Prospect Logo"]) &
+            ~df["had_activity"] &
+            df["_territory_label"].isin(_real_terrs)
+        )
+        _ws_df = df[_ws_mask].copy()
+
+        # Filter to above-median ICP
+        _org_median_icp = df["Clay_ICP_Score__c"].dropna().median()
+        if not pd.isna(_org_median_icp):
+            _ws_df = _ws_df[_ws_df["Clay_ICP_Score__c"].fillna(0) >= _org_median_icp]
+
+        # Territory filter
+        if _terr_filter_ws != "All Territories":
+            _ws_df = _ws_df[_ws_df["_territory_label"] == _terr_filter_ws]
+
+        _ws_df = _ws_df.sort_values("Clay_ICP_Score__c", ascending=False)
+
+        if not _ws_df.empty:
+            _ws_cols = [
+                "Name", "_territory_label", "Clay_ICP_Score__c",
+                "NumberOfEmployees", "Parent.Name", "Owner.Name",
+            ]
+            _ws_disp = _ws_df[[c for c in _ws_cols if c in _ws_df.columns]].rename(columns={
+                "_territory_label":  "Territory",
+                "Clay_ICP_Score__c": "ICP Score",
+                "NumberOfEmployees": "Employees",
+                "Parent.Name":       "Parent",
+                "Owner.Name":        "Owner",
+            })
+            st.metric("Whitespace accounts shown", len(_ws_disp))
+            st.dataframe(
+                _ws_disp,
+                width='stretch',
+                hide_index=True,
+                column_config={
+                    "ICP Score": st.column_config.NumberColumn("ICP Score", format="%.1f"),
+                    "Employees": st.column_config.NumberColumn("Employees", format="%d"),
+                },
+            )
+            st.download_button(
+                "⬇️ Export whitespace list",
+                data=_ws_disp.to_csv(index=False).encode("utf-8"),
+                file_name=f"exec_whitespace_{_terr_filter_ws.replace(' ', '_').lower()}.csv",
+                mime="text/csv",
+                key="exec_dl_whitespace",
+            )
+        else:
+            st.info(
+                "No whitespace accounts found for the selected territory and criteria. "
+                "This may mean all high-ICP prospects have recent activity — great news!"
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUB-TAB 7: TERRITORY EDITOR  (Tool A)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_territory_editor_subtab():
+    """
+    Tool A — Territory Editor.
+
+    Left panel  : territory list (add / delete territories).
+    Centre panel: data editor — assign states/countries to a selected territory.
+    Right panel : live map preview (count per territory from TERRITORY_MAP).
+
+    Save Map button writes territory_definitions.json and rebuilds
+    STATE_TO_TERRITORY.  An impact preview (SOQL + reclassification) is then
+    shown so the user can see which live accounts would be affected before
+    running Territory Sync.
+    """
+    dry_run_mode = st.session_state.get("dry_run_mode", True)
+
+    st.subheader("Territory Editor")
+    st.markdown(
+        "Edit the territory map — add or remove territories, reassign states/provinces/countries. "
+        "**Save Map** commits changes to `territory_definitions.json` and rebuilds the lookup table."
+    )
+
+    # ── Session state ─────────────────────────────────────────────────────────
+    if "te_map_draft" not in st.session_state:
+        st.session_state.te_map_draft = {
+            t: list(states) for t, states in TERRITORY_MAP.items()
+        }
+    if "te_selected_territory" not in st.session_state:
+        st.session_state.te_selected_territory = list(TERRITORY_MAP.keys())[0] if TERRITORY_MAP else ""
+    if "te_impact_df" not in st.session_state:
+        st.session_state.te_impact_df = None
+    if "te_save_done" not in st.session_state:
+        st.session_state.te_save_done = False
+
+    draft: dict = st.session_state.te_map_draft
+
+    # ── Three-panel layout ────────────────────────────────────────────────────
+    col_terr, col_edit, col_preview = st.columns([2, 4, 3])
+
+    # ─ Left panel: territory list ─────────────────────────────────────────────
+    with col_terr:
+        st.markdown("#### Territories")
+        for terr_name in list(draft.keys()):
+            colour = TERRITORY_COLOURS.get(terr_name, "#555")
+            badge  = (
+                f'<span style="background:{colour};color:#fff;padding:2px 8px;'
+                f'border-radius:4px;font-size:0.8em">{terr_name}</span>'
+            )
+            t_col, del_col = st.columns([4, 1])
+            with t_col:
+                if st.button(
+                    terr_name,
+                    key=f"te_sel_{terr_name}",
+                    width='stretch',
+                    type=(
+                        "primary"
+                        if st.session_state.te_selected_territory == terr_name
+                        else "secondary"
+                    ),
+                ):
+                    st.session_state.te_selected_territory = terr_name
+                    st.session_state.te_impact_df = None
+                    st.rerun()
+            with del_col:
+                if st.button("✕", key=f"te_del_{terr_name}", help=f"Remove {terr_name}"):
+                    del draft[terr_name]
+                    if st.session_state.te_selected_territory == terr_name:
+                        st.session_state.te_selected_territory = (
+                            list(draft.keys())[0] if draft else ""
+                        )
+                    st.session_state.te_impact_df = None
+                    st.rerun()
+
+        st.markdown("---")
+        new_terr = st.text_input(
+            "New territory name", key="te_new_terr_name", placeholder="e.g. Territory 5"
+        )
+        if st.button("Add Territory", key="te_add_terr"):
+            _nt = (new_terr or "").strip()
+            if _nt and _nt not in draft:
+                draft[_nt] = []
+                st.session_state.te_selected_territory = _nt
+                st.rerun()
+            elif _nt in draft:
+                st.warning("That territory already exists.")
+            else:
+                st.warning("Enter a territory name first.")
+
+    # ─ Centre panel: state/country data editor ───────────────────────────────
+    with col_edit:
+        sel_terr = st.session_state.te_selected_territory
+        if not sel_terr or sel_terr not in draft:
+            st.info("Select a territory on the left to edit its regions.")
+        else:
+            st.markdown(f"#### Regions in **{sel_terr}**")
+            _current_regions = sorted(draft.get(sel_terr, []))
+            _edit_df = pd.DataFrame({"State / Province / Country": _current_regions})
+            _edited = st.data_editor(
+                _edit_df,
+                num_rows="dynamic",
+                width='stretch',
+                key=f"te_editor_{sel_terr}",
+                column_config={
+                    "State / Province / Country": st.column_config.TextColumn(
+                        "State / Province / Country",
+                        help="Full name as it appears in Salesforce BillingState or BillingCountry.",
+                    )
+                },
+            )
+            # Sync edits back into draft
+            _new_regions = [
+                r.strip()
+                for r in _edited["State / Province / Country"].dropna().tolist()
+                if str(r).strip()
+            ]
+            draft[sel_terr] = _new_regions
+
+            # Validate: flag any region assigned to more than one territory
+            _all_assigned: dict[str, list[str]] = {}
+            for _t, _ss in draft.items():
+                for _s in _ss:
+                    _all_assigned.setdefault(_s.lower().strip(), []).append(_t)
+            _conflicts = {
+                s: ts for s, ts in _all_assigned.items() if len(ts) > 1
+            }
+            if _conflicts:
+                st.error(
+                    "⚠️ **Conflicts detected** — the following regions appear in more than one territory:\n"
+                    + "\n".join(f"- `{s}` → {', '.join(ts)}" for s, ts in _conflicts.items())
+                )
+
+    # ─ Right panel: live map preview ─────────────────────────────────────────
+    with col_preview:
+        st.markdown("#### Map Preview")
+        for _t, _ss in draft.items():
+            _c = TERRITORY_COLOURS.get(_t, "#555")
+            st.markdown(
+                f'<span style="background:{_c};color:#fff;padding:2px 8px;'
+                f'border-radius:4px;font-size:0.8em">{_t}</span> '
+                f'**{len(_ss):,} region{"s" if len(_ss) != 1 else ""}**',
+                unsafe_allow_html=True,
+            )
+            if _ss:
+                st.caption(", ".join(sorted(_ss)[:10]) + ("…" if len(_ss) > 10 else ""))
+
+    # ── Save Map button ───────────────────────────────────────────────────────
+    st.markdown("---")
+    save_col, impact_col = st.columns([2, 5])
+    with save_col:
+        _has_conflicts = bool(_conflicts) if "col_edit" in dir() else False
+        if st.button(
+            "💾 Save Map",
+            type="primary",
+            key="te_save_map",
+            disabled=bool(_conflicts) if sel_terr and sel_terr in draft else False,
+        ):
+            _save_territory_map(dict(draft))
+            # Also refresh TERRITORY_COLOURS for any new territories
+            _cycle = 0
+            for _tn in TERRITORY_MAP:
+                if _tn not in TERRITORY_COLOURS:
+                    TERRITORY_COLOURS[_tn] = _TERRITORY_COLOUR_CYCLE[
+                        _cycle % len(_TERRITORY_COLOUR_CYCLE)
+                    ]
+                    _cycle += 1
+            st.session_state.te_save_done = True
+            st.session_state.te_impact_df = None
+            st.success("✅ Territory map saved and lookup table rebuilt.")
+
+    # ── Impact Preview (post-save) ────────────────────────────────────────────
+    if st.session_state.te_save_done:
+        st.markdown("---")
+        st.markdown("### Impact Preview")
+        st.info(
+            "The map has been saved. Use **Territory Sync** (next tab) to push "
+            "the updated territory assignments to Salesforce accounts."
+        )
+        with st.expander("📋 Current territory assignments in territory_definitions.json"):
+            for _t, _ss in TERRITORY_MAP.items():
+                _c = TERRITORY_COLOURS.get(_t, "#555")
+                st.markdown(
+                    f'<span style="background:{_c};color:#fff;padding:2px 8px;'
+                    f'border-radius:4px">{_t}</span> '
+                    f'({len(_ss)} regions): {", ".join(sorted(_ss))}',
+                    unsafe_allow_html=True,
+                )
+
+        if st.button("Run Live Impact Preview", key="te_run_impact"):
+            sf = get_sf_connection()
+            if sf is None:
+                st.error("Not connected to Salesforce.")
+                st.stop()
+
+            _impact_status = st.empty()
+            _impact_status.caption("⏳ Fetching accounts from Salesforce…")
+
+            try:
+                _IMPACT_FIELDS = (
+                    "Id, Name, BillingState, BillingCountry, Territory__c, Type, "
+                    "Owner.Name"
+                )
+                _impact_recs = sf.query_all(
+                    f"SELECT {_IMPACT_FIELDS} FROM Account "
+                    f"WHERE IsDeleted = false "
+                    f"AND Type IN ({', '.join(chr(39)+t.replace(chr(39), chr(92)+chr(39))+chr(39) for t in WORKABLE_TYPES)}) "
+                    f"ORDER BY Name"
+                ).get("records", [])
+                _impact_status.empty()
+
+                _rows = []
+                for _r in _impact_recs:
+                    _state   = _r.get("BillingState")   or ""
+                    _country = _r.get("BillingCountry") or ""
+                    _is_eur  = False
+                    _loc     = _state or _country
+                    if _country:
+                        _is_eur = classify_state(_country) == "Europe 1"
+                        if _is_eur:
+                            _loc = _country
+                    _new_terr = classify_state(_loc)
+                    _old_terr = _r.get("Territory__c") or ""
+                    _mismatch = _new_terr not in ("No State/Province", "Unclassified", "Italy - Excluded") and _new_terr != _old_terr
+                    _rows.append({
+                        "Account Name":    _r.get("Name", ""),
+                        "Type":            _r.get("Type", ""),
+                        "Billing State":   _state,
+                        "Billing Country": _country,
+                        "Current Terr.":   _old_terr,
+                        "New Terr.":       _new_terr,
+                        "Would Change":    "Yes" if _mismatch else "No",
+                    })
+
+                _impact_df = pd.DataFrame(_rows)
+                st.session_state.te_impact_df = _impact_df
+
+            except Exception as _ex:
+                _impact_status.empty()
+                st.error(f"Impact preview failed: {_ex}")
+
+        if st.session_state.te_impact_df is not None:
+            _idf = st.session_state.te_impact_df
+            _n_change = int((_idf["Would Change"] == "Yes").sum())
+            st.metric("Accounts that would change territory", _n_change, delta=None)
+            _idf_display = _idf[_idf["Would Change"] == "Yes"] if _n_change else _idf.head(0)
+            if not _idf_display.empty:
+                st.dataframe(
+                    _idf_display,
+                    width='stretch',
+                    hide_index=True,
+                    column_config={
+                        "Would Change": st.column_config.TextColumn("Would Change", disabled=True),
+                        "New Terr.":    st.column_config.TextColumn("New Territory",  disabled=True),
+                        "Current Terr.": st.column_config.TextColumn("Current Territory", disabled=True),
+                    },
+                )
+                st.caption(
+                    "Use the **Territory Sync** tab to apply these changes to Salesforce."
+                )
+            else:
+                st.success("No accounts would change territory — the map is already aligned.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SUB-TAB 8: TERRITORY SYNC  (Tool B)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_territory_sync_subtab():
+    """
+    Tool B — Territory Sync.
+
+    Classifies every workable account's billing location against the current
+    TERRITORY_MAP, compares with the live Territory__c value, and optionally
+    pushes corrections back to Salesforce.
+
+    Steps:
+        1  Configure  — scope radio + type multiselect + dry-run toggle
+        2  Preview    — classify, walk hierarchy, show results table
+        3  Exceptions — three expandable panels (ready / conflicts / manual)
+        4  Execute    — dry run or live update with backup
+    """
+    dry_run_mode = st.session_state.get("dry_run_mode", True)
+    auto_backup  = st.session_state.get("auto_backup",  True)
+
+    # ── Session state ─────────────────────────────────────────────────────────
+    _ts_defaults = {
+        "ts_step":          1,
+        "ts_scope":         "fill_and_fix",   # fill_nulls | fix_mismatches | fill_and_fix
+        "ts_type_filter":   None,
+        "ts_ready_df":      None,
+        "ts_conflicts_df":  None,
+        "ts_manual_df":     None,
+        "ts_result":        None,
+    }
+    for _k, _v in _ts_defaults.items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
+
+    st.subheader("Territory Sync")
+
+    st.error(
+        "**This tool updates the `Territory__c` field only.** "
+        "It does **not** change account ownership (AE/BDR assignments). "
+        "To reassign account owners, use the **Reassign** tab.",
+        icon="⚠️",
+    )
+
+    # ── Step indicator ────────────────────────────────────────────────────────
+    _step_labels = ["Configure", "Preview & Classify", "Exceptions", "Execute"]
+    _cur_step    = st.session_state.ts_step
+    _step_cols   = st.columns(len(_step_labels))
+    for _si, _sl in enumerate(_step_labels, start=1):
+        with _step_cols[_si - 1]:
+            if _si == _cur_step:
+                st.markdown(f"**{_si}. {_sl}** ◀")
+            elif _si < _cur_step:
+                st.markdown(f"~~{_si}. {_sl}~~")
+            else:
+                st.markdown(f"{_si}. {_sl}")
+    st.divider()
+
+    # ══ STEP 1: Configure ════════════════════════════════════════════════════
+    if _cur_step == 1:
+        st.markdown("#### Step 1 — Configure")
+
+        st.markdown("**Scope**")
+        _scope = st.radio(
+            "Scope",
+            options=["fill_nulls", "fix_mismatches", "fill_and_fix"],
+            format_func={
+                "fill_nulls":      "Fill nulls only — set Territory__c where it is blank",
+                "fix_mismatches":  "Fix mismatches only — correct Territory__c where billing location disagrees",
+                "fill_and_fix":    "Fill nulls AND fix mismatches (recommended)",
+            }.get,
+            index=["fill_nulls", "fix_mismatches", "fill_and_fix"].index(
+                st.session_state.ts_scope
+            ),
+            key="ts_scope_radio",
+            label_visibility="collapsed",
+        )
+        st.session_state.ts_scope = _scope
+
+        st.markdown("---")
+        st.markdown("**Account Types to Include**")
+        _type_default = st.session_state.ts_type_filter or WORKABLE_TYPES
+        _sel_types = st.multiselect(
+            "Account Types",
+            options=WORKABLE_TYPES,
+            default=_type_default,
+            key="ts_type_multiselect",
+            label_visibility="collapsed",
+        )
+        if not _sel_types:
+            st.warning("Select at least one account type.")
+
+        st.markdown("---")
+        st.markdown(
+            f"**Dry Run mode is {'ON ✅' if dry_run_mode else 'OFF ⚠️'}** "
+            f"— toggle in the sidebar."
+        )
+
+        if st.button(
+            "Next: Classify Accounts →",
+            type="primary",
+            key="ts_next_1",
+            disabled=not _sel_types,
+        ):
+            st.session_state.ts_type_filter  = _sel_types
+            st.session_state.ts_step         = 2
+            st.session_state.ts_ready_df     = None
+            st.session_state.ts_conflicts_df = None
+            st.session_state.ts_manual_df    = None
+            st.session_state.ts_result       = None
+            st.rerun()
+
+    # ══ STEP 2: Preview & Classify ═══════════════════════════════════════════
+    elif _cur_step == 2:
+        st.markdown("#### Step 2 — Preview & Classify")
+
+        # Only run if we haven't yet
+        if st.session_state.ts_ready_df is None:
+            sf = get_sf_connection()
+            if sf is None:
+                st.error("Not connected to Salesforce.")
+                if st.button("← Back", key="ts_back_2_err"):
+                    st.session_state.ts_step = 1
+                    st.rerun()
+                st.stop()
+
+            _scope       = st.session_state.ts_scope
+            _sel_types   = st.session_state.ts_type_filter or WORKABLE_TYPES
+            _type_clause = ", ".join(f"'{t.replace(chr(39), chr(92)+chr(39))}'" for t in _sel_types)
+
+            _classify_status = st.empty()
+            _classify_status.caption("⏳ Fetching accounts from Salesforce…")
+
+            try:
+                _FIELDS = (
+                    "Id, Name, BillingState, BillingCountry, Territory__c, Type, "
+                    "OwnerId, Owner.Name, ParentId"
+                )
+                _recs = sf.query_all(
+                    f"SELECT {_FIELDS} FROM Account "
+                    f"WHERE IsDeleted = false "
+                    f"AND Type IN ({_type_clause}) "
+                    f"ORDER BY Name"
+                ).get("records", [])
+                _classify_status.caption(
+                    f"⏳ Classifying {len(_recs):,} accounts…"
+                )
+
+                # ── Pass 1: classify own billing location ──────────────────
+                _ready_rows:     list = []
+                _conflict_rows:  list = []
+                _manual_rows:    list = []
+                _no_billing_ids: set  = set()
+
+                for _r in _recs:
+                    _state   = _r.get("BillingState")   or ""
+                    _country = _r.get("BillingCountry") or ""
+                    _cur_t   = _r.get("Territory__c")   or ""
+                    _owner   = (_r.get("Owner") or {}).get("Name", _r.get("OwnerId", ""))
+                    _is_eur  = classify_state(_country) == "Europe 1"
+                    _loc     = _country if _is_eur else (_state or _country)
+
+                    if not _loc.strip():
+                        _no_billing_ids.add(_r["Id"])
+                        continue
+
+                    _new_t = classify_state(_loc)
+
+                    if _new_t in ("No State/Province", "Unclassified", "Italy - Excluded"):
+                        _manual_rows.append({
+                            "Id":              _r["Id"],
+                            "Account Name":    _r.get("Name", ""),
+                            "Type":            _r.get("Type", ""),
+                            "Billing State":   _state,
+                            "Billing Country": _country,
+                            "Current Terr.":   _cur_t,
+                            "Reason":          _new_t,
+                            "Owner":           _owner,
+                        })
+                        continue
+
+                    # Scope filter
+                    _is_null     = not _cur_t.strip()
+                    _is_mismatch = _cur_t.strip() and _cur_t != _new_t
+
+                    if _scope == "fill_nulls" and not _is_null:
+                        continue
+                    if _scope == "fix_mismatches" and not _is_mismatch:
+                        continue
+                    if _scope == "fill_and_fix" and not (_is_null or _is_mismatch):
+                        continue
+
+                    _row = {
+                        "Id":              _r["Id"],
+                        "Account Name":    _r.get("Name", ""),
+                        "Type":            _r.get("Type", ""),
+                        "Billing State":   _state,
+                        "Billing Country": _country,
+                        "Current Terr.":   _cur_t,
+                        "New Terr.":       _new_t,
+                        "Source":          "Own billing address",
+                        "Owner":           _owner,
+                    }
+                    if _cur_t.strip() and _cur_t != _new_t:
+                        _conflict_rows.append(_row)
+                    else:
+                        _ready_rows.append(_row)
+
+                # ── Pass 2: hierarchy walk-up for null-billing accounts ────
+                _walk_cands = [
+                    r for r in _recs
+                    if r["Id"] in _no_billing_ids and r.get("ParentId")
+                ]
+
+                if _walk_cands:
+                    _classify_status.caption(
+                        f"⏳ Walking hierarchies for {len(_walk_cands):,} "
+                        f"accounts with no billing location…"
+                    )
+                    _id_to_record: dict = {r["Id"]: r for r in _recs}
+
+                    # Bulk-prefetch unknown parent IDs
+                    _unk_pids = {
+                        r.get("ParentId")
+                        for r in _walk_cands
+                        if r.get("ParentId") and r.get("ParentId") not in _id_to_record
+                    }
+                    if _unk_pids:
+                        _CHUNK = 200
+                        _pid_list = list(_unk_pids)
+                        for _ci in range(0, len(_pid_list), _CHUNK):
+                            _chunk = _pid_list[_ci: _ci + _CHUNK]
+                            _ids_str = ", ".join(f"'{x}'" for x in _chunk)
+                            _pres = sf.query_all(
+                                f"SELECT Id, Name, ParentId, Territory__c, "
+                                f"BillingState, BillingCountry "
+                                f"FROM Account WHERE Id IN ({_ids_str})"
+                            )
+                            for _pr in _pres.get("records", []):
+                                _id_to_record[_pr["Id"]] = _pr
+
+                    _walk_bar = st.progress(0, text="Walking hierarchies… 0/%s" % f"{len(_walk_cands):,}")
+                    for _wi, _r in enumerate(_walk_cands):
+                        _walk_bar.progress(
+                            (_wi + 1) / len(_walk_cands),
+                            text=f"Walking hierarchies… {_wi + 1:,}/{len(_walk_cands):,}",
+                        )
+                        _inh_terr, _anc_state, _anc_country = _walk_hierarchy_for_territory(
+                            sf, _r.get("ParentId") or "", _id_to_record
+                        )
+                        _cur_t  = _r.get("Territory__c") or ""
+                        _owner  = (_r.get("Owner") or {}).get("Name", _r.get("OwnerId", ""))
+
+                        if _inh_terr:
+                            _new_t  = _inh_terr
+                            _source = f"Inherited territory from ancestor: {_inh_terr}"
+                        elif _anc_state or _anc_country:
+                            _is_eur = classify_state(_anc_country) == "Europe 1"
+                            _loc2   = _anc_country if _is_eur else (_anc_state or _anc_country)
+                            _new_t  = classify_state(_loc2)
+                            _source = f"Derived from ancestor billing: {_anc_state or _anc_country}"
+                        else:
+                            _manual_rows.append({
+                                "Id":              _r["Id"],
+                                "Account Name":    _r.get("Name", ""),
+                                "Type":            _r.get("Type", ""),
+                                "Billing State":   "",
+                                "Billing Country": "",
+                                "Current Terr.":   _cur_t,
+                                "Reason":          "No billing location found in hierarchy",
+                                "Owner":           _owner,
+                            })
+                            continue
+
+                        if _new_t in ("No State/Province", "Unclassified", "Italy - Excluded"):
+                            _manual_rows.append({
+                                "Id":              _r["Id"],
+                                "Account Name":    _r.get("Name", ""),
+                                "Type":            _r.get("Type", ""),
+                                "Billing State":   "",
+                                "Billing Country": "",
+                                "Current Terr.":   _cur_t,
+                                "Reason":          _new_t,
+                                "Owner":           _owner,
+                            })
+                            continue
+
+                        _is_null     = not _cur_t.strip()
+                        _is_mismatch = _cur_t.strip() and _cur_t != _new_t
+
+                        if _scope == "fill_nulls" and not _is_null:
+                            continue
+                        if _scope == "fix_mismatches" and not _is_mismatch:
+                            continue
+                        if _scope == "fill_and_fix" and not (_is_null or _is_mismatch):
+                            continue
+
+                        _row = {
+                            "Id":              _r["Id"],
+                            "Account Name":    _r.get("Name", ""),
+                            "Type":            _r.get("Type", ""),
+                            "Billing State":   "",
+                            "Billing Country": "",
+                            "Current Terr.":   _cur_t,
+                            "New Terr.":       _new_t,
+                            "Source":          _source,
+                            "Owner":           _owner,
+                        }
+                        if _cur_t.strip() and _cur_t != _new_t:
+                            _conflict_rows.append(_row)
+                        else:
+                            _ready_rows.append(_row)
+
+                    _walk_bar.empty()
+
+                # ── Pass 3: remaining null-billing with no parent ──────────
+                _still_manual = {
+                    r["Id"] for r in _recs
+                    if r["Id"] in _no_billing_ids and not r.get("ParentId")
+                    and r["Id"] not in {x["Id"] for x in _ready_rows + _conflict_rows + _manual_rows}
+                }
+                for _r in _recs:
+                    if _r["Id"] in _still_manual:
+                        _owner = (_r.get("Owner") or {}).get("Name", _r.get("OwnerId", ""))
+                        _manual_rows.append({
+                            "Id":              _r["Id"],
+                            "Account Name":    _r.get("Name", ""),
+                            "Type":            _r.get("Type", ""),
+                            "Billing State":   "",
+                            "Billing Country": "",
+                            "Current Terr.":   _r.get("Territory__c") or "",
+                            "Reason":          "No billing location and no parent",
+                            "Owner":           _owner,
+                        })
+
+                _classify_status.empty()
+
+                st.session_state.ts_ready_df    = pd.DataFrame(_ready_rows)
+                st.session_state.ts_conflicts_df = pd.DataFrame(_conflict_rows)
+                st.session_state.ts_manual_df   = pd.DataFrame(_manual_rows)
+
+            except Exception as _ex:
+                _classify_status.empty()
+                st.error(f"Classification failed: {_ex}")
+                if st.button("← Back", key="ts_back_2_ex"):
+                    st.session_state.ts_step = 1
+                    st.rerun()
+                st.stop()
+
+        # ── Show summary metrics ──────────────────────────────────────────────
+        _rdf  = st.session_state.ts_ready_df
+        _cdf  = st.session_state.ts_conflicts_df
+        _mdf  = st.session_state.ts_manual_df
+
+        _m1, _m2, _m3 = st.columns(3)
+        _m1.metric("✅ Ready to update",     len(_rdf)  if _rdf  is not None else 0)
+        _m2.metric("⚠️ Territory conflicts", len(_cdf)  if _cdf  is not None else 0)
+        _m3.metric("🔵 Manual review",        len(_mdf)  if _mdf  is not None else 0)
+
+        if _rdf is not None and not _rdf.empty:
+            st.dataframe(
+                _rdf.drop(columns=["Id"]),
+                width='stretch',
+                hide_index=True,
+                column_config={
+                    "New Terr.":    st.column_config.TextColumn("New Territory", disabled=True),
+                    "Current Terr.": st.column_config.TextColumn("Current Territory", disabled=True),
+                    "Source":       st.column_config.TextColumn("Source", disabled=True),
+                },
+            )
+        else:
+            st.info("No accounts qualify for update under the chosen scope.")
+
+        _nav2a, _nav2b = st.columns(2)
+        with _nav2a:
+            if st.button("← Back", key="ts_back_2"):
+                st.session_state.ts_step = 1
+                st.rerun()
+        with _nav2b:
+            if st.button(
+                "Next: Review Exceptions →",
+                type="primary",
+                key="ts_next_2",
+            ):
+                st.session_state.ts_step = 3
+                st.rerun()
+
+    # ══ STEP 3: Exceptions ═══════════════════════════════════════════════════
+    elif _cur_step == 3:
+        st.markdown("#### Step 3 — Exceptions")
+
+        _rdf = st.session_state.ts_ready_df
+        _cdf = st.session_state.ts_conflicts_df
+        _mdf = st.session_state.ts_manual_df
+
+        _n_ready     = len(_rdf)  if _rdf  is not None else 0
+        _n_conflicts = len(_cdf)  if _cdf  is not None else 0
+        _n_manual    = len(_mdf)  if _mdf  is not None else 0
+
+        with st.expander(f"✅ Ready to update ({_n_ready:,})", expanded=(_n_ready > 0)):
+            if _rdf is not None and not _rdf.empty:
+                st.dataframe(
+                    _rdf.drop(columns=["Id"]),
+                    width='stretch',
+                    hide_index=True,
+                )
+            else:
+                st.info("No accounts ready for update.")
+
+        with st.expander(f"⚠️ Territory conflicts ({_n_conflicts:,})", expanded=(_n_conflicts > 0)):
+            if _cdf is not None and not _cdf.empty:
+                st.warning(
+                    "These accounts have a Territory__c that disagrees with their billing location. "
+                    "Enabling **fix mismatches** scope will overwrite them."
+                )
+                st.dataframe(
+                    _cdf.drop(columns=["Id"]),
+                    width='stretch',
+                    hide_index=True,
+                    column_config={
+                        "New Terr.":    st.column_config.TextColumn("New Territory", disabled=True),
+                        "Current Terr.": st.column_config.TextColumn("Current Territory", disabled=True),
+                    },
+                )
+            else:
+                st.info("No territory conflicts found.")
+
+        with st.expander(f"🔵 Manual review required ({_n_manual:,})", expanded=(_n_manual > 0)):
+            if _mdf is not None and not _mdf.empty:
+                st.info(
+                    "These accounts could not be classified automatically. "
+                    "Review and update Territory__c manually in Salesforce."
+                )
+                st.dataframe(
+                    _mdf.drop(columns=["Id"]),
+                    width='stretch',
+                    hide_index=True,
+                    column_config={
+                        "Reason": st.column_config.TextColumn("Reason", disabled=True),
+                    },
+                )
+                if st.download_button(
+                    "⬇️ Download manual review CSV",
+                    data=_mdf.drop(columns=["Id"]).to_csv(index=False),
+                    file_name="territory_sync_manual_review.csv",
+                    mime="text/csv",
+                    key="ts_dl_manual",
+                ):
+                    pass
+            else:
+                st.info("No accounts require manual review.")
+
+        _nav3a, _nav3b = st.columns(2)
+        with _nav3a:
+            if st.button("← Back", key="ts_back_3"):
+                st.session_state.ts_step = 2
+                st.rerun()
+        with _nav3b:
+            if st.button(
+                "Next: Execute →",
+                type="primary",
+                key="ts_next_3",
+                disabled=(_n_ready + _n_conflicts == 0),
+            ):
+                st.session_state.ts_step = 4
+                st.rerun()
+
+    # ══ STEP 4: Execute ═══════════════════════════════════════════════════════
+    elif _cur_step == 4:
+        st.markdown("#### Step 4 — Execute")
+
+        _rdf = st.session_state.ts_ready_df
+        _cdf = st.session_state.ts_conflicts_df
+        _scope = st.session_state.ts_scope
+
+        # Build the combined payload (ready + conflicts both qualify if scope allows)
+        _all_update_rows = []
+        if _rdf is not None:
+            _all_update_rows.extend(_rdf.to_dict("records"))
+        if _cdf is not None and _scope in ("fix_mismatches", "fill_and_fix"):
+            _all_update_rows.extend(_cdf.to_dict("records"))
+
+        _n_total = len(_all_update_rows)
+
+        if dry_run_mode:
+            st.warning(
+                "🔒 **Dry Run mode is ON.** No changes will be made to Salesforce. "
+                "Disable Dry Run in the sidebar to push live updates."
+            )
+        else:
+            st.error(
+                "⚠️ **Dry Run mode is OFF.** This will update Territory__c on "
+                f"**{_n_total:,} account(s)** in Salesforce.",
+                icon="⚠️",
+            )
+
+        # Summary before confirm
+        st.info(
+            f"**Pre-Execute Summary**\n\n"
+            f"- Accounts to update: **{_n_total:,}**\n"
+            f"- Scope: {_scope.replace('_', ' ').title()}\n"
+            f"- Dry Run: {'**ON** ✅' if dry_run_mode else '**OFF** ⚠️'}\n"
+            f"- Auto-backup: {'**ON**' if auto_backup else '**OFF**'}"
+        )
+
+        _nav4a, _nav4b = st.columns(2)
+        with _nav4a:
+            if st.button("← Back", key="ts_back_4"):
+                st.session_state.ts_step = 3
+                st.rerun()
+
+        with _nav4b:
+            _btn_label = (
+                f"🔍 Dry Run ({_n_total:,} records)"
+                if dry_run_mode
+                else f"🚀 Update {_n_total:,} Accounts"
+            )
+            if st.button(
+                _btn_label,
+                type="primary",
+                key="ts_execute",
+                disabled=(_n_total == 0),
+            ):
+                sf = get_sf_connection()
+                if sf is None:
+                    st.error("Not connected to Salesforce.")
+                    st.stop()
+
+                _payload = [
+                    {"Id": row["Id"], "Territory__c": row["New Terr."]}
+                    for row in _all_update_rows
+                ]
+
+                if dry_run_mode:
+                    st.session_state.ts_result = {
+                        "dry_run":  True,
+                        "n":        _n_total,
+                        "success":  _n_total,
+                        "failed":   0,
+                        "errors":   [],
+                    }
+                else:
+                    # Auto-backup
+                    _backup_path = ""
+                    if auto_backup:
+                        try:
+                            _backup_ids  = [r["Id"] for r in _all_update_rows]
+                            _backup_df_recs = []
+                            for _ci in range(0, len(_backup_ids), 200):
+                                _chunk_ids = _backup_ids[_ci: _ci + 200]
+                                _ids_str   = ", ".join(f"'{x}'" for x in _chunk_ids)
+                                _backup_df_recs.extend(
+                                    sf.query_all(
+                                        f"SELECT Id, Name, Territory__c, BillingState, BillingCountry "
+                                        f"FROM Account WHERE Id IN ({_ids_str})"
+                                    ).get("records", [])
+                                )
+                            _backup_df = pd.DataFrame(_backup_df_recs)
+                            _backup_path = backup_records(_backup_df, "territory_sync", "Account")
+                            st.success(f"✅ Backup saved → `{_backup_path}`")
+                        except Exception as _be:
+                            st.error(f"Backup failed: {_be}. Aborting.")
+                            st.stop()
+
+                    with st.spinner(f"Updating {_n_total:,} accounts…"):
+                        _result = execute_update(sf, "Account", _payload)
+
+                    st.session_state.ts_result = {
+                        "dry_run":  False,
+                        "n":        _n_total,
+                        "success":  _result["success"],
+                        "failed":   _result["failed"],
+                        "errors":   _result["errors"],
+                        "backup":   _backup_path,
+                    }
+
+        # ── Result panel ──────────────────────────────────────────────────────
+        if st.session_state.ts_result:
+            _res = st.session_state.ts_result
+            st.divider()
+            if _res["dry_run"]:
+                st.success(
+                    f"✅ **Dry Run complete.** {_res['n']:,} account(s) would be updated."
+                )
+            elif _res["failed"] == 0:
+                st.success(
+                    f"✅ **Update complete.** {_res['success']:,} account(s) updated successfully."
+                )
+                if _res.get("backup"):
+                    st.caption(f"Backup: `{_res['backup']}`")
+            else:
+                st.warning(
+                    f"⚠️ Partial success: {_res['success']:,} updated, "
+                    f"{_res['failed']:,} failed."
+                )
+                with st.expander("Error details"):
+                    for _e in _res["errors"]:
+                        st.code(str(_e))
+
+            if st.button("🔄 Start New Sync", key="ts_reset"):
+                for _k in list(_ts_defaults.keys()):
+                    st.session_state[_k] = _ts_defaults[_k]
+                st.rerun()
+
+
+def nav_to(page: str):
+    """Navigate to a named page by setting session state and triggering a rerun."""
+    st.session_state.page = page
+    st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: FORCE UPDATE  (page = "force_update")
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_force_update_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Force Update page.
+
+    Bulk-sets a single field to a chosen value on every record of a selected
+    Salesforce object that matches an optional WHERE filter.  Useful for
+    triggering automations, resetting flags, or mass-patching metadata.
+
+    Flow:
+        1  Configure — pick object, field, new value, optional WHERE clause
+        2  Preview   — count + 10-row sample showing current vs new value
+        3  Execute   — backup (optional) then bulk update via Bulk API
+    """
+    st.header("Force Update")
+    st.caption(
+        "Bulk-set a single field to a new value across any Salesforce object. "
+        "Useful for triggering automations, resetting flags, or patching metadata at scale."
+    )
+
+    # ── Common objects list ───────────────────────────────────────────────────
+    _COMMON_OBJECTS = [
+        "Account", "Contact", "Lead", "Opportunity", "Case",
+        "Task", "Event", "Campaign", "CampaignMember", "User",
+    ]
+
+    # ── Session state ─────────────────────────────────────────────────────────
+    _fu_defaults = {
+        "fu_object":     "Contact",
+        "fu_field":      "",
+        "fu_value":      "",
+        "fu_where":      "",
+        "fu_preview":    None,   # (count: int, sample_df: DataFrame)
+        "fu_result":     None,
+    }
+    for _k, _v in _fu_defaults.items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
+
+    # ── Step 1: Configure ─────────────────────────────────────────────────────
+    st.subheader("1 · Configure")
+
+    _c1, _c2, _c3 = st.columns(3)
+
+    with _c1:
+        st.markdown("**Object**")
+        _obj_options = _COMMON_OBJECTS + ["(custom…)"]
+        _prev_obj    = st.session_state.fu_object
+        _obj_default = _prev_obj if _prev_obj in _COMMON_OBJECTS else "(custom…)"
+        _obj_choice  = st.selectbox(
+            "Object",
+            options=_obj_options,
+            index=_obj_options.index(_obj_default),
+            key="fu_object_select",
+            label_visibility="collapsed",
+        )
+        if _obj_choice == "(custom…)":
+            _object = st.text_input(
+                "Custom object API name",
+                value=_prev_obj if _prev_obj not in _COMMON_OBJECTS else "",
+                placeholder="e.g. CustomObject__c",
+                key="fu_object_custom",
+            ).strip()
+        else:
+            _object = _obj_choice
+        st.session_state.fu_object = _object
+
+    with _c2:
+        st.markdown("**Field API name**")
+        _field = st.text_input(
+            "Field API name",
+            value=st.session_state.fu_field,
+            placeholder="e.g. Description",
+            key="fu_field_input",
+            label_visibility="collapsed",
+        ).strip()
+        st.session_state.fu_field = _field
+
+    with _c3:
+        st.markdown("**New value**")
+        _value = st.text_input(
+            "New value",
+            value=st.session_state.fu_value,
+            placeholder="Leave blank to set null",
+            key="fu_value_input",
+            label_visibility="collapsed",
+        )
+        st.session_state.fu_value = _value
+
+    st.markdown("**WHERE filter** *(optional — omit 'WHERE' keyword)*")
+    _where = st.text_input(
+        "WHERE filter",
+        value=st.session_state.fu_where,
+        placeholder="e.g. LeadSource = 'Web' AND CreatedDate = LAST_N_DAYS:30",
+        key="fu_where_input",
+        label_visibility="collapsed",
+        help="Leave blank to target every record of the selected object.",
+    ).strip()
+    st.session_state.fu_where = _where
+
+    if not _where:
+        st.warning(
+            f"No filter set — this will update **all** {_object or 'records'} in Salesforce.",
+            icon="⚠️",
+        )
+
+    st.divider()
+
+    # ── Step 2: Preview ───────────────────────────────────────────────────────
+    st.subheader("2 · Preview")
+
+    _can_go = bool(_object and _field)
+
+    if st.button("🔍 Fetch Preview", disabled=not _can_go, key="fu_preview_btn"):
+        _sf = get_sf_connection()
+        if _sf is None:
+            st.error("Not connected to Salesforce.")
+            st.stop()
+
+        _where_sql = f"WHERE {_where}" if _where else ""
+        try:
+            with st.spinner("Counting records…"):
+                _total = _sf.query(
+                    f"SELECT COUNT() FROM {_object} {_where_sql}"
+                ).get("totalSize", 0)
+
+            with st.spinner("Fetching sample…"):
+                # Fetch a 10-row sample — gracefully fall back if Name doesn't exist
+                try:
+                    _sample_recs = _sf.query(
+                        f"SELECT Id, Name, {_field} FROM {_object} {_where_sql} LIMIT 10"
+                    ).get("records", [])
+                    _name_col = "Name"
+                except Exception:
+                    _sample_recs = _sf.query(
+                        f"SELECT Id, {_field} FROM {_object} {_where_sql} LIMIT 10"
+                    ).get("records", [])
+                    _name_col = None
+
+            _rows = []
+            for _r in _sample_recs:
+                _row = {"Id": _r["Id"]}
+                if _name_col:
+                    _row["Name"] = _r.get("Name", "")
+                _row["Current Value"] = _r.get(_field, "")
+                _v_lower = _value.lower()
+                _display_val = (
+                    "(null)"  if _value == ""            else
+                    "True"    if _v_lower == "true"      else
+                    "False"   if _v_lower == "false"     else
+                    _value
+                )
+                _row["New Value"] = _display_val
+                _rows.append(_row)
+
+            st.session_state.fu_preview = (_total, pd.DataFrame(_rows))
+            st.session_state.fu_result  = None
+
+        except Exception as _ex:
+            st.error(f"Preview failed: {_ex}")
+            st.session_state.fu_preview = None
+
+    if st.session_state.fu_preview is not None:
+        _total, _sample_df = st.session_state.fu_preview
+        st.metric("Records matched", f"{_total:,}")
+        if not _sample_df.empty:
+            st.caption(f"Sample — up to 10 of {_total:,} records:")
+            st.dataframe(_sample_df.drop(columns=["Id"]), width="stretch", hide_index=True)
+        else:
+            st.info("No records match the filter.")
+
+    st.divider()
+
+    # ── Step 3: Execute ───────────────────────────────────────────────────────
+    st.subheader("3 · Execute")
+
+    _preview_ready = (
+        st.session_state.fu_preview is not None
+        and st.session_state.fu_preview[0] > 0
+    )
+
+    if not _preview_ready:
+        st.info("Run a preview first to enable execution.")
+    else:
+        _total, _ = st.session_state.fu_preview
+
+        if dry_run_mode:
+            st.warning(
+                "🔒 **Dry Run ON** — no changes will be made. "
+                "Disable Dry Run in the sidebar to push live updates.",
+                icon="🔒",
+            )
+        else:
+            st.error(
+                f"⚠️ **Dry Run OFF** — this will update **{_object}.{_field}** "
+                f"on **{_total:,} record(s)** in Salesforce.",
+                icon="⚠️",
+            )
+
+        st.info(
+            f"**Summary**\n\n"
+            f"- Object: **{_object}**\n"
+            f"- Field: **{_field}**\n"
+            f"- New value: **{_value if _value != '' else '(null)'}**\n"
+            f"- Records: **{_total:,}**\n"
+            f"- Filter: `{_where if _where else '(none)'}` \n"
+            f"- Dry Run: {'**ON** ✅' if dry_run_mode else '**OFF** ⚠️'}\n"
+            f"- Auto-backup: {'**ON**' if auto_backup else '**OFF**'}"
+        )
+
+        _btn_label = (
+            f"🔍 Dry Run ({_total:,} records)"
+            if dry_run_mode
+            else f"🚀 Update {_total:,} {_object} Records"
+        )
+        if st.button(_btn_label, type="primary", key="fu_execute_btn"):
+            _sf = get_sf_connection()
+            if _sf is None:
+                st.error("Not connected to Salesforce.")
+                st.stop()
+
+            if dry_run_mode:
+                st.session_state.fu_result = {
+                    "dry_run": True, "n": _total, "success": _total,
+                    "failed": 0, "errors": [],
+                }
+            else:
+                _where_sql  = f"WHERE {_where}" if _where else ""
+                _backup_path = ""
+
+                # ── Fetch all record IDs ──────────────────────────────────────
+                with st.spinner(f"Fetching {_total:,} record IDs…"):
+                    _all_recs = _sf.query_all(
+                        f"SELECT Id, {_field} FROM {_object} {_where_sql}"
+                    ).get("records", [])
+
+                # ── Auto-backup ───────────────────────────────────────────────
+                if auto_backup:
+                    try:
+                        _backup_df = pd.DataFrame([
+                            {"Id": r["Id"], _field: r.get(_field, "")}
+                            for r in _all_recs
+                        ])
+                        _backup_path = backup_records(
+                            _backup_df, f"force_update_{_field}", _object
+                        )
+                        st.success(f"✅ Backup saved → `{_backup_path}`")
+                    except Exception as _be:
+                        st.error(f"Backup failed: {_be}. Aborting.")
+                        st.stop()
+
+                # ── Build payload ─────────────────────────────────────────────
+                # Coerce the string value from the text input to the right type
+                # so Salesforce receives a proper boolean or number, not a string.
+                def _coerce(v: str):
+                    if v == "":
+                        return None
+                    if v.lower() == "true":
+                        return True
+                    if v.lower() == "false":
+                        return False
+                    try:
+                        return int(v)
+                    except ValueError:
+                        pass
+                    try:
+                        return float(v)
+                    except ValueError:
+                        pass
+                    return v
+
+                _new_val = _coerce(_value)
+                _payload = [{"Id": r["Id"], _field: _new_val} for r in _all_recs]
+
+                # ── Execute ───────────────────────────────────────────────────
+                with st.spinner(f"Updating {len(_payload):,} records…"):
+                    _result = execute_update(_sf, _object, _payload)
+
+                st.session_state.fu_result = {
+                    "dry_run": False,
+                    "n":       len(_payload),
+                    "success": _result["success"],
+                    "failed":  _result["failed"],
+                    "errors":  _result["errors"],
+                    "backup":  _backup_path,
+                }
+
+    # ── Result panel ──────────────────────────────────────────────────────────
+    if st.session_state.fu_result:
+        _res = st.session_state.fu_result
+        st.divider()
+        if _res["dry_run"]:
+            st.success(f"✅ Dry Run complete — {_res['n']:,} record(s) would be updated.")
+        elif _res["failed"] == 0:
+            st.success(f"✅ Done — {_res['success']:,} record(s) updated successfully.")
+            if _res.get("backup"):
+                st.caption(f"Backup: `{_res['backup']}`")
+        else:
+            st.warning(
+                f"⚠️ Partial success: {_res['success']:,} updated, {_res['failed']:,} failed."
+            )
+            with st.expander("Error details"):
+                for _e in _res["errors"]:
+                    st.code(str(_e))
+
+        if st.button("🔄 Reset", key="fu_reset_btn"):
+            for _k in list(_fu_defaults.keys()):
+                st.session_state[_k] = _fu_defaults[_k]
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SIDEBAR NAVIGATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_sidebar_nav():
+    """
+    Renders the full sidebar: connection status, page navigation buttons,
+    safety toggles, and org reference.
+    Returns (dry_run_mode, auto_backup).
+    """
+    st.markdown("### ⚡ A.D.A.M.")
+    try:
+        sf = get_sf_connection()
+        _user_info = st.session_state.get("sf_user_info", {})
+        _user_name = _user_info.get("name", "")
+        st.markdown(
+            f'<span class="pill-active">● Connected</span> '
+            f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.72rem;color:#6e8c7a;">{sf.sf_instance}</span>',
+            unsafe_allow_html=True,
+        )
+        if _user_name:
+            st.caption(_user_name)
+        if st.button("🔓 Log out", key="logout",
+            help="Clears your session. You will need to log in again."):
+            st.session_state.sf = None
+            st.session_state.pop("sf_user_info", None)
+            st.rerun()
+    except Exception:
+        st.markdown('<span class="pill-retired">● Disconnected</span>', unsafe_allow_html=True)
+        st.stop()
+
+    page = st.session_state.get("page", "dashboard")
+
+    def _nav_btn(label: str, target: str):
+        """
+        Renders a sidebar nav button.
+        When this button's page is active, emits a .nav-active-marker div
+        immediately before it so the CSS adjacent-sibling rule fires.
+        """
+        if page == target:
+            st.markdown('<div class="nav-active-marker"></div>', unsafe_allow_html=True)
+        if st.button(label, key=f"nav_{target}"):
+            nav_to(target)
+
+    # ── HOME ──────────────────────────────────────────────────────────────────────────
+    with st.expander("🏠  Home", expanded=True):
+        _nav_btn("📊  Org Health Dashboard", "dashboard")
+
+    # ── QUERY & DATA ──────────────────────────────────────────────────────────────────
+    with st.expander("🔎  Query & Data", expanded=True):
+        _nav_btn("🔍  Query Builder", "query")
+        _results_label = "📋  Results & Actions"
+        if st.session_state.query_results is not None:
+            _results_label += f"  ({len(st.session_state.query_results):,})"
+        _nav_btn(_results_label, "results")
+        _nav_btn("📂  CSV Data Loader", "csv_loader")
+        _nav_btn("⚡  Force Update", "force_update")
+
+    # ── DATA QUALITY ──────────────────────────────────────────────────────────────────
+    with st.expander("🧹  Data Quality", expanded=True):
+        _nav_btn("🔗  Deduplication", "dedupe")
+        _nav_btn("🗑️  Contact Purge", "contact_purge")
+        _nav_btn("🌐  Website Cleanup", "website_cleanup")
+        _nav_btn("📦  Data Archival Assistant", "archival")
+
+    # ── ORG MANAGEMENT ────────────────────────────────────────────────────────────────
+    with st.expander("🛠️  Org Management", expanded=False):
+        _nav_btn("🗺️  Territory Mgmt", "territory")
+        _nav_btn("🔐  Permissions & Access", "permissions")
+        _nav_btn("⚙️  Automation Inventory", "automation_inventory")
+        _nav_btn("📄  Schema Explorer", "schema_explorer")
+        _nav_btn("📊  Report & Dashboard Scanner", "report_scanner")
+        _nav_btn("👤  Bulk Ownership Transfer", "ownership_transfer")
+
+    # ── REFERENCE & LOGS ──────────────────────────────────────────────────────────────
+    with st.expander("📚  Reference & Logs", expanded=False):
+        _hist_label = "📁  History & Logs"
+        if st.session_state.query_history:
+            _hist_label += f"  ({len(st.session_state.query_history)})"
+        _nav_btn(_hist_label, "history")
+        _nav_btn("🗓️  Change Log Generator", "change_log")
+        _nav_btn("🗂️  Cleanup Shortcuts", "shortcuts")
+        _nav_btn("📧  Digest & Alerts", "digest_config")
+
+    # ── SAFETY ────────────────────────────────────────────────────────────────────────
+    with st.expander("🛡️  Safety", expanded=True):
+        dry_run_mode = st.toggle("Dry Run Mode", value=True, key="dry_run_mode",
+            help="Preview all changes before they execute. Strongly recommended for production.")
+        auto_backup = st.toggle("Auto-Backup Before Changes", value=True, key="auto_backup",
+            help="Saves affected records to CSV before any update or delete.")
+
+        if not dry_run_mode:
+            st.markdown('<div class="safety-banner">⚠️ Dry Run OFF — changes execute immediately.</div>', unsafe_allow_html=True)
+        if not auto_backup:
+            st.markdown('<div class="safety-banner">⚠️ Auto-Backup OFF — no CSV created before changes.</div>', unsafe_allow_html=True)
+
+    # ── Org Reference ─────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("🟢  Active Tools (protect)", expanded=False):
+        for tool in ACTIVE_TOOLS:
+            st.markdown(f'<span class="pill-active">{tool}</span>', unsafe_allow_html=True)
+    with st.expander("🔴  Retired Tools (cleanup)", expanded=False):
+        for tool in RETIRED_TOOLS:
+            st.markdown(f'<span class="pill-retired">{tool}</span>', unsafe_allow_html=True)
+
+    return dry_run_mode, auto_backup
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: QUERY BUILDER  (page = "query")
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_query_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Query Builder page.  A horizontal mode radio selects between AI, Visual,
+    and Raw SOQL modes.  After a successful run the user is auto-navigated to
+    the Results & Actions page.  Recent queries are shown at the bottom.
+    """
+    st.header("Query Builder")
+
+    query_mode = st.radio(
+        "Query mode",
+        ["🤖  AI", "🔧  Visual", "📝  Raw SOQL"],
+        horizontal=False,
+        key="query_mode",
+        label_visibility="collapsed",
+    )
+
+    st.markdown("---")
+
+    # ── AI mode ─────────────────────────────────────────────────────────────────────────────
+    if query_mode == "🤖  AI":
+        if "ai_detected_object" not in st.session_state:
+            st.session_state.ai_detected_object = "Account"
+
+        st.subheader("Ask in Plain English")
+        st.caption(
+            "Describe what you want to find. The AI knows your full tech stack — "
+            "active tools, retired tools, and protected Axonify business fields."
+        )
+
+        ai_request = st.text_area(
+            "What do you want to find?",
+            placeholder=(
+                "Examples:\n"
+                "• Show me all Accounts where InsideView ID is still populated\n"
+                "• Find Contacts created in the last 30 days with no Activity\n"
+                "• Show accounts with SalesLoft cadence data — I need to archive it\n"
+                "• Which accounts have the Cloudingo duplicate score field populated?\n"
+                "• Show me the full account hierarchy for Acme Corp"
+            ),
+            height=120,
+            key="ai_request",
+        )
+
+        limit_col, btn_col = st.columns([3, 1])
+        with limit_col:
+            use_limit = st.toggle("Cap results", value=False, key="ai_use_limit",
+                help="Off = fetch ALL records (recommended for full-org scans). On = add a LIMIT to the query for quick sampling.")
+            ai_row_limit = None
+            if use_limit:
+                ai_row_limit = st.number_input("Row limit", min_value=1, max_value=50000,
+                    value=500, step=100, key="ai_row_limit")
+                st.caption("⚠️ Results will be capped.")
+            else:
+                st.caption("✅ Full scan — all records returned.")
+        with btn_col:
+            generate_btn = st.button("🤖  Generate Results", type="primary", key="gen_soql")
+
+        if generate_btn:
+            if not ai_request.strip():
+                st.warning("Please describe what you want to find.")
+            else:
+                with st.spinner("Thinking..."):
+                    # Use Account fields as context; AI will detect the right object
+                    fields = get_object_fields("Account")
+                    # Clear previous state so the UI re-renders cleanly
+                    st.session_state.ai_generated_soql = ""
+                    st.session_state.ai_steps          = []
+                    st.session_state.ai_explanation    = ""
+                    st.session_state.ai_safety_notes   = []
+                    st.session_state.ai_python_strategy = None
+                    try:
+                        soql, explanation, safety_notes, steps = generate_soql_from_natural_language(
+                            ai_request, "Auto", fields, row_limit=ai_row_limit
+                        )
+                        st.session_state.ai_generated_soql = soql
+                        st.session_state.ai_steps          = steps
+                        st.session_state.ai_explanation    = explanation
+                        st.session_state.ai_safety_notes   = safety_notes
+                        st.session_state.ai_gen_count     += 1
+                    except Exception as e:
+                        st.error(f"AI generation failed: {e}")
+
+        # ── Case 1: AI could not produce any query ────────────────────────────
+        if (st.session_state.ai_explanation
+                and not st.session_state.ai_generated_soql
+                and not st.session_state.ai_steps
+                and not st.session_state.get("ai_python_strategy")):
+            st.markdown("---")
+            st.warning(f"⚠️ Could not generate SOQL: {st.session_state.ai_explanation}")
+
+        # ── Case 2: Single query ──────────────────────────────────────────────
+        elif st.session_state.ai_generated_soql:
+            st.markdown("---")
+            st.markdown(f"**What this does:** {st.session_state.ai_explanation}")
+
+            for note in st.session_state.ai_safety_notes:
+                st.markdown(f'<div class="safety-banner">⚠️ {note}</div>', unsafe_allow_html=True)
+
+            render_safety_flags(st.session_state.ai_generated_soql)
+
+            gen_key = f"ai_edited_soql_{st.session_state.ai_gen_count}"
+            edited_soql = st.text_area(
+                "Review / Edit Generated SOQL",
+                value=st.session_state.ai_generated_soql,
+                height=100,
+                key=gen_key,
+            )
+
+            if st.button("▶️  Run This Query", key="run_ai"):
+                with st.spinner("Running..."):
+                    try:
+                        df = run_soql(edited_soql)
+                        st.session_state.query_results     = df
+                        st.session_state.last_soql         = edited_soql
+                        st.session_state.last_object       = st.session_state.ai_detected_object
+                        st.session_state.excluded_ids      = set()
+                        st.session_state.ai_generated_soql = ""
+                        add_to_history(edited_soql, st.session_state.ai_detected_object, len(df))
+                        nav_to("results")
+                    except RuntimeError as e:
+                        st.error(str(e))
+
+        # ── Case 3: Multi-step query plan ─────────────────────────────────────
+        elif st.session_state.ai_steps:
+            steps = st.session_state.ai_steps
+            st.markdown("---")
+            st.markdown(f"**What this does:** {st.session_state.ai_explanation}")
+
+            for note in st.session_state.ai_safety_notes:
+                st.markdown(f'<div class="safety-banner">⚠️ {note}</div>', unsafe_allow_html=True)
+
+            # Show each step's SOQL so the user can review before running
+            st.markdown(
+                f'<div class="safety-banner" style="background:#0d1f35;border-color:{COLOR_INFO};color:{COLOR_INFO};">'
+                f'🔗 This requires <strong>{len(steps)} queries</strong> — the tool will run them '
+                f'automatically and join the results for you.</div>',
+                unsafe_allow_html=True,
+            )
+
+            with st.expander(f"🔍 Review the {len(steps)} queries (click to expand)", expanded=False):
+                for i, step in enumerate(steps):
+                    st.markdown(f"**Step {i+1}: {step.get('label', '')}**")
+                    soql_display = step.get("soql", "")
+                    if "<<PREV_IDS>>" in soql_display:
+                        soql_display = soql_display.replace(
+                            "<<PREV_IDS>>",
+                            f"← results from Step {i} (injected automatically)"
+                        )
+                    st.code(soql_display, language="sql")
+
+            if st.button("▶️  Run All Steps Automatically", key="run_ai_multistep", type="primary"):
+
+                # ── Live step-by-step progress display ───────────────────────
+                # Each phase (SOQL fetch, Python merge, Python filter) gets its
+                # own status line that updates in real-time as work completes.
+                # status_lines holds st.empty() placeholders keyed by phase index.
+                status_container = st.container()
+                status_lines     = {}   # phase_key → st.empty()
+
+                def _render_status(msg, style="info"):
+                    """
+                    Writes or updates a single status line inside status_container.
+
+                    KEY DESIGN: each phase gets a stable slot that updates in place —
+                    "⏳ Step 1 of 3: Fetching..." transitions to "✓ Step 1 of 3: Done"
+                    in the same line rather than appending a new one.
+
+                    The key is extracted from the first "Step N" or "Starting" token
+                    so the in-progress and done messages share the same placeholder.
+                    """
+                    # Extract a stable phase key: "Step 1", "Step 2", "Starting", etc.
+                    step_match = re.search(r"Step\s+\d+", msg)
+                    if step_match:
+                        key = step_match.group(0)  # e.g. "Step 1"
+                    elif "Starting" in msg:
+                        key = "Starting"
+                    else:
+                        key = msg[:40].strip()             # fallback
+
+                    if key not in status_lines:
+                        with status_container:
+                            status_lines[key] = st.empty()
+
+                    placeholder = status_lines[key]
+
+                    if style == "success" or msg.startswith("✓"):
+                        placeholder.markdown(
+                            f'<div class="safety-banner" style="background:#1a2a1a;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                            f'{msg}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    elif style == "filter":
+                        placeholder.markdown(
+                            f'<div class="safety-banner" style="background:#1a2a1a;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                            f'🔍 {msg}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    elif style == "warning":
+                        placeholder.warning(msg)
+                    else:
+                        # "info" — in-progress, blue spinner feel
+                        placeholder.markdown(
+                            f'<div class="safety-banner" style="background:#0d1f35;border-color:{COLOR_INFO};color:{COLOR_INFO};">'
+                            f'{msg}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                # Count total phases for the spinner label
+                _has_python  = any(s.get("join_on", {}).get("python_filter") for s in steps)
+                _total_phases = len(steps) + (1 if _has_python else 0)
+                _spin_label  = (
+                    f"Running {_total_phases}-phase job "
+                    f"({len(steps)} SOQL quer{'ies' if len(steps) > 1 else 'y'}"
+                    + (", 1 Python filter/merge" if _has_python else "")
+                    + ") — this may take a moment for large data sets..."
+                )
+
+                with st.spinner(_spin_label):
+                    try:
+                        result_df, summaries = run_query_plan(steps, status_cb=_render_status)
+                    except RuntimeError as e:
+                        st.error(str(e))
+                        result_df = None
+
+                if result_df is not None and not result_df.empty:
+                    combined_label = " → ".join(
+                        s.get("label", f"Step {i+1}") for i, s in enumerate(steps)
+                    )
+                    final_count = len(result_df)
+                    st.success(
+                        f"✅ All steps complete — **{final_count:,} records** in final output"
+                    )
+                    st.session_state.query_results = result_df
+                    st.session_state.last_soql     = f"-- Multi-step: {combined_label}"
+                    st.session_state.last_object   = st.session_state.ai_detected_object
+                    st.session_state.excluded_ids  = set()
+                    st.session_state.ai_steps      = []
+                    add_to_history(f"-- Multi-step: {combined_label}", st.session_state.ai_detected_object, final_count)
+                    nav_to("results")
+                elif result_df is not None:
+                    st.info("No records returned from the final step.")
+
+        # ── Case 4: Python strategy ──────────────────────────────────────────
+        elif st.session_state.get("ai_python_strategy"):
+            strategy = st.session_state.ai_python_strategy
+            st.markdown("---")
+            st.markdown(f"**What this does:** {strategy.get('explanation', '')}")
+
+            for note in strategy.get("safety_notes", []):
+                st.markdown(f'<div class="safety-banner">⚠️ {note}</div>', unsafe_allow_html=True)
+
+            st.markdown(
+                f'<div class="safety-banner" style="background:#0d1f35;border-color:{COLOR_INFO};color:{COLOR_INFO};">'
+                f'🐍 This request requires Python-based processing (hierarchy traversal). '
+                f'Results will be generated via direct API queries — no single SOQL query is available.</div>',
+                unsafe_allow_html=True,
+            )
+
+            params = strategy.get("params", {})
+            with st.expander("🔍 Review parsed parameters", expanded=False):
+                if params.get("seed_names"):
+                    st.markdown(f"**Seed account names:** {', '.join(params['seed_names'])}")
+                if params.get("seed_ids"):
+                    st.markdown(f"**Seed account IDs:** {', '.join(params['seed_ids'])}")
+                if params.get("extra_fields"):
+                    st.markdown(f"**Additional fields:** {', '.join(params['extra_fields'])}")
+                else:
+                    st.markdown("**Additional fields:** Default hierarchy columns only")
+
+            if st.button("▶️  Run Python Strategy", key="run_python_strategy", type="primary"):
+                status_container = st.container()
+                status_lines     = {}
+
+                def _render_python_status(msg, style="info"):
+                    step_match = re.search(r"Step\s+\d+", msg)
+                    if step_match:
+                        key = step_match.group(0)
+                    elif "Starting" in msg:
+                        key = "Starting"
+                    else:
+                        key = msg[:40].strip()
+
+                    if key not in status_lines:
+                        with status_container:
+                            status_lines[key] = st.empty()
+
+                    placeholder = status_lines[key]
+
+                    if style == "success" or msg.startswith("✓"):
+                        placeholder.markdown(
+                            f'<div class="safety-banner" style="background:#1a2a1a;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                            f'{msg}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    elif style == "filter":
+                        placeholder.markdown(
+                            f'<div class="safety-banner" style="background:#1a2a1a;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                            f'🔍 {msg}</div>',
+                            unsafe_allow_html=True,
+                        )
+                    elif style == "warning":
+                        placeholder.warning(msg)
+                    else:
+                        placeholder.markdown(
+                            f'<div class="safety-banner" style="background:#0d1f35;border-color:{COLOR_INFO};color:{COLOR_INFO};">'
+                            f'{msg}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                with st.spinner("Running Python strategy..."):
+                    try:
+                        result_df = execute_python_strategy(strategy, status_cb=_render_python_status)
+                        if result_df is not None and not result_df.empty:
+                            st.success(f"✅ Complete — **{len(result_df):,} accounts** across hierarchy")
+                            st.session_state.query_results      = result_df
+                            st.session_state.last_soql          = "-- Python strategy: account_hierarchy (no SOQL available)"
+                            st.session_state.last_object        = "Account"
+                            st.session_state.excluded_ids       = set()
+                            st.session_state.ai_python_strategy = None
+                            add_to_history("-- Python: account_hierarchy", "Account", len(result_df))
+                            nav_to("results")
+                        else:
+                            st.info("No accounts found matching the specified seeds.")
+                    except (ValueError, RuntimeError) as e:
+                        st.error(str(e))
+
+
+    # ── Visual mode ─────────────────────────────────────────────────────────────────────────────
+    elif query_mode == "🔧  Visual":
+        st.subheader("Visual Query Builder")
+        st.caption("Build queries with dropdowns — no SOQL required.")
+
+        vq_object = st.selectbox("Object", SUPPORTED_OBJECTS, key="vq_object")
+        with st.spinner(f"Loading {vq_object} fields..."):
+            vq_fields = get_object_fields(vq_object)
+
+        field_names  = [f["name"] for f in vq_fields]
+        field_labels = {f["name"]: f"{f['label']} ({f['name']})" for f in vq_fields}
+
+        selected_fields = st.multiselect(
+            "Fields to include in results",
+            options=field_names,
+            default=[f for f in ["Id", "Name"] if f in field_names],
+            format_func=lambda x: field_labels.get(x, x),
+            key="vq_fields",
+        )
+
+        st.markdown("**Filters** (optional)")
+        filter_clauses = []
+        for i in range(3):
+            cols = st.columns([2, 1, 2])
+            with cols[0]:
+                ff = st.selectbox(f"Field {i+1}", ["(none)"] + field_names,
+                    key=f"vq_ff_{i}", format_func=lambda x: field_labels.get(x, x))
+            with cols[1]:
+                op = st.selectbox("Op",
+                    ["=", "!=", ">", "<", ">=", "<=", "LIKE", "IS NULL", "IS NOT NULL"],
+                    key=f"vq_op_{i}")
+            with cols[2]:
+                fv = st.text_input("Value", key=f"vq_fv_{i}",
+                    disabled=(op in ["IS NULL", "IS NOT NULL"]))
+            if ff != "(none)":
+                fv_esc = fv.replace(chr(39), chr(92) + chr(39))   # escape apostrophes for SOQL
+                if op in ["IS NULL", "IS NOT NULL"]:
+                    filter_clauses.append(f"{ff} {op}")
+                elif op == "LIKE":
+                    filter_clauses.append(f"{ff} LIKE '%{fv_esc}%'")
+                else:
+                    filter_clauses.append(f"{ff} {op} '{fv_esc}'")
+
+        row_limit = st.number_input("Row limit", 1, 50000, 500, 100, key="vq_limit")
+
+        if selected_fields:
+            where_str = " AND ".join(filter_clauses)
+            vq_soql   = f"SELECT {', '.join(selected_fields)} FROM {vq_object}"
+            if where_str:
+                vq_soql += f" WHERE {where_str}"
+            vq_soql += f" LIMIT {row_limit}"
+
+            st.code(vq_soql, language="sql")
+            render_safety_flags(vq_soql)
+
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("▶️  Run Query", key="run_vq"):
+                    with st.spinner("Running..."):
+                        try:
+                            df = run_soql(vq_soql)
+                            st.session_state.query_results = df
+                            st.session_state.last_soql     = vq_soql
+                            st.session_state.last_object   = vq_object
+                            st.session_state.excluded_ids  = set()
+                            add_to_history(vq_soql, vq_object, len(df))
+                            nav_to("results")
+                        except RuntimeError as e:
+                            st.error(str(e))
+            with col2:
+                if st.button("🤖  Explain Query", key="explain_vq"):
+                    with st.spinner("Explaining..."):
+                        st.info(explain_soql(vq_soql))
+
+
+    # ── Raw SOQL mode ─────────────────────────────────────────────────────────────────────────
+    else:  # "📝  Raw SOQL"
+        st.subheader("Raw SOQL Editor")
+        st.caption("Write, paste, or load SOQL from Audit Shortcuts or Query History. Use Explain for any query you didn't write.")
+
+        raw_soql = st.text_area(
+            "SOQL Query",
+            value=st.session_state.last_soql,
+            height=160,
+            placeholder="SELECT Id, Name, Industry FROM Account WHERE CreatedDate = LAST_N_DAYS:30 LIMIT 200",
+            key="raw_soql_input",
+        )
+
+        if raw_soql.strip():
+            render_safety_flags(raw_soql)
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("▶️  Run Query", type="primary", key="run_raw"):
+                if raw_soql.strip():
+                    with st.spinner("Running..."):
+                        try:
+                            obj = extract_object_from_soql(raw_soql)
+                            df  = run_soql(raw_soql)
+                            st.session_state.query_results = df
+                            st.session_state.last_soql     = raw_soql
+                            st.session_state.last_object   = obj
+                            st.session_state.excluded_ids  = set()
+                            add_to_history(raw_soql, obj, len(df))
+                            nav_to("results")
+                        except RuntimeError as e:
+                            st.error(str(e))
+                else:
+                    st.warning("Please enter a SOQL query.")
+        with col2:
+            if st.button("🤖  Explain This Query", key="explain_raw"):
+                if raw_soql.strip():
+                    with st.spinner("Explaining..."):
+                        st.info(explain_soql(raw_soql))
+
+    # ── Recent queries strip ────────────────────────────────────────────────────────────────────
+    if st.session_state.query_history:
+        st.markdown("---")
+        st.caption("Recent queries — click to reload into Raw SOQL mode")
+        for _i, _h in enumerate(st.session_state.query_history[:5]):
+            _label = f"{_h['timestamp']}  {_h['object']} ({_h['rows']:,})"
+            if st.button(_label, key=f"recent_q_{_i}"):
+                st.session_state.last_soql   = _h["soql"]
+                st.session_state.last_object = _h["object"]
+                st.session_state["query_mode"] = "📝  Raw SOQL"
+                st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: RESULTS & ACTIONS  (page = "results")
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_results_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Results & Actions page.
+    Shows the results grid with per-row checkboxes, then the full Update /
+    Delete / AI-assistant panel.  Breadcrumb lets the user return to the
+    Query Builder.
+    """
+    if st.button("← Back to Query", key="back_to_query"):
+        nav_to("query")
+
+    if st.session_state.query_results is None or st.session_state.query_results.empty:
+        st.info("No results yet. Run a query first.")
+        if st.button("🔍  Go to Query Builder", key="goto_query_empty"):
+            nav_to("query")
+        return
+
+    if st.session_state.get("last_soql", "").startswith("-- Python"):
+        st.markdown(
+            f'<div class="safety-banner" style="background:#0d1f35;border-color:{COLOR_INFO};color:{COLOR_INFO};">'
+            f'📊 These results were generated via Python (direct API queries). '
+            f'No reusable SOQL query is available for this dataset.</div>',
+            unsafe_allow_html=True,
+        )
+
+    display_df = st.session_state.query_results
+    if (
+        st.session_state.get("last_object") == "SetupAuditTrail"
+        and "Section" in display_df.columns
+    ):
+        total_rows = len(display_df)
+        show_all = st.toggle(
+            "Show all entries (include logins, report runs, etc.)",
+            value=False,
+            key="results_audit_show_all",
+        )
+        display_df = filter_audit_trail(display_df, signal_only=not show_all)
+        filtered_count = total_rows - len(display_df)
+        if not show_all:
+            st.caption(
+                f"Showing {len(display_df):,} of {total_rows:,} entries "
+                f"({filtered_count:,} filtered)"
+            )
+    render_results_grid(display_df)
+    st.markdown("---")
+    st.subheader("Actions")
+
+    st.subheader("Update / Delete Records")
+
+    if st.session_state.query_results is None or st.session_state.query_results.empty:
+        st.info("Run a query in any other tab first. Your results will appear here.")
+    else:
+        full_df     = st.session_state.query_results
+        object_name = st.session_state.last_object or "Unknown"
+        excluded    = st.session_state.get("excluded_ids", set())
+
+        # Filter down to only the included (non-excluded) records
+        if excluded and "Id" in full_df.columns:
+            df = full_df[~full_df["Id"].isin(excluded)].copy()
+        else:
+            df = full_df.copy()
+
+        total_count    = len(full_df)
+        excluded_count = len(excluded)
+        included_count = len(df)
+
+        if excluded_count > 0:
+            st.markdown(
+                f"Working with **{included_count:,} of {total_count:,} `{object_name}` records** "
+                f"({excluded_count:,} excluded via checkboxes in results)."
+            )
+            st.info(
+                f"⊘ {excluded_count:,} record{'s' if excluded_count != 1 else ''} excluded. "
+                "To change which records are included, go back to the Results grid and adjust the checkboxes."
+            )
+        else:
+            st.markdown(f"Working with **{included_count:,} `{object_name}` records** from your last query.")
+
+        # Gate on protected fields — block destructive actions entirely
+        if st.session_state.last_soql:
+            _, blocks = render_safety_flags(st.session_state.last_soql)
+            if blocks:
+                st.error("🚫 This query touches protected Axonify fields. Updates and deletes are blocked.")
+                st.stop()
+
+        # Normalise Id_x → Id in case a multi-step merge left it renamed
+        if "Id" not in df.columns and "Id_x" in df.columns:
+            df = df.rename(columns={"Id_x": "Id"})
+            # Also update the stored query_results so downstream tools see Id
+            if st.session_state.query_results is not None and "Id_x" in st.session_state.query_results.columns:
+                st.session_state.query_results = st.session_state.query_results.rename(columns={"Id_x": "Id"})
+
+        if "Id" not in df.columns:
+            st.warning(
+                "Your query results don't include an `Id` field. "
+                "Re-run your query with `Id` included to use Update or Delete. "
+                "The AI Update Assistant is still available to plan changes."
+            )
+        if True:  # always render the action selector regardless of Id presence
+            action_type = st.radio(
+                "What do you want to do?",
+                ["🤖  AI Update Assistant", "✏️  Update a field value", "🗑️  Delete these records"],
+                horizontal=False,
+                key="action_type_v2",
+            )
+
+            # ── AI UPDATE ASSISTANT ───────────────────────────────────────
+            if action_type == "🤖  AI Update Assistant":
+                st.markdown("---")
+                st.markdown(
+                    "Describe what you want to update in plain English. "
+                    "The AI will work out which fields to change and what values to use, "
+                    "using the data already in your results."
+                )
+
+                # Show the columns available in the current result set
+                available_cols = list(df.columns)
+                st.caption(f"Columns available in your results: `{'`, `'.join(available_cols)}`")
+
+                ai_update_request = st.text_area(
+                    "What update do you want to make?",
+                    placeholder=(
+                        "Examples:\n"
+                        "- Make all the Contact Owners be the same as the Account Owner\n"
+                        "- Set the Lead Source to 'Web' for all these records\n"
+                        "- Copy the Billing City into the Shipping City where Shipping City is blank\n"
+                        "- Set the Description to null for all these records"
+                    ),
+                    height=100,
+                    key="ai_update_request",
+                )
+
+                if st.button("🤖  Generate Update Plan", type="primary", key="gen_update_plan"):
+                    if not ai_update_request.strip():
+                        st.warning("Please describe the update you want to make.")
+                    else:
+                        with st.spinner("Analysing your results and building an update plan..."):
+
+                            # Sample a few rows to show the AI what the data looks like
+                            sample_rows = df.head(5).to_dict(orient="records")
+
+                            update_system_prompt = f"""You are a Salesforce update assistant.
+The user has run a query and now wants to update records based on the data in their results.
+
+Your job is to produce a precise update plan: which field to update on which object,
+and exactly what value each record should receive.
+
+AVAILABLE COLUMNS IN THE RESULT SET:
+{available_cols}
+
+SAMPLE DATA (first 5 rows):
+{json.dumps(sample_rows, indent=2, default=str)}
+
+OBJECT BEING UPDATED: {object_name}
+
+AXONIFY PROTECTED FIELDS — NEVER update these:
+- Any field starting with: Axonify_, bizible2__, Ruby__, Gong__, X6sense, Zendesk_, Spiff_, Clay_, Mutiny_
+- Revenue/ARR fields, Customer_Success_Manager__c, Account_Health_ fields
+
+=== CRITICAL: IDs vs NAMES ===
+Salesforce stores lookup/owner fields as IDs (e.g. OwnerId, AccountId), NOT as names.
+When the user says "make Contact Owner match Account Owner", they mean copy the ID value.
+
+Rules for picking the correct value_column:
+- "Owner" means OwnerId — look for OwnerId, OwnerId_x, OwnerId_y, or any renamed column
+  that contains "OwnerId" in the available columns. NEVER use Owner.Name.
+- "Account" means AccountId — use AccountId, not Account.Name.
+- Any field ending in "Id" is an ID field and is the correct one to use for updates.
+- If you see both Owner.Name and OwnerId in the columns, ALWAYS pick OwnerId.
+- If the columns have been renamed (e.g. "Contact OwnerId", "Account OwnerId"), pick the
+  column whose name corresponds to the SOURCE of the value (e.g. "Account OwnerId").
+
+RULES:
+1. Always update using the Id column from the results — each record gets its own specific value.
+2. For "copy field A to field B" — use the ID column, not the name column.
+3. For a fixed value (e.g. "set LeadSource to Web"), every record gets the same value.
+4. Never update protected fields.
+5. Return ONLY valid JSON — no markdown, no explanation outside the JSON.
+6. In your explanation, say which column you are copying FROM so the user can verify.
+
+=== SAFETY NOTES — KEEP THESE MINIMAL ===
+The tool generates its own data-driven warnings after you respond (record counts, value
+distribution, ownership changes etc.). Do NOT duplicate those.
+
+NEVER generate a safety note that:
+- States which object is being updated (the user already set this up)
+- Claims all records share the same value (you only see 5 sample rows, not the full set)
+- Restates what the explanation already says
+
+ONLY include a safety note if there is a genuine concern:
+- A protected Axonify field would be affected
+- The field you chose is ambiguous and might not be what the user intended
+- There is a real data integrity risk (e.g. clearing a required field, breaking a unique constraint)
+
+If none of the above apply, return: "safety_notes": []
+
+RESPONSE FORMAT:
+{{
+  "update_field": "ApiFieldName__c",
+  "update_object": "{object_name}",
+  "value_source": "column" | "fixed",
+  "value_column": "ColumnNameFromResults",
+  "fixed_value": "value",
+  "explanation": "Plain English summary, e.g. 'Will copy Account OwnerId into OwnerId on each Contact'",
+  "safety_notes": []
+}}
+
+If the request is ambiguous or unsafe, return:
+{{
+  "update_field": "",
+  "explanation": "Reason you cannot proceed",
+  "safety_notes": ["explain the issue"]
+}}"""
+                            try:
+                                resp = get_anthropic_client().messages.create(
+                                    model=AI_MODEL,
+                                    max_tokens=600,
+                                    messages=[{
+                                        "role": "user",
+                                        "content": (
+                                            f"Result set has {len(df):,} records.\n"
+                                            f"Update request: {ai_update_request}"
+                                        )
+                                    }],
+                                    system=update_system_prompt,
+                                )
+                                raw = resp.content[0].text.strip()
+                                raw = re.sub(r"^```(?:json)?", "", raw).strip().rstrip("```").strip()
+                                plan = json.loads(raw)
+                                st.session_state.ai_update_plan = plan
+                            except Exception as e:
+                                st.error(f"AI update planning failed: {e}")
+                                st.session_state.ai_update_plan = None
+
+                # ── Render the AI update plan if one exists ───────────────
+                plan = st.session_state.get("ai_update_plan")
+                if plan:
+                    st.markdown("---")
+                    st.markdown(f"**What this will do:** {plan.get('explanation', '')}")
+
+                    # AI-generated safety notes (should now be minimal)
+                    for note in plan.get("safety_notes", []):
+                        st.markdown(f'<div class="safety-banner">⚠️ {note}</div>', unsafe_allow_html=True)
+
+                    update_field  = plan.get("update_field", "")
+                    value_source  = plan.get("value_source", "fixed")
+                    value_column  = plan.get("value_column", "")
+                    fixed_value   = plan.get("fixed_value", "")
+
+                    # ── Data-driven warnings computed from the full result set ──
+                    # These are accurate because they use all rows, not just the AI's 5-row sample.
+                    if update_field and value_source == "column" and value_column and value_column in df.columns:
+                        total_rows  = len(df)
+
+                        # How many records will actually change (new value ≠ current value)?
+                        current_col = None
+                        for candidate in [update_field, update_field + "_x"]:
+                            if candidate in df.columns:
+                                current_col = candidate
+                                break
+                        if current_col:
+                            changing = df[df[current_col] != df[value_column]]
+                            unchanged = total_rows - len(changing)
+                            if unchanged > 0:
+                                st.markdown(
+                                    f'<div class="safety-banner" style="background:#0a3022;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                                    f'ℹ️ {len(changing):,} of {total_rows:,} records will change. '
+                                    f'{unchanged:,} already match and will be skipped.</div>',
+                                    unsafe_allow_html=True,
+                                )
+
+                        # How many distinct values will be written?
+                        distinct_new = df[value_column].nunique()
+                        if distinct_new == 1:
+                            single_val = df[value_column].iloc[0]
+                            # Look up a human-readable name for the ID if available
+                            name_col = None
+                            if value_column.endswith("Id") or "Id" in value_column:
+                                base = value_column.replace("Id", "").replace("_", " ").strip()
+                                for c in df.columns:
+                                    if "name" in c.lower() and base.lower().split()[-1] in c.lower():
+                                        name_col = c
+                                        break
+                            label = f"{df[name_col].iloc[0]} ({single_val})" if name_col else single_val
+                            st.markdown(
+                                f'<div class="safety-banner">⚠️ All {total_rows:,} records will be assigned '
+                                f'the same value: <strong>{label}</strong>. Verify this is intended.</div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                f'<div class="safety-banner" style="background:#0a3022;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                                f'ℹ️ {distinct_new} distinct values will be written across {total_rows:,} records '
+                                f'(each record gets its own value from <strong>{value_column}</strong>).</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                    if not update_field:
+                        st.error("The AI could not determine a safe update. Revise your request.")
+                    else:
+                        # ── ID column safety check ────────────────────────
+                        # If the AI picked a .Name relationship column instead of the
+                        # corresponding ID column, auto-correct and warn the user.
+                        if value_source == "column" and value_column:
+                            # Check if this looks like a name field when an ID exists
+                            if value_column.endswith(".Name") or value_column.endswith("_Name"):
+                                # e.g. "Owner.Name" → try "OwnerId" or "OwnerId_y"
+                                base = value_column.replace(".Name", "").replace("_Name", "")
+                                id_candidates = [
+                                    f"{base}Id",
+                                    f"{base}Id_x",
+                                    f"{base}Id_y",
+                                    f"{base}_Id",
+                                ]
+                                found_id = next((c for c in id_candidates if c in df.columns), None)
+                                if found_id:
+                                    st.warning(
+                                        f"⚠️ The AI selected `{value_column}` (a name field) but Salesforce "
+                                        f"requires an ID to update `{update_field}`. "
+                                        f"Auto-corrected to use `{found_id}` instead."
+                                    )
+                                    value_column = found_id
+                                else:
+                                    st.error(
+                                        f"🚫 `{value_column}` is a name field and cannot be written to "
+                                        f"`{update_field}`. Re-run your query to also include the "
+                                        f"corresponding ID column (e.g. `{base}Id`)."
+                                    )
+                                    st.stop()
+
+                        # Build the per-record payload and a preview DataFrame
+                        payload      = []
+                        preview_rows = []
+
+                        # ── Current value lookup helper ────────────────────────────
+                        # Defined once here (not inside the loop) for efficiency.
+                        # Searches broadly because rename_columns may have changed
+                        # OwnerId_x → "Contact Owner" etc. by the time we get here.
+                        def _find_current(row, field):
+                            row_dict = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+                            cols = list(row_dict.keys())
+
+                            # 1. Exact match
+                            if field in row_dict and pd.notna(row_dict[field]):
+                                return row_dict[field]
+
+                            # 2. _x suffix (pre-rename Contact side of merge)
+                            x_key = field + "_x"
+                            if x_key in row_dict and pd.notna(row_dict[x_key]):
+                                return row_dict[x_key]
+
+                            # 3. Case-insensitive exact match
+                            field_lower = field.lower()
+                            for c in cols:
+                                if c.lower() == field_lower and pd.notna(row_dict[c]):
+                                    return row_dict[c]
+
+                            # 4. Strip "Id" suffix and look for any column whose name
+                            #    contains the base word — e.g. OwnerId → finds
+                            #    "Contact Owner", "Contact.OwnerId", "Owner Name" etc.
+                            if field.endswith("Id"):
+                                base = field[:-2].lower()  # "owner", "account", etc.
+                                for c in cols:
+                                    if base in c.lower() and pd.notna(row_dict[c]):
+                                        return row_dict[c]
+
+                            # 5. Direct name equivalent: OwnerId → Owner.Name
+                            if field.endswith("Id"):
+                                for suffix in [".Name", "_Name", " Name"]:
+                                    name_key = field[:-2] + suffix
+                                    if name_key in row_dict and pd.notna(row_dict[name_key]):
+                                        return row_dict[name_key]
+
+                            return "(not in results)"
+
+                        for _, row in df.iterrows():
+                            record_id = row.get("Id")
+                            if value_source == "column" and value_column and value_column in row:
+                                new_val = row[value_column]
+                                # If it's still a dict (nested relationship object), extract Id
+                                if isinstance(new_val, dict):
+                                    new_val = new_val.get("Id") or new_val.get("id") or str(new_val)
+                            else:
+                                new_val = fixed_value if fixed_value else None
+
+                            payload.append({"Id": record_id, update_field: new_val})
+
+                            preview_rows.append({
+                                "Id":              record_id,
+                                "Field to Update": update_field,
+                                "Current Value":   _find_current(row, update_field),
+                                "→ New Value":     new_val,
+                            })
+
+                        preview_df = pd.DataFrame(preview_rows)
+
+                        # Show a sample so the user can verify before confirming
+                        st.markdown(f"**Preview — first 10 of {len(payload):,} records:**")
+                        st.dataframe(preview_df.head(10), width="stretch", hide_index=True)
+
+                        col1, col2 = st.columns([2, 1])
+                        with col1:
+                            if st.button(
+                                f"🔍  Confirm and Queue Dry Run ({len(payload):,} records)",
+                                type="primary",
+                                key="confirm_ai_update"
+                            ):
+                                st.session_state.dry_run_pending = {
+                                    "operation": "Update",
+                                    "df":        preview_df,
+                                    "payload":   payload,
+                                    "object":    object_name,
+                                }
+                                st.session_state.ai_update_plan = None
+                        with col2:
+                            if st.button("✏️  Edit request", key="edit_ai_update"):
+                                st.session_state.ai_update_plan = None
+                                st.rerun()
+
+            # ── MANUAL UPDATE ─────────────────────────────────────────────
+            elif action_type == "✏️  Update a field value":
+                st.markdown("---")
+                all_fields = get_object_fields(object_name)
+                updateable = [f["name"] for f in all_fields if f["updateable"]]
+
+                # Hide protected field prefixes from the update dropdown
+                safe_fields = [
+                    f for f in updateable
+                    if not any(f.startswith(p) for p in PROTECTED_PREFIXES)
+                ]
+                hidden = len(updateable) - len(safe_fields)
+                if hidden:
+                    st.caption(
+                        f"ℹ️ {hidden} protected fields hidden (Axonify business data and active tool fields)."
+                    )
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    update_field = st.selectbox("Field to update", safe_fields, key="update_field")
+                with col2:
+                    new_value = st.text_input(
+                        "New value",
+                        placeholder="Leave blank to set field to null/empty",
+                        key="update_value",
+                    )
+
+                if st.button("🔍  Preview Changes (Dry Run)", type="primary", key="preview_update"):
+                    preview_df = df[["Id"] + ([update_field] if update_field in df.columns else [])].copy()
+                    if update_field in preview_df.columns:
+                        preview_df = preview_df.rename(columns={update_field: "Current Value"})
+                    else:
+                        preview_df["Current Value"] = "(field not in query results)"
+                    preview_df["→ New Value"] = new_value if new_value else None
+
+                    st.session_state.dry_run_pending = {
+                        "operation": "Update",
+                        "df":        preview_df,
+                        "payload":   [
+                            {"Id": row["Id"], update_field: new_value if new_value else None}
+                            for _, row in df.iterrows()
+                        ],
+                        "object":    object_name,
+                    }
+
+            # ── DELETE ────────────────────────────────────────────────────
+            elif action_type == "🗑️  Delete these records":
+                st.markdown("---")
+                st.error(
+                    "⚠️  This will delete all records from your last query. "
+                    "Salesforce keeps deleted records in the Recycle Bin for 15 days. "
+                    "A backup CSV will be created before any record is deleted."
+                )
+                if st.button("🔍  Preview Deletion (Dry Run)", type="primary", key="preview_delete"):
+                    st.session_state.dry_run_pending = {
+                        "operation": "Delete",
+                        "df":        df,
+                        "payload":   df["Id"].tolist(),
+                        "object":    object_name,
+                    }
+
+    # ── Dry run confirmation panel ────────────────────────────────────────
+    if st.session_state.dry_run_pending:
+        pending   = st.session_state.dry_run_pending
+        confirmed, cancelled = render_dry_run_panel(
+            pending["df"], pending["operation"], pending["object"]
+        )
+
+        if cancelled:
+            st.session_state.dry_run_pending = None
+            st.info("Operation cancelled. No changes were made.")
+            st.rerun()
+
+        if confirmed:
+            sf        = get_sf_connection()
+            operation = pending["operation"]
+            obj       = pending["object"]
+
+            # Step 1: Auto-backup before any changes
+            if auto_backup:
+                with st.spinner("Saving backup..."):
+                    backup_path = backup_records(
+                        st.session_state.query_results, operation, obj
+                    )
+                st.success(f"✅ Backup saved → `{backup_path}`")
+            else:
+                st.warning("Auto-backup is disabled — proceeding without a backup.")
+
+            # Step 2: Execute
+            with st.spinner(f"Executing {operation}..."):
+                try:
+                    if operation == "Update":
+                        result = execute_update(sf, obj, pending["payload"])
+                    else:
+                        result = execute_delete(sf, obj, pending["payload"])
+
+                    # Step 3: Write audit log
+                    excluded_count = len(st.session_state.get("excluded_ids", set()))
+                    log_path = write_operation_log(
+                        operation    = operation,
+                        object_name  = obj,
+                        soql         = st.session_state.get("last_soql", ""),
+                        payload      = pending["payload"],
+                        result       = result,
+                        backup_path  = backup_path if auto_backup else "",
+                        excluded_count = excluded_count,
+                    )
+
+                    if result["failed"] == 0:
+                        st.success(
+                            f"✅ {operation} complete — "
+                            f"{result['success']:,} records affected, 0 failures."
+                        )
+                    else:
+                        st.warning(
+                            f"⚠️ {operation} partially complete: "
+                            f"{result['success']:,} succeeded, {result['failed']:,} failed."
+                        )
+                        if result["errors"]:
+                            st.json(result["errors"][:10])
+
+                    st.info(f"📋 Audit log saved → `{log_path}`")
+
+                    st.session_state.dry_run_pending = None
+                    st.session_state.query_results   = None
+
+                except Exception as e:
+                    st.error(f"Operation failed: {e}")
+                    st.text(traceback.format_exc())
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MODULE A — AUTOMATION AUDITOR PANEL
+#
+# Inventory, Deactivation Checklist, and Post-Deactivation Check for every
+# active Flow and Workflow Rule that references a retired tool prefix.
+# All Salesforce access in this module is read-only.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Business-logic keywords that, when co-occurring with a retired tool prefix,
+# upgrade the classification from Retired-only to Mixed.
+_MOD_A_BUSINESS_KEYWORDS = [
+    "territory", "owner", "stage", "account", "contact", "opportunity",
+    "lead", "assign", "route", "notify", "alert", "email", "task",
+    "create", "update",
+]
+
+
+def _send_zapier_notification(payload: dict) -> bool:
+    """
+    POST a JSON payload to the ZAPIER_WEBHOOK_URL environment variable.
+    Returns True on success, False on failure.  Silent failure — never
+    block the UI if Zapier is unreachable.
+    """
+    webhook_url = _get_secret("ZAPIER_WEBHOOK_URL")
+    if not webhook_url:
+        return False
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req  = urllib.request.Request(
+            webhook_url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status < 300
+    except Exception:
+        return False
+
+
+def _classify_automation(name: str, description: str) -> tuple[str, str]:
+    """
+    Classifies an automation against the RETIRED_TOOLS dictionary.
+
+    Returns a tuple of (classification_label, matched_tool_name) where
+    classification_label is one of:
+      🔴 Retired-only  — only retired tool references found
+      🟡 Mixed         — retired tool refs + business logic keywords co-occur
+      🟢 Clean         — no retired tool references found
+    """
+    haystack     = (name + " " + (description or "")).lower()
+    matched_tool = ""
+
+    for tool_name, prefixes in RETIRED_TOOLS.items():
+        for prefix in prefixes:
+            if prefix.lower() in haystack:
+                matched_tool = tool_name
+                break
+        if matched_tool:
+            break
+
+    if not matched_tool:
+        return ("🟢 Clean", "")
+
+    # Found a retired tool — check for co-occurring business logic keywords
+    has_biz_logic = any(kw in haystack for kw in _MOD_A_BUSINESS_KEYWORDS)
+    if has_biz_logic:
+        return ("🟡 Mixed", matched_tool)
+    return ("🔴 Retired-only", matched_tool)
+
+
+def _render_mod_a_inventory():
+    """Sub-tab 1: run discovery queries and classify all active automations."""
+    sf = get_sf_connection()
+    if sf is None:
+        st.error("No Salesforce connection. Please authenticate in the sidebar.")
+        return
+
+    run_needed = "mod_a_inventory_df" not in st.session_state
+    btn_label  = "🔄 Refresh Inventory" if not run_needed else "🔍 Run Inventory"
+    if st.button(btn_label, key="mod_a_inventory_btn", type="primary"):
+        run_needed = True
+
+    if run_needed:
+        with st.spinner("Querying Flows and Workflow Rules…"):
+            try:
+                df_flows = run_soql(
+                    "SELECT Id, MasterLabel, ProcessType, Status, Description, "
+                    "LastModifiedDate, CreatedDate "
+                    "FROM FlowDefinitionView "
+                    "WHERE Status = 'Active' "
+                    "ORDER BY LastModifiedDate DESC"
+                )
+            except Exception as e:
+                st.error(f"Flow query failed: {e}")
+                df_flows = pd.DataFrame()
+
+            try:
+                df_wf = run_soql(
+                    "SELECT Id, Name, TableEnumOrId, Description, "
+                    "CreatedDate, LastModifiedDate "
+                    "FROM WorkflowRule "
+                    "WHERE Active = true "
+                    "ORDER BY TableEnumOrId, Name"
+                )
+            except Exception as e:
+                st.error(f"Workflow Rule query failed: {e}")
+                df_wf = pd.DataFrame()
+
+        # ── Normalise and combine into a single inventory table ───────────────
+        instance = sf.sf_instance  # e.g. axonify.my.salesforce.com
+        rows = []
+
+        for _, r in df_flows.iterrows():
+            label, matched = _classify_automation(
+                str(r.get("MasterLabel", "")),
+                str(r.get("Description", "") or ""),
+            )
+            rows.append({
+                "Name":           r.get("MasterLabel", ""),
+                "Type":           "Flow",
+                "Object":         r.get("ProcessType", ""),
+                "Classification": label,
+                "Matched Tool":   matched,
+                "Last Modified":  str(r.get("LastModifiedDate", ""))[:10],
+                "Setup Link":     f"https://{instance}/lightning/setup/Flows/home",
+                "_Id":            r.get("Id", ""),
+            })
+
+        for _, r in df_wf.iterrows():
+            label, matched = _classify_automation(
+                str(r.get("Name", "")),
+                str(r.get("Description", "") or ""),
+            )
+            rows.append({
+                "Name":           r.get("Name", ""),
+                "Type":           "Workflow Rule",
+                "Object":         r.get("TableEnumOrId", ""),
+                "Classification": label,
+                "Matched Tool":   matched,
+                "Last Modified":  str(r.get("LastModifiedDate", ""))[:10],
+                "Setup Link":     f"https://{instance}/lightning/setup/WorkflowRules/home",
+                "_Id":            r.get("Id", ""),
+            })
+
+        inv_df = (
+            pd.DataFrame(rows)
+            if rows
+            else pd.DataFrame(
+                columns=[
+                    "Name", "Type", "Object", "Classification",
+                    "Matched Tool", "Last Modified", "Setup Link", "_Id",
+                ]
+            )
+        )
+
+        st.session_state.mod_a_inventory_df = inv_df
+        st.session_state.mod_a_last_run     = datetime.datetime.now().isoformat(timespec="seconds")
+
+        # ── Zapier webhooks ───────────────────────────────────────────────────
+        n_retired = int((inv_df["Classification"] == "🔴 Retired-only").sum()) if not inv_df.empty else 0
+        n_mixed   = int((inv_df["Classification"] == "🟡 Mixed").sum())        if not inv_df.empty else 0
+        n_clean   = int((inv_df["Classification"] == "🟢 Clean").sum())        if not inv_df.empty else 0
+        total     = len(inv_df)
+
+        _send_zapier_notification({
+            "module":       "A",
+            "stage":        "module_a_inventory_complete",
+            "severity":     "info",
+            "record_count": total,
+            "summary": (
+                f"Inventory complete: {total} active automations — "
+                f"{n_retired} retired-only, {n_mixed} mixed, {n_clean} clean."
+            ),
+            "timestamp": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        })
+
+        if n_mixed > 0:
+            _send_zapier_notification({
+                "module":       "A",
+                "stage":        "module_a_mixed_automations_found",
+                "severity":     "warning",
+                "record_count": n_mixed,
+                "summary": (
+                    f"{n_mixed} Mixed automation(s) found — contain business logic alongside "
+                    "retired tool references. Manual review required before deactivation."
+                ),
+                "timestamp": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            })
+
+        st.rerun()
+
+    # ── Display stored results ────────────────────────────────────────────────
+    inv_df   = st.session_state.get("mod_a_inventory_df")
+    last_run = st.session_state.get("mod_a_last_run", "—")
+
+    if inv_df is None:
+        st.info("Click **🔍 Run Inventory** to query Salesforce.")
+        return
+
+    st.caption(f"Last run: {last_run}")
+
+    if inv_df.empty:
+        st.success("No active automations found.")
+        return
+
+    n_retired = int((inv_df["Classification"] == "🔴 Retired-only").sum())
+    n_mixed   = int((inv_df["Classification"] == "🟡 Mixed").sum())
+    n_clean   = int((inv_df["Classification"] == "🟢 Clean").sum())
+    total     = len(inv_df)
+
+    # Metric cards
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Active",    total)
+    c2.metric("🔴 Retired-only", n_retired)
+    c3.metric("🟡 Mixed",        n_mixed)
+    c4.metric("🟢 Clean",        n_clean)
+
+    # Results table — hide the internal _Id column
+    display_df = inv_df.drop(columns=["_Id"], errors="ignore")
+    st.dataframe(display_df, width="stretch", hide_index=True)
+
+    # CSV download
+    timestamp = datetime.datetime.now().strftime(TIMESTAMP_FMT)
+    st.download_button(
+        label="⬇️  Export Inventory to CSV",
+        data=display_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"mod_a_inventory_{timestamp}.csv",
+        mime="text/csv",
+        key="mod_a_inventory_csv",
+    )
+
+
+def _render_mod_a_checklist():
+    """Sub-tab 2: ordered, human-executable deactivation plan."""
+    st.info(
+        "⚠️ **Salesforce does not allow automations to be deactivated via API.** "
+        "All deactivation steps must be performed manually in Setup. "
+        "Use the links below to navigate directly to each automation in your org."
+    )
+
+    inv_df = st.session_state.get("mod_a_inventory_df")
+    if inv_df is None or inv_df.empty:
+        st.warning(
+            "No inventory data found. Run the **📋 Inventory** tab first to populate the checklist."
+        )
+        return
+
+    # Filter to actionable items — Clean automations are excluded entirely
+    actionable = inv_df[inv_df["Classification"].isin(["🔴 Retired-only", "🟡 Mixed"])].copy()
+
+    if actionable.empty:
+        st.success("No actionable automations — all inventoried automations are clean.")
+        return
+
+    # Enforce order: Retired-only first (lowest risk), Mixed last
+    _order = {"🔴 Retired-only": 0, "🟡 Mixed": 1}
+    actionable["_sort"] = actionable["Classification"].map(_order)
+    actionable = actionable.sort_values("_sort").drop(columns=["_sort"])
+
+    n_retired_a = int((actionable["Classification"] == "🔴 Retired-only").sum())
+    n_mixed_a   = int((actionable["Classification"] == "🟡 Mixed").sum())
+    st.markdown(
+        f"**{len(actionable)} automation(s) require action** — "
+        f"{n_retired_a} retired-only, {n_mixed_a} mixed."
+    )
+
+    for _, row in actionable.iterrows():
+        classification = row["Classification"]
+        if classification == "🔴 Retired-only":
+            risk_note     = "Safe to deactivate: only references retired tool fields."
+            border_colour = COLOR_ERROR
+        else:
+            risk_note     = "⚠️ Review carefully: contains business logic alongside retired tool references."
+            border_colour = COLOR_WARNING
+
+        st.markdown(
+            f'<div style="border-left:4px solid {border_colour};padding:10px 14px;'
+            f'margin:8px 0;background:#142420;border-radius:4px;">'
+            f'<div style="font-weight:600;color:#f0f5f2;">{row["Name"]}</div>'
+            f'<div style="font-size:0.82rem;color:#b8ccbf;margin-top:2px;">'
+            f'{classification}&nbsp;&nbsp;·&nbsp;&nbsp;{row["Type"]}'
+            f'&nbsp;&nbsp;·&nbsp;&nbsp;Object: {row["Object"]}'
+            f'</div>'
+            f'<div style="font-size:0.80rem;color:#b8ccbf;margin-top:4px;">'
+            f'Matched tool: <code>{row["Matched Tool"]}</code>'
+            f'</div>'
+            f'<div style="font-size:0.80rem;color:#b8ccbf;margin-top:4px;">{risk_note}</div>'
+            f'<div style="margin-top:6px;">'
+            f'<a href="{row["Setup Link"]}" target="_blank" '
+            f'style="color:{COLOR_INFO};font-size:0.80rem;">↗ Open in Setup</a>'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+    export_cols = ["Name", "Type", "Object", "Classification", "Matched Tool", "Last Modified", "Setup Link"]
+    timestamp   = datetime.datetime.now().strftime(TIMESTAMP_FMT)
+    st.download_button(
+        label="📄 Export Checklist to CSV",
+        data=actionable[export_cols].to_csv(index=False).encode("utf-8"),
+        file_name=f"mod_a_deactivation_checklist_{timestamp}.csv",
+        mime="text/csv",
+        key="mod_a_checklist_csv",
+    )
+
+
+def _render_mod_a_postcheck():
+    """Sub-tab 3: verify deactivations and surface any new Flow execution errors."""
+    last_run = st.session_state.get("mod_a_postcheck_last_run", None)
+    if last_run:
+        st.caption(f"Last post-check run: {last_run}")
+
+    if st.button("🔄 Run Post-Check", key="mod_a_postcheck_btn", type="primary"):
+        sf = get_sf_connection()
+        if sf is None:
+            st.error("No Salesforce connection. Please authenticate in the sidebar.")
+            return
+
+        with st.spinner("Running post-deactivation checks…"):
+            # ── Query 1: Current active automation status ─────────────────────
+            try:
+                df_active_now = run_soql(
+                    "SELECT Id, MasterLabel, ProcessType, Status, LastModifiedDate "
+                    "FROM FlowDefinitionView "
+                    "WHERE Status = 'Active' "
+                    "ORDER BY LastModifiedDate DESC"
+                )
+            except Exception as e:
+                st.error(f"Status query failed: {e}")
+                df_active_now = pd.DataFrame()
+
+            # ── Query 2: Flow execution errors in the last 24 hours ───────────
+            try:
+                df_errors = run_soql(
+                    "SELECT FlowVersionNumber, ElementName, ErrorMessage, CreatedDate "
+                    "FROM FlowExecutionErrorEvent "
+                    "WHERE CreatedDate = LAST_N_DAYS:1 "
+                    "ORDER BY CreatedDate DESC"
+                )
+            except Exception as e:
+                st.error(f"Error log query failed: {e}")
+                df_errors = pd.DataFrame()
+
+        # ── Cross-reference with saved inventory ──────────────────────────────
+        inv_df         = st.session_state.get("mod_a_inventory_df")
+        outstanding_df = pd.DataFrame()
+
+        if inv_df is not None and not inv_df.empty and not df_active_now.empty:
+            targeted_ids   = set(
+                inv_df.loc[
+                    inv_df["Classification"].isin(["🔴 Retired-only", "🟡 Mixed"]),
+                    "_Id",
+                ]
+            )
+            active_ids_now = set(df_active_now.get("Id", pd.Series([], dtype=str)))
+            still_active   = targeted_ids & active_ids_now
+            if still_active:
+                outstanding_df = inv_df[inv_df["_Id"].isin(still_active)].copy()
+
+        now_ts = datetime.datetime.now().isoformat(timespec="seconds")
+        st.session_state.mod_a_postcheck_active_df   = df_active_now
+        st.session_state.mod_a_postcheck_errors_df   = df_errors
+        st.session_state.mod_a_postcheck_outstanding = outstanding_df
+        st.session_state.mod_a_postcheck_last_run    = now_ts
+
+        # ── Zapier webhooks ───────────────────────────────────────────────────
+        if not outstanding_df.empty:
+            _send_zapier_notification({
+                "module":       "A",
+                "stage":        "module_a_postcheck_outstanding",
+                "severity":     "critical",
+                "record_count": len(outstanding_df),
+                "summary": (
+                    f"{len(outstanding_df)} targeted automation(s) are still Active "
+                    "after the deactivation window. Immediate review required."
+                ),
+                "timestamp": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            })
+        else:
+            _send_zapier_notification({
+                "module":       "A",
+                "stage":        "module_a_verified_clean",
+                "severity":     "info",
+                "record_count": 0,
+                "summary":      "Post-deactivation check passed — all targeted automations confirmed inactive.",
+                "timestamp":    datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            })
+
+        st.rerun()
+
+    # ── Display stored results ────────────────────────────────────────────────
+    outstanding_df = st.session_state.get("mod_a_postcheck_outstanding")
+    df_errors      = st.session_state.get("mod_a_postcheck_errors_df")
+
+    if outstanding_df is None and df_errors is None:
+        st.info("Click **🔄 Run Post-Check** to verify deactivation status.")
+        return
+
+    # Targeted automations still active
+    st.markdown("#### Targeted Automations Still Active")
+    if outstanding_df is not None and not outstanding_df.empty:
+        st.error(
+            f"⚠️ {len(outstanding_df)} automation(s) targeted for deactivation "
+            "are still marked Active in Salesforce."
+        )
+        st.dataframe(
+            outstanding_df[["Name", "Type", "Object", "Classification", "Matched Tool", "Last Modified"]],
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.success("✅ All targeted automations confirmed inactive.")
+
+    # Flow execution errors
+    st.markdown("#### Flow Execution Errors — Last 24 Hours")
+    if df_errors is not None and not df_errors.empty:
+        st.warning(f"{len(df_errors)} Flow execution error(s) detected in the last 24 hours.")
+        st.dataframe(df_errors, width="stretch", hide_index=True)
+    else:
+        st.success("✅ No Flow execution errors in the last 24 hours.")
+
+
+def render_module_a_tab(dry_run_mode: bool, auto_backup: bool):
+    """
+    Module A — Automation Auditor Panel.
+
+    Three sub-tabs:
+      1. Inventory             — discover and classify all active automations
+      2. Deactivation Checklist — ordered, human-executable deactivation plan
+      3. Post-Deactivation Check — verify deactivations and check for errors
+
+    All Salesforce access is read-only.
+    """
+    st.subheader("🔴  Module A — Automation Auditor")
+    st.caption(
+        "Discover, classify, and plan the deactivation of Flows and Workflow Rules "
+        "that reference retired tool fields.  All operations in this panel are read-only."
+    )
+
+    mod_a_section = st.radio(
+        "Module A section",
+        ["📋  Inventory", "📝  Deactivation Checklist", "✅  Post-Deactivation Check"],
+        key="mod_a_section",
+        label_visibility="collapsed",
+    )
+
+    st.markdown("---")
+
+    if mod_a_section == "📋  Inventory":
+        _render_mod_a_inventory()
+    elif mod_a_section == "📝  Deactivation Checklist":
+        _render_mod_a_checklist()
+    elif mod_a_section == "✅  Post-Deactivation Check":
+        _render_mod_a_postcheck()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: CLEANUP SHORTCUTS  (page = "shortcuts")
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_shortcuts_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Cleanup Shortcuts page.  Reference library of pre-built audit queries
+    and Module A (retired tool cleanup).  Website Cleanup and User Hub have
+    been promoted to their own top-level pages in the nav.
+    """
+    shortcuts_section = st.radio(
+        "Section",
+        ["🔍  Audit Shortcuts", "🔴  Module A"],
+        key="shortcuts_section",
+        label_visibility="collapsed",
+    )
+
+    st.markdown("---")
+
+    if shortcuts_section == "🔍  Audit Shortcuts":
+        st.subheader("Audit Shortcuts")
+        st.caption(
+            "Pre-built queries for the Axonify cleanup project. "
+            "Click Load to send a query to the Query Builder, then run it from there."
+        )
+
+        categories = sorted(set(s["category"] for s in AUDIT_SHORTCUTS))
+        for cat in categories:
+            st.markdown(f"**{cat}**")
+            for sc_idx, shortcut in enumerate(
+                [s for s in AUDIT_SHORTCUTS if s["category"] == cat]
+            ):
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.markdown(
+                        f'<div class="shortcut-card">'
+                        f'<div class="sc-title">{shortcut["title"]}</div>'
+                        f'<div class="sc-desc">{shortcut["desc"]}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                with col2:
+                    # Use category slug + index to guarantee uniqueness
+                    cat_slug = re.sub(r"[^a-z0-9]", "_", cat.lower())[:20]
+                    btn_key  = f"sc_{cat_slug}_{sc_idx}"
+                    if st.button("Load", key=btn_key):
+                        st.session_state.last_soql   = shortcut["soql"]
+                        st.session_state.last_object = extract_object_from_soql(shortcut["soql"])
+                        nav_to("query")
+            st.markdown("")
+
+    elif shortcuts_section == "🔴  Module A":
+        render_module_a_tab(dry_run_mode=dry_run_mode, auto_backup=auto_backup)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: WEBSITE CLEANUP  (page = "website_cleanup")
+# Promoted from Cleanup Shortcuts sub-tab to its own Data Quality page.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_website_cleanup_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("🌐  Website Cleanup")
+    render_website_cleanup_tab(auto_backup=auto_backup, dry_run_mode=dry_run_mode)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: PERMISSIONS & ACCESS  (page = "permissions")
+# User Hub promoted from Cleanup Shortcuts, plus future sub-tabs for
+# Permission Set Comparison and Access Reverse Lookup (Brief 03).
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_permissions_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("🔐  Permissions & Access")
+    permissions_section = st.radio(
+        "Section",
+        ["👤  User Hub", "⚖️  Permission Set Comparison", "🔍  Access Reverse Lookup"],
+        key="permissions_section",
+        label_visibility="collapsed",
+    )
+    st.markdown("---")
+    if permissions_section == "👤  User Hub":
+        render_user_hub()
+    elif permissions_section == "⚖️  Permission Set Comparison":
+        _render_perm_set_comparison()
+    elif permissions_section == "🔍  Access Reverse Lookup":
+        _render_access_reverse_lookup()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PERMISSIONS HELPERS  (Brief 03)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_permission_sets() -> list[dict]:
+    """Return all Permission Sets including profile shadows. Cached 5 min."""
+    sf = get_sf_connection()
+    result = sf.query(
+        "SELECT Id, Name, Label, IsOwnedByProfile, Profile.Name "
+        "FROM PermissionSet ORDER BY Label LIMIT 1000"
+    )
+    rows = []
+    for r in result.get("records", []):
+        label = r.get("Label") or r.get("Name", "")
+        if r.get("IsOwnedByProfile"):
+            profile_name = (r.get("Profile") or {}).get("Name", label)
+            label = f"Profile: {profile_name}"
+        rows.append({"Id": r["Id"], "Label": label})
+    return rows
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _get_object_permissions(pset_id: str) -> pd.DataFrame:
+    sf = get_sf_connection()
+    result = sf.query(
+        f"SELECT SobjectType, PermissionsCreate, PermissionsRead, PermissionsEdit, "
+        f"PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords "
+        f"FROM ObjectPermissions WHERE ParentId = '{pset_id}'"
+    )
+    rows = result.get("records", [])
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame([{
+        "Object":     r["SobjectType"],
+        "Create":     r.get("PermissionsCreate", False),
+        "Read":       r.get("PermissionsRead", False),
+        "Edit":       r.get("PermissionsEdit", False),
+        "Delete":     r.get("PermissionsDelete", False),
+        "ViewAll":    r.get("PermissionsViewAllRecords", False),
+        "ModifyAll":  r.get("PermissionsModifyAllRecords", False),
+    } for r in rows])
+
+
+def _render_perm_set_comparison():
+    st.subheader("Permission Set Comparison")
+    st.caption(
+        "Compare object-level permissions between any two Permission Sets or Profiles."
+    )
+
+    psets = _get_permission_sets()
+    if not psets:
+        st.error("Could not load permission sets.")
+        return
+
+    labels = [p["Label"] for p in psets]
+    id_map = {p["Label"]: p["Id"] for p in psets}
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        sel_a = st.selectbox("Permission Set A", labels, key="psc_set_a")
+    with col_b:
+        sel_b = st.selectbox("Permission Set B", labels,
+                             index=min(1, len(labels)-1), key="psc_set_b")
+
+    diff_only = st.checkbox("Show differences only", value=True, key="psc_diff_only")
+
+    if st.button("⚖️  Compare", key="psc_compare_btn"):
+        with st.spinner("Loading permissions…"):
+            df_a = _get_object_permissions(id_map[sel_a])
+            df_b = _get_object_permissions(id_map[sel_b])
+        st.session_state["_psc_a"] = (sel_a, df_a)
+        st.session_state["_psc_b"] = (sel_b, df_b)
+
+    result = st.session_state.get("_psc_a"), st.session_state.get("_psc_b")
+    if result[0] is None:
+        st.info("Select two permission sets and click **Compare**.")
+        return
+
+    name_a, df_a = result[0]
+    name_b, df_b = result[1]
+    perm_cols = ["Create", "Read", "Edit", "Delete", "ViewAll", "ModifyAll"]
+
+    if df_a.empty and df_b.empty:
+        st.info("Neither permission set has any object permissions.")
+        return
+
+    all_objects = sorted(
+        set(df_a["Object"].tolist() if not df_a.empty else [])
+        | set(df_b["Object"].tolist() if not df_b.empty else [])
+    )
+
+    rows = []
+    for obj in all_objects:
+        row_a = df_a[df_a["Object"] == obj].iloc[0] if not df_a.empty and (df_a["Object"] == obj).any() else None
+        row_b = df_b[df_b["Object"] == obj].iloc[0] if not df_b.empty and (df_b["Object"] == obj).any() else None
+        for perm in perm_cols:
+            val_a = bool(row_a[perm]) if row_a is not None else False
+            val_b = bool(row_b[perm]) if row_b is not None else False
+            rows.append({
+                "Object":     obj,
+                "Permission": perm,
+                f"A: {name_a[:25]}": "✅" if val_a else "—",
+                f"B: {name_b[:25]}": "✅" if val_b else "—",
+                "Match": val_a == val_b,
+            })
+
+    diff_df = pd.DataFrame(rows)
+    diff_count = (~diff_df["Match"]).sum()
+    total = len(diff_df)
+    st.markdown(
+        f'<div style="font-size:0.9rem;margin-bottom:0.5rem;">'
+        f'<span style="color:{COLOR_ERROR if diff_count else COLOR_SUCCESS};font-weight:600;">'
+        f'{diff_count}</span> of {total} permissions differ</div>',
+        unsafe_allow_html=True,
+    )
+
+    view = diff_df[~diff_df["Match"]] if diff_only else diff_df
+    view = view.drop(columns=["Match"])
+    st.dataframe(view, use_container_width=True, hide_index=True)
+
+
+def _render_access_reverse_lookup():
+    st.subheader("Access Reverse Lookup")
+    st.caption(
+        "Find every Permission Set and Profile that grants access to a given object."
+    )
+
+    sf = get_sf_connection()
+
+    # Object picker — reuse describe list if available
+    try:
+        describe = sf.describe()
+        obj_names = sorted(s["name"] for s in describe["sobjects"] if s.get("queryable"))
+    except Exception:
+        obj_names = ["Account", "Contact", "Opportunity", "Case", "Lead", "User"]
+
+    col_obj, col_run = st.columns([3, 1])
+    with col_obj:
+        sel_obj = st.selectbox("Object", obj_names, key="arl_object")
+    with col_run:
+        st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+        run_clicked = st.button("🔍  Lookup", key="arl_run_btn")
+
+    if run_clicked:
+        with st.spinner(f"Loading permissions for {sel_obj}…"):
+            try:
+                result = sf.query(
+                    f"SELECT Parent.Name, Parent.IsOwnedByProfile, Parent.Profile.Name, "
+                    f"PermissionsCreate, PermissionsRead, PermissionsEdit, PermissionsDelete, "
+                    f"PermissionsViewAllRecords, PermissionsModifyAllRecords "
+                    f"FROM ObjectPermissions WHERE SobjectType = '{sel_obj}' LIMIT 500"
+                )
+                raw = result.get("records", [])
+                rows = []
+                for r in raw:
+                    parent = r.get("Parent") or {}
+                    name = parent.get("Name", "Unknown")
+                    if parent.get("IsOwnedByProfile"):
+                        profile = (parent.get("Profile") or {}).get("Name", name)
+                        name = f"Profile: {profile}"
+                    rows.append({
+                        "Permission Set / Profile": name,
+                        "Create":    "✅" if r.get("PermissionsCreate") else "—",
+                        "Read":      "✅" if r.get("PermissionsRead") else "—",
+                        "Edit":      "✅" if r.get("PermissionsEdit") else "—",
+                        "Delete":    "✅" if r.get("PermissionsDelete") else "—",
+                        "ViewAll":   "✅" if r.get("PermissionsViewAllRecords") else "—",
+                        "ModifyAll": "✅" if r.get("PermissionsModifyAllRecords") else "—",
+                    })
+                st.session_state["_arl_rows"] = (sel_obj, rows)
+            except Exception as exc:
+                st.error(f"Lookup failed: {exc}")
+
+    arl = st.session_state.get("_arl_rows")
+    if arl is None:
+        st.info("Select an object and click **Lookup**.")
+        return
+
+    obj_name, arl_rows = arl
+    st.markdown(f"**{len(arl_rows)} permission sets/profiles grant access to `{obj_name}`.**")
+    if arl_rows:
+        st.dataframe(pd.DataFrame(arl_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No object permissions found for {obj_name}.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COMING SOON helper
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_coming_soon(title: str, description: str, roadmap_ref: str = ""):
+    """Placeholder UI for features on the roadmap but not yet implemented."""
+    ref_html = (
+        f'<span style="font-size:0.72rem;color:#6e8c7a;margin-top:0.5rem;display:block;">'
+        f'Roadmap: {roadmap_ref}</span>'
+        if roadmap_ref else ""
+    )
+    st.markdown(
+        f'<div class="safety-banner" style="background:#1a2a1a;border-color:#017551;color:#c9d9cf;padding:1.5rem;">'
+        f'<div style="font-size:1.1rem;font-weight:600;margin-bottom:0.5rem;">🚧 {title}</div>'
+        f'<div style="font-size:0.9rem;">{description}</div>'
+        f'{ref_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: ORG HEALTH DASHBOARD  (page = "dashboard")  — Brief 01
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_org_limits() -> dict:
+    """Fetch org limits from the REST /limits endpoint. Cached 5 min."""
+    sf = get_sf_connection()
+    try:
+        return sf.restful("limits") or {}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_active_user_count() -> int:
+    sf = get_sf_connection()
+    try:
+        res = sf.query("SELECT COUNT(Id) total FROM User WHERE IsActive = true")
+        return res["records"][0]["total"]
+    except Exception:
+        return 0
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_flow_errors_7d() -> list[dict]:
+    """Query FlowExecutionErrorEvent for the last 7 days. Returns [] if unavailable."""
+    sf = get_sf_connection()
+    try:
+        soql = (
+            "SELECT FlowVersionId, FlowApiName, ErrorMessage "
+            "FROM FlowExecutionErrorEvent "
+            "WHERE CreatedDate = LAST_N_DAYS:7 "
+            "ORDER BY CreatedDate DESC LIMIT 1000"
+        )
+        res = sf.query(soql)
+        return res.get("records", [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_audit_trail_7d() -> list[dict]:
+    """Query SetupAuditTrail for the last 7 days. Returns [] if unavailable."""
+    sf = get_sf_connection()
+    try:
+        soql = (
+            "SELECT CreatedDate, CreatedBy.Name, Action, Section, Display "
+            "FROM SetupAuditTrail "
+            "WHERE CreatedDate = LAST_N_DAYS:7 "
+            "ORDER BY CreatedDate DESC LIMIT 20"
+        )
+        res = sf.query(soql)
+        return res.get("records", [])
+    except Exception:
+        return []
+
+
+def _gauge_color(pct: float) -> str:
+    if pct >= 80:
+        return COLOR_ERROR
+    if pct >= 60:
+        return COLOR_WARNING
+    return COLOR_SUCCESS
+
+
+def _gauge_html(label: str, used: int, max_val: int) -> str:
+    """Render a labelled horizontal progress gauge as HTML."""
+    if max_val <= 0:
+        return (
+            f'<div style="margin-bottom:1rem;">'
+            f'<div style="font-size:0.8rem;color:#6e8c7a;margin-bottom:4px;">{label}</div>'
+            f'<div style="color:#6e8c7a;font-size:0.75rem;">Unavailable</div>'
+            f'</div>'
+        )
+    pct = min(100.0, used / max_val * 100)
+    color = _gauge_color(pct)
+    bar_w = f"{pct:.1f}%"
+    return (
+        f'<div style="margin-bottom:1.2rem;">'
+        f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;'
+        f'color:#b8ccbf;margin-bottom:4px;">'
+        f'<span>{label}</span>'
+        f'<span style="color:{color};font-weight:600;">{pct:.1f}%</span>'
+        f'</div>'
+        f'<div style="background:#234035;border-radius:4px;height:10px;overflow:hidden;">'
+        f'<div style="width:{bar_w};height:100%;background:{color};'
+        f'border-radius:4px;transition:width 0.3s;"></div>'
+        f'</div>'
+        f'<div style="font-size:0.72rem;color:#6e8c7a;margin-top:3px;">'
+        f'{used:,} / {max_val:,}</div>'
+        f'</div>'
+    )
+
+
+def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("📊  Org Health Dashboard")
+
+    col_refresh, _ = st.columns([1, 6])
+    with col_refresh:
+        if st.button("🔄  Refresh", key="dash_refresh"):
+            _fetch_org_limits.clear()
+            _fetch_active_user_count.clear()
+            _fetch_flow_errors_7d.clear()
+            _fetch_audit_trail_7d.clear()
+            st.rerun()
+
+    limits = _fetch_org_limits()
+
+    # ── Section 1: Resource Gauges ─────────────────────────────────────────────
+    st.subheader("Resource Usage")
+
+    def _limit_vals(key: str) -> tuple[int, int]:
+        entry = limits.get(key, {})
+        return entry.get("Remaining", 0), entry.get("Max", 0)
+
+    api_remaining, api_max = _limit_vals("DailyApiRequests")
+    api_used = api_max - api_remaining
+
+    data_remaining, data_max = _limit_vals("DataStorageMB")
+    data_used = data_max - data_remaining
+
+    file_remaining, file_max = _limit_vals("FileStorageMB")
+    file_used = file_max - file_remaining
+
+    gauges_html = (
+        _gauge_html("API Requests (Daily)", api_used, api_max)
+        + _gauge_html("Data Storage (MB)", data_used, data_max)
+        + _gauge_html("File Storage (MB)", file_used, file_max)
+    )
+    st.markdown(
+        f'<div style="background:#1a3028;border-radius:8px;padding:1.2rem 1.5rem;">'
+        f'{gauges_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("")
+
+    # ── Section 2: License Summary ─────────────────────────────────────────────
+    col_lic, col_err = st.columns(2)
+
+    with col_lic:
+        st.subheader("Licenses")
+        user_entry = limits.get("ActiveScratchOrgs") or limits.get("SingleEmail", {})
+        # Best source: ActiveUsers limit; fall back to direct query
+        active_users = _fetch_active_user_count()
+        lic_max_entry = limits.get("ActiveUsers", {})
+        lic_max = lic_max_entry.get("Max", 0)
+        if lic_max > 0:
+            lic_pct = min(100.0, active_users / lic_max * 100)
+            color = _gauge_color(lic_pct)
+            st.markdown(
+                f'<div style="background:#1a3028;border-radius:8px;padding:1rem 1.2rem;">'
+                f'<div style="font-size:2rem;font-weight:700;color:{color};">'
+                f'{active_users:,} <span style="font-size:1rem;color:#6e8c7a;">/ {lic_max:,}</span></div>'
+                f'<div style="font-size:0.8rem;color:#b8ccbf;margin-top:4px;">'
+                f'Active users · {lic_pct:.0f}% of licenses used</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div style="background:#1a3028;border-radius:8px;padding:1rem 1.2rem;">'
+                f'<div style="font-size:2rem;font-weight:700;color:{COLOR_SUCCESS};">'
+                f'{active_users:,}</div>'
+                f'<div style="font-size:0.8rem;color:#b8ccbf;margin-top:4px;">Active users</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    with col_err:
+        st.subheader("Flow Errors (7 days)")
+        flow_errors = _fetch_flow_errors_7d()
+        err_count = len(flow_errors)
+        if flow_errors is None:
+            st.markdown(
+                '<div style="background:#1a3028;border-radius:8px;padding:1rem 1.2rem;">'
+                '<div style="color:#6e8c7a;font-size:0.85rem;">'
+                'Event Monitoring not available in this edition.</div></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            color = COLOR_ERROR if err_count > 0 else COLOR_SUCCESS
+            st.markdown(
+                f'<div style="background:#1a3028;border-radius:8px;padding:1rem 1.2rem;">'
+                f'<div style="font-size:2rem;font-weight:700;color:{color};">{err_count:,}</div>'
+                f'<div style="font-size:0.8rem;color:#b8ccbf;margin-top:4px;">Flow execution errors</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if flow_errors:
+                # Top 5 flows by error count
+                from collections import Counter
+                flow_counts = Counter(r.get("FlowApiName", "Unknown") for r in flow_errors)
+                st.markdown("")
+                st.caption("Top erroring flows:")
+                top5 = flow_counts.most_common(5)
+                rows_html = "".join(
+                    f'<tr><td style="padding:3px 8px;color:#c9d9cf;">{name}</td>'
+                    f'<td style="padding:3px 8px;text-align:right;color:{COLOR_ERROR};font-weight:600;">{cnt}</td></tr>'
+                    for name, cnt in top5
+                )
+                st.markdown(
+                    f'<table style="width:100%;font-size:0.8rem;border-collapse:collapse;">'
+                    f'<thead><tr>'
+                    f'<th style="padding:3px 8px;text-align:left;color:#6e8c7a;font-weight:500;">Flow</th>'
+                    f'<th style="padding:3px 8px;text-align:right;color:#6e8c7a;font-weight:500;">Errors</th>'
+                    f'</tr></thead><tbody>{rows_html}</tbody></table>',
+                    unsafe_allow_html=True,
+                )
+
+    st.markdown("")
+
+    # ── Section 3: Recent Changes Ticker ──────────────────────────────────────
+    st.subheader("Recent Changes (7 days)")
+    audit_rows = _fetch_audit_trail_7d()
+    if not audit_rows:
+        st.markdown(
+            '<div style="color:#6e8c7a;font-size:0.85rem;">'
+            'SetupAuditTrail unavailable in this edition.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        # Flatten nested CreatedBy into a DataFrame for filtering
+        audit_flat = pd.DataFrame([{
+            "CreatedDate": r.get("CreatedDate", ""),
+            "User":        (r.get("CreatedBy") or {}).get("Name", "Unknown"),
+            "Section":     r.get("Section", ""),
+            "Display":     r.get("Display", r.get("Action", "")),
+        } for r in audit_rows])
+
+        dash_show_all = st.toggle(
+            "Show all entries (include logins, report runs, etc.)",
+            value=False,
+            key="dash_audit_show_all",
+        )
+        audit_filtered = filter_audit_trail(
+            audit_flat, signal_only=not dash_show_all
+        )
+        total_audit = len(audit_flat)
+        filtered_audit = total_audit - len(audit_filtered)
+        if not dash_show_all:
+            st.caption(
+                f"Showing {len(audit_filtered):,} of {total_audit:,} entries "
+                f"({filtered_audit:,} filtered)"
+            )
+
+        ticker_items = []
+        for _, row in audit_filtered.iterrows():
+            ts = str(row["CreatedDate"])[:16].replace("T", " ")
+            ticker_items.append(
+                f'<div style="padding:6px 0;border-bottom:1px solid #234035;">'
+                f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.72rem;'
+                f'color:#6e8c7a;">{ts}</span>'
+                f'<span style="font-size:0.75rem;color:#95F9AF;margin:0 6px;">{row["User"]}</span>'
+                f'<span style="font-size:0.78rem;color:#c9d9cf;">{row["Display"]}</span>'
+                f'<span style="font-size:0.72rem;color:#6e8c7a;margin-left:6px;">[{row["Section"]}]</span>'
+                f'</div>'
+            )
+        st.markdown(
+            f'<div style="background:#1a3028;border-radius:8px;padding:0.8rem 1.2rem;'
+            f'max-height:300px;overflow-y:auto;">'
+            + "".join(ticker_items)
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("📋  Load full audit trail in Query Builder", key="dash_audit_btn"):
+            st.session_state.last_soql = (
+                "SELECT CreatedDate, CreatedBy.Name, Action, Section, Display "
+                "FROM SetupAuditTrail ORDER BY CreatedDate DESC LIMIT 200"
+            )
+            st.session_state.last_object = "SetupAuditTrail"
+            nav_to("query")
+
+    st.markdown("")
+
+    # ── Section 4: Quick Navigation Cards ─────────────────────────────────────
+    st.subheader("Quick Actions")
+    cards = [
+        ("🔍", "Run a Query",        "SOQL builder with AI assist",        "query"),
+        ("🔗", "Dedup Accounts",     "Find and merge duplicate accounts",   "dedupe"),
+        ("🗺️", "Territory Check",    "Lookup and reassign territory",       "territory"),
+        ("🔐", "Permissions Lookup", "User Hub and permission set review",  "permissions"),
+    ]
+    card_cols = st.columns(4)
+    for col, (icon, title, desc, target) in zip(card_cols, cards):
+        with col:
+            if st.button(
+                f"{icon}  {title}",
+                key=f"dash_card_{target}",
+                help=desc,
+                use_container_width=True,
+            ):
+                nav_to(target)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: AUTOMATION INVENTORY  (page = "automation_inventory")  — Brief 02
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_tooling_query_raw(soql: str) -> tuple[list[dict], str]:
+    """Execute a Tooling API query. Returns (records, error_message)."""
+    import urllib.parse
+    sf = get_sf_connection()
+    encoded = urllib.parse.quote(soql)
+    try:
+        result = sf.toolingexecute(f"query?q={encoded}")
+        return result.get("records", []), ""
+    except Exception as e1:
+        try:
+            result = sf.restful(f"tooling/query/?q={encoded}")
+            return result.get("records", []), ""
+        except Exception as e2:
+            return [], str(e2)
+
+
+def _run_tooling_query(soql: str) -> list[dict]:
+    """Execute a Tooling API query and return records (errors silently discarded)."""
+    records, _ = _run_tooling_query_raw(soql)
+    return records
+
+
+def _run_rest_query_raw(soql: str) -> "tuple[list[dict], str]":
+    """
+    Execute a standard REST SOQL query (NOT Tooling API).
+    Returns (records, error_message).  error_message is '' on success.
+
+    Use this for objects that live in the regular REST API, such as
+    FlowDefinitionView, which the Tooling API rejects with INVALID_TYPE.
+    Returns only the first page (up to 2000 records); callers that need
+    more should add an explicit LIMIT or use run_soql() instead.
+    """
+    sf = get_sf_connection()
+    try:
+        result = sf.query(soql)
+        return result.get("records", []), ""
+    except Exception as e:
+        return [], str(e)
+
+
+def _flow_display_name(api_name: str, cache: dict | None = None) -> str:
+    """Return *Label (ApiName)* for user-facing display, falling back to ApiName."""
+    if not api_name:
+        return ""
+    if cache:
+        entry = cache.get(f"flow::{api_name}") or cache.get(f"wfr::{api_name}") or {}
+        label = (entry.get("label") or "").strip()
+        if label and label != api_name:
+            return f"{label} ({api_name})"
+    return api_name
+
+
+def _load_automation_census() -> pd.DataFrame:
+    """Load all automation types and build a per-object census."""
+    sf = get_sf_connection()
+    rows = []
+    diag: list[str] = []
+
+    # Flows — try standard REST first, then Tooling API.
+    # TriggerObjectOrEventApiName was added post-v59; use Label only in the REST query.
+    flow_records: list[dict] = []
+    flow_soql = (
+        "SELECT ApiName, MasterLabel, ProcessType, TriggerObjectOrEventLabel, IsActive, LastModifiedDate "
+        "FROM FlowDefinitionView LIMIT 2000"
+    )
+    try:
+        flow_df = run_soql(flow_soql)
+        flow_records = flow_df.to_dict("records")
+        diag.append(f"✅ Flows via REST: {len(flow_records)} records")
+    except Exception as e1:
+        diag.append(f"⚠️ Flows REST failed: {e1}")
+        try:
+            flow_records = _run_tooling_query(flow_soql)
+            diag.append(f"✅ Flows via Tooling API: {len(flow_records)} records")
+        except Exception as e2:
+            diag.append(f"❌ Flows Tooling API also failed: {e2}")
+
+    # ProcessType values that genuinely have no record-trigger object.
+    # NOTE: AutoLaunchedFlow is intentionally EXCLUDED — older record-
+    # triggered flows use this ProcessType and DO have a TriggerObjectOrEvent.
+    # They go through the secondary Tooling API lookup instead.
+    _NO_OBJECT_PROCESS_TYPES = {
+        "Screen":                    "No Object (Screen Flow)",
+        "Survey":                    "No Object (Survey)",
+        "ContactRequestFlow":        "No Object (Contact Request)",
+        "CheckoutFlow":              "No Object (Checkout)",
+        "FieldServiceMobile":        "No Object (Field Service Mobile)",
+        "FieldServiceWeb":           "No Object (Field Service Web)",
+        "TransactionSecurityPolicy": "No Object (Transaction Security)",
+        "ActionCadenceFlow":         "No Object (Cadence)",
+    }
+    # ProcessType fallbacks for flows that survive the secondary lookup
+    # without an object — these are truly non-record-triggered.
+    _FALLBACK_NO_OBJECT_LABELS = {
+        "AutoLaunchedFlow": "No Object (AutoLaunched)",
+        "Scheduled":        "No Object (Scheduled)",
+    }
+
+    # Secondary Tooling API lookup for flows that are missing a label but are
+    # record-triggered types.  Flow.TriggerObjectOrEvent exists in all API versions.
+    def _label_is_empty(val) -> bool:
+        """Check if a TriggerObjectOrEventLabel is empty, None, or NaN."""
+        if val is None:
+            return True
+        if isinstance(val, float) and val != val:   # NaN check
+            return True
+        if isinstance(val, str) and not val.strip():
+            return True
+        return False
+
+    _missing_obj_names = [
+        r.get("ApiName", "") for r in flow_records
+        if _label_is_empty(r.get("TriggerObjectOrEventLabel"))
+        and r.get("ProcessType") not in _NO_OBJECT_PROCESS_TYPES
+        and r.get("ApiName")
+    ]
+    _tooling_obj_map: dict[str, str] = {}
+    if _missing_obj_names:
+        for _i in range(0, len(_missing_obj_names), 200):
+            _batch = _missing_obj_names[_i : _i + 200]
+            _csv   = ", ".join(f"'{n}'" for n in _batch)
+            # Query without Status filter so inactive flows also get resolved
+            _tres  = _run_tooling_query(
+                f"SELECT ApiName, TriggerObjectOrEvent FROM Flow "
+                f"WHERE ApiName IN ({_csv}) LIMIT 500"
+            )
+            for _tr in _tres:
+                _aname = _tr.get("ApiName", "")
+                _tobj  = _tr.get("TriggerObjectOrEvent", "")
+                if _aname and _tobj:
+                    _tooling_obj_map[_aname] = _tobj
+        diag.append(
+            f"✅ Secondary object lookup: {len(_tooling_obj_map)}/{len(_missing_obj_names)} "
+            "flows resolved via Tooling API"
+        )
+
+    st.session_state["_auto_diag"] = diag
+
+    for r in flow_records:
+        process_type = r.get("ProcessType", "")
+        api_name     = r.get("ApiName", "")
+        # Resolution chain: REST label → Tooling TriggerObjectOrEvent → ProcessType bucket → fallback
+        # Guard against pandas NaN (float) — NaN is truthy so we must check explicitly.
+        _rest_label = r.get("TriggerObjectOrEventLabel")
+        if _rest_label is None or (isinstance(_rest_label, float) and _rest_label != _rest_label):
+            _rest_label = ""  # treat NaN / None as empty
+        obj = (
+            _rest_label
+            or _tooling_obj_map.get(api_name)
+            or _NO_OBJECT_PROCESS_TYPES.get(process_type)
+            or _FALLBACK_NO_OBJECT_LABELS.get(process_type)
+            or "No Object"
+        )
+        _master_label = (r.get("MasterLabel") or "").strip()
+        rows.append({
+            "Object": obj, "Name": api_name,
+            "Label": _master_label if _master_label and _master_label != api_name else "",
+            "Type": "Flow",
+            "Status": "Active" if r.get("IsActive") else "Inactive",
+            "LastModifiedDate": r.get("LastModifiedDate", ""),
+            "TriggerEvent": process_type,
+        })
+
+    # Workflow Rules — Metadata field is NOT bulk-queryable; omit it
+    wfr_records = _run_tooling_query(
+        "SELECT Id, Name, TableEnumOrId, LastModifiedDate FROM WorkflowRule LIMIT 1000"
+    )
+    for r in wfr_records:
+        rows.append({
+            "Object": r.get("TableEnumOrId", ""), "Name": r.get("Name", ""),
+            "Label": "",
+            "Type": "WorkflowRule", "Status": "Active",
+            "LastModifiedDate": r.get("LastModifiedDate", ""),
+            "TriggerEvent": "",
+        })
+
+    # Validation Rules
+    vr_records = _run_tooling_query(
+        "SELECT EntityDefinition.QualifiedApiName, ValidationName, Active, LastModifiedDate "
+        "FROM ValidationRule LIMIT 1000"
+    )
+    for r in vr_records:
+        obj = (r.get("EntityDefinition") or {}).get("QualifiedApiName", "Unknown")
+        rows.append({
+            "Object": obj, "Name": r.get("ValidationName", ""),
+            "Label": "",
+            "Type": "ValidationRule",
+            "Status": "Active" if r.get("Active") else "Inactive",
+            "LastModifiedDate": r.get("LastModifiedDate", ""),
+            "TriggerEvent": "",
+        })
+
+    # Apex Triggers
+    try:
+        apex_records = _run_tooling_query(
+            "SELECT Name, TableEnumOrId, Status, UsageBeforeInsert, UsageAfterInsert, "
+            "UsageBeforeUpdate, UsageAfterUpdate, LastModifiedDate "
+            "FROM ApexTrigger LIMIT 500"
+        )
+        for r in apex_records:
+            events = []
+            for ev in ["UsageBeforeInsert", "UsageAfterInsert", "UsageBeforeUpdate", "UsageAfterUpdate"]:
+                if r.get(ev):
+                    events.append(ev.replace("Usage", ""))
+            rows.append({
+                "Object": r.get("TableEnumOrId", ""), "Name": r.get("Name", ""),
+                "Label": "",
+                "Type": "ApexTrigger", "Status": r.get("Status", ""),
+                "LastModifiedDate": r.get("LastModifiedDate", ""),
+                "TriggerEvent": ", ".join(events),
+            })
+    except Exception:
+        pass
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["LastModifiedDate"] = pd.to_datetime(df["LastModifiedDate"], errors="coerce", utc=True)
+    # Tag managed package automations
+    df["Managed"] = df["Name"].str.contains(r"__", na=False) & \
+                    ~df["Name"].str.endswith("__c") & \
+                    ~df["Name"].str.endswith("__r")
+    # Build user-facing DisplayName: "Label (ApiName)" when Label differs from Name
+    df["DisplayName"] = df.apply(
+        lambda r: f"{r['Label']} ({r['Name']})" if r.get("Label") else r["Name"],
+        axis=1,
+    )
+    return df
+
+
+def render_automation_inventory_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("⚙️  Automation Inventory & Dependency Mapper")
+    st.caption(
+        "Census, health scoring, trigger maps, merge planning, and stale-automation "
+        "detection for all Flows, Workflow Rules, Validation Rules, and Apex Triggers."
+    )
+
+    # ── Shared state: load cache once for all tabs that need it ────────────
+    if "_flow_cache" not in st.session_state:
+        st.session_state["_flow_cache"] = _load_flow_cache()
+
+    auto_section = st.radio(
+        "Section",
+        [
+            "📊  Census",
+            "🏥  Object Health",
+            "🔎  Object Explorer",
+            "🗺️  Merge Planner",
+            "🕰️  Stale Automations",
+            "🏷️  Integration Map",
+        ],
+        key="auto_section",
+        label_visibility="collapsed",
+        horizontal=True,
+    )
+    st.markdown("---")
+
+    # ── Route to tab renderers ────────────────────────────────────────────
+    if auto_section == "📊  Census":
+        _render_census_tab()
+    elif auto_section == "🏥  Object Health":
+        _render_object_health_tab()
+    elif auto_section == "🔎  Object Explorer":
+        _render_object_explorer_tab()
+    elif auto_section == "🗺️  Merge Planner":
+        _render_merge_planner_tab()
+    elif auto_section == "🕰️  Stale Automations":
+        _render_stale_automations_tab()
+    elif auto_section == "🏷️  Integration Map":
+        render_integration_map()
+
+
+# ── Tab 1: Census ─────────────────────────────────────────────────────────
+def _render_census_tab():
+    """Census tab — load and summarise all automations in the org."""
+    if st.button("🔍  Load Automation Census", key="auto_load_btn"):
+        with st.spinner("Loading automations via Tooling API…"):
+            st.session_state["_auto_df"] = _load_automation_census()
+
+    df: pd.DataFrame = st.session_state.get("_auto_df")
+    if df is None:
+        st.info("Click **Load Automation Census** to fetch all automations.")
+        return
+
+    diag = st.session_state.get("_auto_diag", [])
+    if diag:
+        with st.expander("Query diagnostics", expanded=df.empty or (df["Type"] == "Flow").sum() == 0):
+            for line in diag:
+                st.caption(line)
+
+    if df.empty:
+        st.warning("No automations found or Tooling API unavailable.")
+        return
+
+    # ── Summary metrics row 1: by type ────────────────────────────────────
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("Flows",            int((df["Type"] == "Flow").sum()))
+    col_b.metric("Workflow Rules",   int((df["Type"] == "WorkflowRule").sum()))
+    col_c.metric("Validation Rules", int((df["Type"] == "ValidationRule").sum()))
+    col_d.metric("Apex Triggers",    int((df["Type"] == "ApexTrigger").sum()))
+
+    # ── Summary metrics row 2: cache + context ────────────────────────────
+    cache = st.session_state.get("_flow_cache", {})
+    cached_count = sum(1 for k in cache if k.startswith("flow::") or k.startswith("wfr::"))
+    pb_count = int(df["TriggerEvent"].isin({"Workflow", "InvocableProcess"}).sum())
+    managed_count = int((df.get("Managed") == True).sum()) if "Managed" in df.columns else 0  # noqa: E712
+    objects_with_auto = int(df["Object"].dropna().nunique())
+    active_count = int((df["Status"] == "Active").sum())
+    inactive_count = int((df["Status"] == "Inactive").sum())
+
+    col_e, col_f, col_g, col_h = st.columns(4)
+    col_e.metric("Cached Metadata", cached_count, help="Flow/WFR metadata entries in local cache")
+    col_f.metric("Process Builders", pb_count, help="Legacy Process Builder / Invocable Process flows")
+    col_g.metric("Objects w/ Automation", objects_with_auto)
+    col_h.metric("Active / Inactive", f"{active_count} / {inactive_count}")
+    st.markdown("")
+
+    # ── Per-object census table ───────────────────────────────────────────
+    census = (
+        df.groupby("Object")
+        .agg(
+            Flows=("Type", lambda x: (x == "Flow").sum()),
+            WorkflowRules=("Type", lambda x: (x == "WorkflowRule").sum()),
+            ValidationRules=("Type", lambda x: (x == "ValidationRule").sum()),
+            ApexTriggers=("Type", lambda x: (x == "ApexTrigger").sum()),
+        )
+        .reset_index()
+    )
+    census["Total"] = census[["Flows", "WorkflowRules", "ValidationRules", "ApexTriggers"]].sum(axis=1)
+    census = census.sort_values("Total", ascending=False)
+    st.dataframe(census, use_container_width=True, hide_index=True)
+
+    # ── Conflict warnings: 3+ active flows on same object+trigger ─────────
+    active_flows = df[(df["Type"] == "Flow") & (df["Status"] == "Active")]
+    conflicts = (
+        active_flows.groupby(["Object", "TriggerEvent"])
+        .size()
+        .reset_index(name="count")
+    )
+    conflicts = conflicts[conflicts["count"] >= 3]
+    if not conflicts.empty:
+        st.markdown("")
+        st.warning("⚠️ Potential order-of-execution conflicts (3+ active Flows on same object + trigger):")
+        st.dataframe(conflicts, use_container_width=True, hide_index=True)
+
+
+# ── Tab 2: Object Health ──────────────────────────────────────────────────
+def _render_object_health_tab():
+    """Salesforce best-practice health scoring per object with drill-down."""
+    df: pd.DataFrame = st.session_state.get("_auto_df")
+    if df is None:
+        st.info("Load the **Census** first to generate health scores.")
+        return
+    if df.empty:
+        st.warning("Census is empty — no objects to score.")
+        return
+
+    cache  = st.session_state.get("_flow_cache", {})
+    groups = _build_conflict_groups(df, include_inactive=True, cache=cache)
+    health = _compute_object_health_v2(df, cache, groups)
+
+    if health.empty:
+        st.info("No objects with automations found.")
+        return
+
+    # ── Grade distribution summary ────────────────────────────────────────
+    grade_counts = health["Grade"].value_counts().reindex(["A", "B", "C", "D", "F"], fill_value=0)
+    gc = st.columns(5)
+    grade_colors = {"A": "🟢", "B": "🔵", "C": "🟡", "D": "🟠", "F": "🔴"}
+    for i, g in enumerate(["A", "B", "C", "D", "F"]):
+        gc[i].metric(f"{grade_colors[g]} Grade {g}", int(grade_counts[g]))
+
+    st.markdown("")
+
+    # ── Plotly bar chart: top 20 worst objects ────────────────────────────
+    import plotly.express as px
+
+    worst = health.nlargest(20, "Score").sort_values("Score", ascending=True)
+    color_map = {"A": "#2ecc71", "B": "#3498db", "C": "#f1c40f", "D": "#e67e22", "F": "#e74c3c"}
+    worst["Color"] = worst["Grade"].map(color_map)
+
+    fig = px.bar(
+        worst,
+        x="Score",
+        y="Object",
+        orientation="h",
+        color="Grade",
+        color_discrete_map=color_map,
+        title="Top 20 Objects by Health Risk Score",
+        labels={"Score": "Risk Score (lower is better)", "Object": ""},
+    )
+    fig.update_layout(height=max(400, len(worst) * 28), yaxis=dict(autorange="reversed"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Drill-down by object ──────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Object Drill-Down")
+    obj_options = health.sort_values("Score", ascending=False)["Object"].tolist()
+    sel = st.selectbox("Select object", obj_options, key="health_drill_obj")
+    row = health[health["Object"] == sel].iloc[0]
+    st.markdown(f"**{sel}** — Grade **{row['Grade']}** (Score: {row['Score']})")
+
+    breakdown = row.get("Breakdown", {})
+    if breakdown:
+        bd_rows = []
+        _factor_help = {
+            "multi_flow":       "Multiple active flows sharing the same trigger action (+5 per extra beyond 1)",
+            "process_builder":  "Active Process Builder / Invocable Process flows (+3 each) — should be migrated",
+            "workflow_rules":   "Active Workflow Rules (+3 each) — legacy, should migrate to Flow",
+            "before_after":     "After-Save flows doing field-only updates that belong in Before Save (+2 each)",
+            "stale":            "Inactive automations untouched for 12+ months (+1 each)",
+            "recursion":        "Both Before + After Save flows updating same object — recursion risk (+4)",
+            "governor":         "High total active-automation density on this object (+3 at 5+, +6 at 8+)",
+        }
+        for factor, info in breakdown.items():
+            # info is {"score": int, "detail": str} from _compute_object_health_v2
+            score  = info["score"]  if isinstance(info, dict) else info
+            detail = info.get("detail", "") if isinstance(info, dict) else ""
+            if score > 0:
+                bd_rows.append({
+                    "Factor":       factor.replace("_", " ").title(),
+                    "Points":       score,
+                    "Detail":       detail,
+                    "Explanation":  _factor_help.get(factor, ""),
+                })
+        if bd_rows:
+            st.dataframe(pd.DataFrame(bd_rows), use_container_width=True, hide_index=True)
+        else:
+            st.success("No risk factors detected — this object follows best practices.")
+    else:
+        st.success("No risk factors detected.")
+
+    # ── Recommendations ───────────────────────────────────────────────────
+    def _bd_score(key: str) -> int:
+        """Extract score from a breakdown entry (handles dict or int)."""
+        v = breakdown.get(key, 0)
+        return v["score"] if isinstance(v, dict) else (v if isinstance(v, (int, float)) else 0)
+
+    if breakdown:
+        recs = []
+        if _bd_score("multi_flow") > 0:
+            recs.append("**Consolidate flows** — this object has multiple flows on the same trigger action. "
+                        "Use the **Merge Planner** tab to plan consolidation.")
+        if _bd_score("process_builder") > 0:
+            recs.append("**Migrate Process Builders** — deprecated by Salesforce. Convert to record-triggered Flows.")
+        if _bd_score("workflow_rules") > 0:
+            recs.append("**Migrate Workflow Rules** — legacy feature. Convert to record-triggered Flows.")
+        if _bd_score("before_after") > 0:
+            recs.append("**Move field updates to Before Save** — After-Save flows doing only field updates should "
+                        "be Before-Save flows (avoids an extra DML operation).")
+        if _bd_score("recursion") > 0:
+            recs.append("**Recursion risk** — both Before and After Save flows update this object. "
+                        "Verify that After-Save updates don't re-trigger Before-Save flows.")
+        if _bd_score("governor") > 0:
+            recs.append("**Governor limit risk** — high automation density. Consolidate to reduce DML/SOQL usage.")
+        if recs:
+            st.markdown("**Recommendations:**")
+            for r in recs:
+                st.markdown(f"- {r}")
+
+    # ── CSV export ────────────────────────────────────────────────────────
+    st.markdown("---")
+    export_df = health[["Object", "Score", "Grade"]].copy()
+    st.download_button(
+        "📥  Export Health Scores (CSV)",
+        export_df.to_csv(index=False),
+        file_name="object_health_scores.csv",
+        mime="text/csv",
+        key="health_csv_dl",
+    )
+
+
+# ── Tab 3: Object Explorer ────────────────────────────────────────────────
+def _render_object_explorer_tab():
+    """Per-object trigger map — shows what fires and when for each object."""
+    df: pd.DataFrame = st.session_state.get("_auto_df")
+    if df is None:
+        st.info("Load the **Census** first to explore objects.")
+        return
+    if df.empty:
+        st.warning("Census is empty.")
+        return
+
+    cache = st.session_state.get("_flow_cache", {})
+    objects = sorted(df["Object"].dropna().unique().tolist())
+    sel_obj = st.selectbox("Select object", objects, key="explorer_obj")
+
+    obj_df = df[df["Object"] == sel_obj].copy()
+    if obj_df.empty:
+        st.info(f"No automations found on **{sel_obj}**.")
+        return
+
+    # ── Build trigger map for flows ───────────────────────────────────────
+    _RTT_TO_ACTIONS: dict[str, list[str]] = {
+        "Create":          ["On Create"],
+        "Update":          ["On Update"],
+        "CreateAndUpdate": ["On Create", "On Update"],
+        "Delete":          ["On Delete"],
+    }
+
+    flow_rows = obj_df[obj_df["Type"] == "Flow"].copy()
+
+    # ── Classify flows as record-triggered vs non-record ──────────────
+    # ProcessType alone is NOT reliable — older record-triggered flows
+    # have ProcessType "AutoLaunchedFlow" (before SF split into
+    # RecordBeforeSave / RecordAfterSave).  Strategy:
+    #   1. Known non-record ProcessTypes (Screen, Survey, etc.) → non-record
+    #   2. Known record ProcessTypes (RecordBeforeSave, etc.) → record
+    #   3. Everything else: check metadata cache for triggerType / recordTriggerType
+    #   4. If no cache data but flow is on a real object → assume record-triggered
+    #      (the census already puts genuinely non-record flows under "No Object (...)")
+    _DEFINITELY_NON_RECORD = {
+        "Screen", "Survey", "CheckoutFlow", "ContactRequestFlow",
+        "FieldServiceMobile", "FieldServiceWeb",
+        "TransactionSecurityPolicy", "ActionCadenceFlow",
+    }
+
+    record_idxs: list = []
+    non_record_idxs: list = []
+
+    for idx, row in flow_rows.iterrows():
+        pt = (row.get("TriggerEvent") or "")
+        fname = (row.get("Name") or "").strip()
+
+        # 1) Known non-record ProcessTypes
+        if pt in _DEFINITELY_NON_RECORD:
+            non_record_idxs.append(idx)
+            continue
+
+        # 2) Known record-triggered ProcessTypes
+        if pt in _BEFORE_SAVE_PROCESS_TYPES or pt in _AFTER_SAVE_PROCESS_TYPES:
+            record_idxs.append(idx)
+            continue
+
+        # 3) Check metadata cache for triggerType / recordTriggerType
+        _is_record = False
+        if cache and fname:
+            _meta  = cache.get(f"flow::{fname}") or {}
+            _start = _meta.get("start") or {}
+            _tt  = (_start.get("triggerType") or "")
+            _rtt = (_start.get("recordTriggerType") or "")
+            if "Record" in _tt or _rtt:
+                _is_record = True
+
+        if _is_record:
+            record_idxs.append(idx)
+        elif pt == "Scheduled" and not _is_record:
+            # Scheduled flows without record trigger data → non-record
+            non_record_idxs.append(idx)
+        else:
+            # AutoLaunchedFlow / empty / unknown on a real object:
+            # census already filtered truly non-record AutoLaunchedFlow
+            # to "No Object (AutoLaunched)", so if it's here, it's
+            # almost certainly record-triggered.
+            record_idxs.append(idx)
+
+    record_flows = flow_rows.loc[record_idxs].copy() if record_idxs else flow_rows.iloc[:0].copy()
+    non_record_flows = flow_rows.loc[non_record_idxs].copy() if non_record_idxs else flow_rows.iloc[:0].copy()
+
+    # Map each record-triggered flow into (bucket, action) slots
+    trigger_map: dict[str, dict[str, list[dict]]] = {
+        "Before Save": {"On Create": [], "On Update": [], "On Delete": []},
+        "After Save":  {"On Create": [], "On Update": [], "On Delete": []},
+    }
+
+    for _, row in record_flows.iterrows():
+        name = (row.get("Name") or "").strip()
+
+        # ── Determine bucket + action from cache, fallback to ProcessType ──
+        _flow_meta  = {}
+        _start_node = {}
+        rtt = ""
+        if cache and name:
+            _flow_meta  = cache.get(f"flow::{name}") or {}
+            _start_node = _flow_meta.get("start") or {}
+            rtt = (_start_node.get("recordTriggerType", "") or "")
+
+        # Bucket: cache triggerType is most accurate
+        _trigger_type = (_start_node.get("triggerType") or "").strip() if _start_node else ""
+        if _trigger_type == "RecordBeforeSave":
+            bucket = "Before Save"
+        elif _trigger_type == "RecordAfterSave":
+            bucket = "After Save"
+        else:
+            # Fallback: use ProcessType-based mapping
+            bucket = _normalise_trigger_bucket(row)
+            if bucket is None:
+                # Last resort for flows on a real object with unknown ProcessType
+                bucket = "After Save"
+
+        actions = _RTT_TO_ACTIONS.get(rtt, [])
+        is_caau = rtt == "CreateAndUpdate"
+
+        # Build flow card data
+        card = _render_flow_card_data(name, row, cache, is_caau)
+
+        if actions:
+            for act in actions:
+                if act in trigger_map.get(bucket, {}):
+                    trigger_map[bucket][act].append(card)
+        else:
+            # No cache data — place in all action slots for the bucket
+            for act in trigger_map.get(bucket, {}):
+                trigger_map[bucket][act].append({**card, "_uncached": True})
+
+    # ── Render trigger map ────────────────────────────────────────────────
+    st.subheader(f"Trigger Map — {sel_obj}")
+    st.caption("Record-triggered flows organized by execution point. "
+               "Build the metadata cache in **Merge Planner** for trigger-action detail.")
+
+    _any_shown = False
+    for bucket in ["Before Save", "After Save"]:
+        for action in ["On Create", "On Update", "On Delete"]:
+            cards = trigger_map[bucket][action]
+            label = f"{bucket} — {action}"
+            if cards:
+                _any_shown = True
+                st.markdown(f"#### {'⬆️' if bucket == 'Before Save' else '⬇️'}  {label}  ({len(cards)} flow{'s' if len(cards) != 1 else ''})")
+                for card in cards:
+                    _render_flow_card_ui(card)
+                st.markdown("")
+            else:
+                st.markdown(f"<span style='color:#888'>{'⬆️' if bucket == 'Before Save' else '⬇️'}  **{label}** — <em>no flows</em></span>",
+                            unsafe_allow_html=True)
+
+    if not _any_shown:
+        st.info("No record-triggered flows found on this object. "
+                "This object may only have Workflow Rules, Validation Rules, or Apex Triggers.")
+
+    # ── Non-record flows (Screen, AutoLaunched, Scheduled, etc.) ──────────
+    if not non_record_flows.empty:
+        st.markdown("---")
+        st.markdown("#### Other Flows (non-record-triggered)")
+        _nrf_cols = ["DisplayName", "Status", "TriggerEvent"] if "DisplayName" in non_record_flows.columns else ["Name", "Status", "TriggerEvent"]
+        nrf = non_record_flows[_nrf_cols].copy()
+        nrf.rename(columns={"TriggerEvent": "ProcessType", "DisplayName": "Flow"}, inplace=True)
+        st.dataframe(nrf, use_container_width=True, hide_index=True)
+
+    # ── Workflow Rules, Validation Rules, Apex Triggers tables ────────────
+    for auto_type, emoji in [("WorkflowRule", "📋"), ("ValidationRule", "✅"), ("ApexTrigger", "⚙️")]:
+        type_df = obj_df[obj_df["Type"] == auto_type]
+        if not type_df.empty:
+            st.markdown("---")
+            st.markdown(f"#### {emoji}  {auto_type.replace('Rule', ' Rules').replace('Trigger', ' Triggers')}  ({len(type_df)})")
+            show_cols = ["Name", "Status"]
+            if "LastModifiedDate" in type_df.columns:
+                disp = type_df.copy()
+                disp["LastModifiedDate"] = disp["LastModifiedDate"].dt.strftime("%Y-%m-%d").fillna("")
+                show_cols.append("LastModifiedDate")
+            else:
+                disp = type_df
+            st.dataframe(disp[show_cols], use_container_width=True, hide_index=True)
+
+
+def _render_flow_card_data(
+    name: str, row: "pd.Series", cache: dict, is_caau: bool
+) -> dict:
+    """Build data dict for a flow card in the Object Explorer trigger map."""
+    card: dict = {
+        "name":     name,
+        "status":   row.get("Status", ""),
+        "is_pb":    row.get("TriggerEvent") in {"Workflow", "InvocableProcess"},
+        "is_caau":  is_caau,
+        "managed":  bool(row.get("Managed", False)),
+    }
+
+    # Enrich from metadata cache
+    meta = (cache.get(f"flow::{name}") or {}) if cache else {}
+    _label = (meta.get("label") or "").strip()
+    card["display_name"] = f"{_label} ({name})" if _label and _label != name else name
+    card["description"]  = (meta.get("description") or "")[:120]
+    card["has_integration"] = bool(meta.get("integration_points"))
+    card["element_counts"] = {}
+    if meta.get("elements"):
+        elems = meta["elements"]
+        card["element_counts"] = {
+            "decisions":    sum(1 for e in elems if (e.get("type") or "").lower() == "decision"),
+            "assignments":  sum(1 for e in elems if (e.get("type") or "").lower() == "assignment"),
+            "recordUpdates": sum(1 for e in elems if (e.get("type") or "").lower() in {"recordupdate", "recordupdates"}),
+            "actions":      sum(1 for e in elems if (e.get("type") or "").lower() in {"actioncall", "actioncalls"}),
+        }
+    return card
+
+
+def _render_flow_card_ui(card: dict):
+    """Render a single flow card in the Object Explorer trigger map."""
+    badges = []
+    if card.get("is_caau"):
+        badges.append("🔄 CreateAndUpdate")
+    if card.get("is_pb"):
+        badges.append("⚠️ Process Builder")
+    if card.get("has_integration"):
+        badges.append("🔌 Integration")
+    if card.get("managed"):
+        badges.append("📦 Managed")
+    if card.get("status") == "Inactive":
+        badges.append("💤 Inactive")
+    if card.get("_uncached"):
+        badges.append("❓ Not cached")
+
+    badge_str = "  ".join(badges)
+    name = card.get("display_name") or card.get("name", "?")
+    desc = card.get("description", "")
+
+    # Element counts
+    ec = card.get("element_counts", {})
+    count_parts = []
+    for k, v in ec.items():
+        if v > 0:
+            count_parts.append(f"{v} {k}")
+    count_str = " · ".join(count_parts) if count_parts else ""
+
+    with st.container():
+        cols = st.columns([4, 3])
+        with cols[0]:
+            st.markdown(f"**{name}**{'  ' + badge_str if badge_str else ''}")
+            if desc:
+                st.caption(desc)
+        with cols[1]:
+            if count_str:
+                st.caption(count_str)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COMBINED WORKFLOW DIAGRAM — visual rendering of overlapping automation logic
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Graphviz availability check (once at module load) ─────────────────────
+_GRAPHVIZ_OK = False
+# Windows: Graphviz installer doesn't always add to PATH
+for _gv_candidate in (
+    r"C:\Program Files\Graphviz\bin",
+    r"C:\Program Files (x86)\Graphviz\bin",
+):
+    if os.path.isdir(_gv_candidate) and _gv_candidate not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _gv_candidate + ";" + os.environ.get("PATH", "")
+try:
+    import graphviz as _gv
+    # Test actual rendering (Python package installed ≠ system library present)
+    _gv.Source("digraph{a->b}").pipe(format="svg")
+    _GRAPHVIZ_OK = True
+except Exception:
+    _gv = None  # type: ignore[assignment]
+
+
+def _parse_flow_to_graph(cache_entry: dict) -> dict:
+    """
+    Parse a cached Flow metadata entry into a directed graph representation.
+
+    Returns dict with:
+      nodes   – list[dict] : name, label, element_type, fields_read, fields_written
+      edges   – list[tuple]: (source_name, target_name, edge_label)
+      entry_criteria – str : human-readable entry criteria from start filters
+      trigger_type   – str : "RecordBeforeSave" / "RecordAfterSave" / ""
+      record_trigger – str : "Create" / "Update" / "CreateAndUpdate" / ""
+      object_name    – str : the triggering SObject
+    """
+    nodes: list[dict] = []
+    edges: list[tuple] = []
+
+    start = cache_entry.get("start") or {}
+    trigger_type   = (start.get("triggerType") or "")
+    record_trigger = (start.get("recordTriggerType") or "")
+    object_name    = (start.get("object") or "")
+
+    # ── Helper: extract connector target ──────────────────────────────────
+    def _target(connector) -> str:
+        if not connector:
+            return ""
+        if isinstance(connector, dict):
+            return (connector.get("targetReference") or "")
+        return ""
+
+    # ── Entry criteria from start filters ─────────────────────────────────
+    filters = start.get("filters") or []
+    filter_logic = (start.get("filterLogic") or "and").upper()
+    criteria_parts = []
+    for f in filters:
+        field = f.get("field", "?")
+        op    = f.get("operator", "?")
+        val   = f.get("value") or {}
+        val_str = ""
+        for k in ("stringValue", "numberValue", "booleanValue", "elementReference", "dateValue"):
+            v = val.get(k) if isinstance(val, dict) else None
+            if v is not None:
+                val_str = str(v)
+                break
+        criteria_parts.append(f"{field} {op} {val_str}".strip())
+    entry_criteria = f" {filter_logic} ".join(criteria_parts) if criteria_parts else "All records"
+
+    # Start node (the trigger entry point for this flow)
+    first_target = _target(start.get("connector"))
+    start_node_name = f"__start__{cache_entry.get('api_name', 'flow')}"
+    nodes.append({
+        "name":           start_node_name,
+        "label":          entry_criteria[:80] or "Entry",
+        "element_type":   "entry_criteria",
+        "fields_read":    [],
+        "fields_written": [],
+    })
+    if first_target:
+        edges.append((start_node_name, first_target, ""))
+
+    # ── Pass 1+2: Build nodes and edges per element type ──────────────────
+
+    # Decisions
+    for d in (cache_entry.get("decisions") or []):
+        name  = d.get("name", "")
+        label = d.get("label", name)
+        if not name:
+            continue
+        # Fields read from conditions
+        fields_r = []
+        for rule in (d.get("rules") or []):
+            for cond in (rule.get("conditions") or []):
+                ref = cond.get("leftValueReference", "")
+                if ref:
+                    fields_r.append(ref)
+            # Rule branch edge
+            rule_target = _target(rule.get("connector"))
+            if rule_target:
+                rule_label = rule.get("label", "Yes")
+                edges.append((name, rule_target, rule_label))
+        # Default branch
+        default_target = _target(d.get("defaultConnector"))
+        if default_target:
+            edges.append((name, default_target, d.get("defaultConnectorLabel", "Default")))
+        nodes.append({
+            "name": name, "label": label, "element_type": "decision",
+            "fields_read": fields_r, "fields_written": [],
+        })
+
+    # Assignments
+    for a in (cache_entry.get("assignments") or []):
+        name  = a.get("name", "")
+        label = a.get("label", name)
+        if not name:
+            continue
+        fields_w = []
+        for item in (a.get("assignmentItems") or []):
+            ref = item.get("assignToReference", "")
+            if ref:
+                fields_w.append(ref)
+        target = _target(a.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        nodes.append({
+            "name": name, "label": label, "element_type": "assignment",
+            "fields_read": [], "fields_written": fields_w,
+        })
+
+    # Record Updates
+    for ru in (cache_entry.get("recordUpdates") or []):
+        name  = ru.get("name", "")
+        label = ru.get("label", name)
+        if not name:
+            continue
+        fields_w = []
+        for ia in (ru.get("inputAssignments") or []):
+            f = ia.get("field", "")
+            if f:
+                fields_w.append(f)
+        target = _target(ru.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        # Fault connector
+        fault_target = _target(ru.get("faultConnector"))
+        if fault_target:
+            edges.append((name, fault_target, "Fault"))
+        nodes.append({
+            "name": name, "label": label, "element_type": "recordUpdate",
+            "fields_read": [], "fields_written": fields_w,
+        })
+
+    # Record Creates
+    for rc in (cache_entry.get("recordCreates") or []):
+        name  = rc.get("name", "")
+        label = rc.get("label", name)
+        if not name:
+            continue
+        fields_w = [ia.get("field", "") for ia in (rc.get("inputAssignments") or []) if ia.get("field")]
+        target = _target(rc.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        fault_target = _target(rc.get("faultConnector"))
+        if fault_target:
+            edges.append((name, fault_target, "Fault"))
+        nodes.append({
+            "name": name, "label": label, "element_type": "recordCreate",
+            "fields_read": [], "fields_written": fields_w,
+        })
+
+    # Record Deletes
+    for rd in (cache_entry.get("recordDeletes") or []):
+        name  = rd.get("name", "")
+        label = rd.get("label", name)
+        if not name:
+            continue
+        target = _target(rd.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        fault_target = _target(rd.get("faultConnector"))
+        if fault_target:
+            edges.append((name, fault_target, "Fault"))
+        nodes.append({
+            "name": name, "label": label, "element_type": "recordDelete",
+            "fields_read": [], "fields_written": [],
+        })
+
+    # Record Lookups
+    for rl in (cache_entry.get("recordLookups") or []):
+        name  = rl.get("name", "")
+        label = rl.get("label", name)
+        if not name:
+            continue
+        fields_r = [flt.get("field", "") for flt in (rl.get("filters") or []) if flt.get("field")]
+        target = _target(rl.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        fault_target = _target(rl.get("faultConnector"))
+        if fault_target:
+            edges.append((name, fault_target, "Fault"))
+        nodes.append({
+            "name": name, "label": label, "element_type": "recordLookup",
+            "fields_read": fields_r, "fields_written": [],
+        })
+
+    # Action Calls (email, Apex, HTTP, etc.)
+    for ac in (cache_entry.get("actionCalls") or []):
+        name  = ac.get("name", "")
+        label = ac.get("label", name)
+        if not name:
+            continue
+        action_type = ac.get("actionType", "")
+        action_name = ac.get("actionName", "")
+        suffix = f" ({action_type})" if action_type else ""
+        target = _target(ac.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        fault_target = _target(ac.get("faultConnector"))
+        if fault_target:
+            edges.append((name, fault_target, "Fault"))
+        nodes.append({
+            "name": name, "label": f"{label}{suffix}", "element_type": "action",
+            "fields_read": [], "fields_written": [],
+        })
+
+    # Loops
+    for lp in (cache_entry.get("loops") or []):
+        name  = lp.get("name", "")
+        label = lp.get("label", name)
+        if not name:
+            continue
+        body_target = _target(lp.get("nextValueConnector"))
+        if body_target:
+            edges.append((name, body_target, "Loop body"))
+        exit_target = _target(lp.get("noMoreValuesConnector"))
+        if exit_target:
+            edges.append((name, exit_target, "Done"))
+        nodes.append({
+            "name": name, "label": label, "element_type": "loop",
+            "fields_read": [], "fields_written": [],
+        })
+
+    # Subflows
+    for sf in (cache_entry.get("subflows") or []):
+        name  = sf.get("name", "")
+        label = sf.get("label", name)
+        flow_name = sf.get("flowName", "")
+        if not name:
+            continue
+        target = _target(sf.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        nodes.append({
+            "name": name, "label": f"Subflow: {flow_name or label}",
+            "element_type": "subflow",
+            "fields_read": [], "fields_written": [],
+        })
+
+    # Screens (simplified)
+    for scr in (cache_entry.get("screens") or []):
+        name  = scr.get("name", "")
+        label = scr.get("label", name)
+        if not name:
+            continue
+        target = _target(scr.get("connector"))
+        if target:
+            edges.append((name, target, ""))
+        nodes.append({
+            "name": name, "label": label, "element_type": "screen",
+            "fields_read": [], "fields_written": [],
+        })
+
+    # Waits (simplified)
+    for w in (cache_entry.get("waits") or []):
+        name  = w.get("name", "")
+        label = w.get("label", name)
+        if not name:
+            continue
+        target = _target(w.get("connector") or w.get("defaultConnector"))
+        if target:
+            edges.append((name, target, ""))
+        nodes.append({
+            "name": name, "label": label, "element_type": "wait",
+            "fields_read": [], "fields_written": [],
+        })
+
+    return {
+        "nodes":          nodes,
+        "edges":          edges,
+        "entry_criteria":  entry_criteria,
+        "trigger_type":    trigger_type,
+        "record_trigger":  record_trigger,
+        "object_name":     object_name,
+    }
+
+
+def _detect_field_collisions(graphs: dict[str, dict]) -> dict[str, list[str]]:
+    """
+    Compare fields_written across all parsed Flow graphs.
+
+    Returns {field_name: [flow_name, ...]} for fields written by 2+ Flows.
+    Only includes $Record fields (direct field updates on the triggering object).
+    """
+    field_to_flows: dict[str, set[str]] = {}
+    for flow_name, graph in graphs.items():
+        for node in graph.get("nodes", []):
+            for f in node.get("fields_written", []):
+                # Normalise: "$Record.FieldName" → "FieldName", bare "FieldName" stays
+                clean = f.replace("$Record.", "").strip()
+                if not clean:
+                    continue
+                field_to_flows.setdefault(clean, set()).add(flow_name)
+    return {
+        f: sorted(flows) for f, flows in field_to_flows.items() if len(flows) >= 2
+    }
+
+
+def _build_simplified_node(member: dict) -> dict:
+    """Build a minimal single-node graph for WFR/Apex Triggers without full metadata."""
+    name = member.get("Name", "unknown")
+    mtype = member.get("Type", "")
+    return {
+        "nodes": [{
+            "name": name, "label": f"{name}\n({mtype})",
+            "element_type": "legacy_placeholder",
+            "fields_read": [], "fields_written": [],
+        }],
+        "edges":          [],
+        "entry_criteria":  "N/A (limited metadata)",
+        "trigger_type":    "",
+        "record_trigger":  "",
+        "object_name":     member.get("Object", ""),
+    }
+
+
+def _parse_flow_xml_to_graph(flow_xml: str, flow_name: str = "Consolidated") -> dict:
+    """
+    Parse a Salesforce .flow-meta.xml string into a directed graph.
+
+    Returns the same dict shape as _parse_flow_to_graph:
+      nodes, edges, entry_criteria, trigger_type, record_trigger, object_name
+    """
+    _NS = {"sf": "http://soap.sforce.com/2006/04/metadata"}
+
+    def _txt(parent, tag, ns=_NS):
+        el = parent.find(f"sf:{tag}", ns)
+        if el is None:
+            # Fallback: bare tag (no namespace)
+            el = parent.find(tag)
+        return (el.text or "").strip() if el is not None else ""
+
+    def _conn(parent, tag="connector", ns=_NS):
+        el = parent.find(f"sf:{tag}", ns)
+        if el is None:
+            el = parent.find(tag)
+        if el is None:
+            return ""
+        ref = el.find("sf:targetReference", ns)
+        if ref is None:
+            ref = el.find("targetReference")
+        return (ref.text or "").strip() if ref is not None else ""
+
+    def _findall(parent, tag, ns=_NS):
+        results = parent.findall(f"sf:{tag}", ns)
+        if not results:
+            results = parent.findall(tag)
+        return results
+
+    # ── Parse XML ─────────────────────────────────────────────────────────
+    try:
+        root = _ET.fromstring(flow_xml)
+    except _ET.ParseError as exc:
+        return {
+            "nodes": [{"name": "__error__", "label": f"XML Parse Error:\n{exc}",
+                        "element_type": "legacy_placeholder",
+                        "fields_read": [], "fields_written": []}],
+            "edges": [], "entry_criteria": "Error",
+            "trigger_type": "", "record_trigger": "", "object_name": "",
+        }
+
+    nodes: list[dict] = []
+    edges: list[tuple] = []
+
+    # ── Start element ─────────────────────────────────────────────────────
+    start_els = _findall(root, "start")
+    start = start_els[0] if start_els else None
+    trigger_type = _txt(start, "triggerType") if start is not None else ""
+    record_trigger = _txt(start, "recordTriggerType") if start is not None else ""
+    object_name = _txt(start, "object") if start is not None else ""
+
+    # Entry criteria from filters
+    criteria_parts: list[str] = []
+    if start is not None:
+        for f in _findall(start, "filters"):
+            field = _txt(f, "field")
+            op = _txt(f, "operator")
+            # value can have various child types
+            val_str = ""
+            val_el = f.find("sf:value", _NS)
+            if val_el is None:
+                val_el = f.find("value")
+            if val_el is not None:
+                for vk in ("stringValue", "numberValue", "booleanValue",
+                           "elementReference", "dateValue"):
+                    vv = val_el.find(f"sf:{vk}", _NS)
+                    if vv is None:
+                        vv = val_el.find(vk)
+                    if vv is not None and vv.text:
+                        val_str = vv.text.strip()
+                        break
+            criteria_parts.append(f"{field} {op} {val_str}".strip())
+    filter_logic = (_txt(start, "filterLogic") if start is not None else "") or "and"
+    entry_criteria = f" {filter_logic.upper()} ".join(criteria_parts) if criteria_parts else "All records"
+
+    first_target = _conn(start, "connector") if start is not None else ""
+    start_node = f"__start__{flow_name}"
+    nodes.append({
+        "name": start_node, "label": entry_criteria[:80] or "Entry",
+        "element_type": "entry_criteria", "fields_read": [], "fields_written": [],
+    })
+    if first_target:
+        edges.append((start_node, first_target, ""))
+
+    # ── Decisions ─────────────────────────────────────────────────────────
+    for el in _findall(root, "decisions"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        fields_r = []
+        for rule in _findall(el, "rules"):
+            for cond in _findall(rule, "conditions"):
+                ref = _txt(cond, "leftValueReference")
+                if ref:
+                    fields_r.append(ref)
+            rt = _conn(rule, "connector")
+            if rt:
+                edges.append((name, rt, _txt(rule, "label") or "Yes"))
+        dt = _conn(el, "defaultConnector")
+        if dt:
+            edges.append((name, dt, _txt(el, "defaultConnectorLabel") or "Default"))
+        nodes.append({"name": name, "label": label, "element_type": "decision",
+                       "fields_read": fields_r, "fields_written": []})
+
+    # ── Assignments ───────────────────────────────────────────────────────
+    for el in _findall(root, "assignments"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        fw = [_txt(ai, "assignToReference")
+              for ai in _findall(el, "assignmentItems")
+              if _txt(ai, "assignToReference")]
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        nodes.append({"name": name, "label": label, "element_type": "assignment",
+                       "fields_read": [], "fields_written": fw})
+
+    # ── Record Updates ────────────────────────────────────────────────────
+    for el in _findall(root, "recordUpdates"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        fw = [_txt(ia, "field") for ia in _findall(el, "inputAssignments") if _txt(ia, "field")]
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        ft = _conn(el, "faultConnector")
+        if ft:
+            edges.append((name, ft, "Fault"))
+        nodes.append({"name": name, "label": label, "element_type": "recordUpdate",
+                       "fields_read": [], "fields_written": fw})
+
+    # ── Record Creates ────────────────────────────────────────────────────
+    for el in _findall(root, "recordCreates"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        fw = [_txt(ia, "field") for ia in _findall(el, "inputAssignments") if _txt(ia, "field")]
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        ft = _conn(el, "faultConnector")
+        if ft:
+            edges.append((name, ft, "Fault"))
+        nodes.append({"name": name, "label": label, "element_type": "recordCreate",
+                       "fields_read": [], "fields_written": fw})
+
+    # ── Record Deletes ────────────────────────────────────────────────────
+    for el in _findall(root, "recordDeletes"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        ft = _conn(el, "faultConnector")
+        if ft:
+            edges.append((name, ft, "Fault"))
+        nodes.append({"name": name, "label": label, "element_type": "recordDelete",
+                       "fields_read": [], "fields_written": []})
+
+    # ── Record Lookups ────────────────────────────────────────────────────
+    for el in _findall(root, "recordLookups"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        fr = [_txt(flt, "field") for flt in _findall(el, "filters") if _txt(flt, "field")]
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        ft = _conn(el, "faultConnector")
+        if ft:
+            edges.append((name, ft, "Fault"))
+        nodes.append({"name": name, "label": label, "element_type": "recordLookup",
+                       "fields_read": fr, "fields_written": []})
+
+    # ── Action Calls ──────────────────────────────────────────────────────
+    for el in _findall(root, "actionCalls"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        atype = _txt(el, "actionType")
+        suffix = f" ({atype})" if atype else ""
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        ft = _conn(el, "faultConnector")
+        if ft:
+            edges.append((name, ft, "Fault"))
+        nodes.append({"name": name, "label": f"{label}{suffix}", "element_type": "action",
+                       "fields_read": [], "fields_written": []})
+
+    # ── Loops ─────────────────────────────────────────────────────────────
+    for el in _findall(root, "loops"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        bt = _conn(el, "nextValueConnector")
+        if bt:
+            edges.append((name, bt, "Loop body"))
+        et = _conn(el, "noMoreValuesConnector")
+        if et:
+            edges.append((name, et, "Done"))
+        nodes.append({"name": name, "label": label, "element_type": "loop",
+                       "fields_read": [], "fields_written": []})
+
+    # ── Subflows ──────────────────────────────────────────────────────────
+    for el in _findall(root, "subflows"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        fname = _txt(el, "flowName")
+        if not name:
+            continue
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        nodes.append({"name": name, "label": f"Subflow: {fname or label}",
+                       "element_type": "subflow", "fields_read": [], "fields_written": []})
+
+    # ── Screens ───────────────────────────────────────────────────────────
+    for el in _findall(root, "screens"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        t = _conn(el, "connector")
+        if t:
+            edges.append((name, t, ""))
+        nodes.append({"name": name, "label": label, "element_type": "screen",
+                       "fields_read": [], "fields_written": []})
+
+    # ── Waits ─────────────────────────────────────────────────────────────
+    for el in _findall(root, "waits"):
+        name = _txt(el, "name")
+        label = _txt(el, "label") or name
+        if not name:
+            continue
+        t = _conn(el, "connector") or _conn(el, "defaultConnector")
+        if t:
+            edges.append((name, t, ""))
+        nodes.append({"name": name, "label": label, "element_type": "wait",
+                       "fields_read": [], "fields_written": []})
+
+    return {
+        "nodes": nodes, "edges": edges,
+        "entry_criteria": entry_criteria,
+        "trigger_type": trigger_type,
+        "record_trigger": record_trigger,
+        "object_name": object_name,
+    }
+
+
+# ── Node shapes for DOT language ──────────────────────────────────────────
+_DOT_SHAPES = {
+    "entry_criteria":     "invhouse",
+    "decision":           "diamond",
+    "assignment":         "box",
+    "recordUpdate":       "box",
+    "recordCreate":       "box",
+    "recordDelete":       "box",
+    "recordLookup":       "parallelogram",
+    "action":             "box",      # styled with rounded
+    "loop":               "hexagon",
+    "subflow":            "box",      # styled with rounded
+    "screen":             "note",
+    "wait":               "octagon",
+    "legacy_placeholder": "box",      # dashed
+}
+
+# ── Colour palette matching the brief's visual spec ───────────────────────
+_DIAGRAM_COLOURS = {
+    "trigger_fill":   "#017551",
+    "trigger_font":   "#FFFFFF",
+    "clean_border":   "#00AA61",
+    "mixed_border":   "#FCBC68",
+    "retired_border": "#F96041",
+    "legacy_border":  "#6E8C7A",
+    "collision":      "#F96041",
+    "node_fill":      "#1A2332",
+    "node_font":      "#D4E0EC",
+    "edge_colour":    "#6E8C7A",
+    "bg_colour":      "#0E1117",
+    "label_colour":   "#D4E0EC",
+}
+
+
+def _classify_member_for_diagram(member: dict) -> str:
+    """Return 'clean', 'mixed', 'retired', or 'legacy' for lane colouring."""
+    mtype = (member.get("Type") or "")
+    if mtype in ("WorkflowRule", "ApexTrigger"):
+        return "legacy"
+    name = (member.get("Name") or "")
+    cls, _, _ = _classify_automation_full(name)
+    return {"Retired-only": "retired", "Mixed": "mixed", "Active-tool": "clean",
+            "Clean": "clean"}.get(cls, "clean")
+
+
+def _generate_dot_diagram(
+    graphs: dict[str, dict],
+    collisions: dict[str, list[str]],
+    group: dict,
+    member_classifications: dict[str, str],
+    cache: dict | None = None,
+) -> str:
+    """
+    Generate a Graphviz DOT string for a conflict group's combined workflow diagram.
+    """
+    cache = cache or {}
+    obj     = group.get("Object", "?").replace('"', "'")
+    trigger = group.get("TriggerEvent", "").replace('"', "'")
+    c       = _DIAGRAM_COLOURS
+
+    # Collision field set per flow for quick lookup
+    collision_nodes: dict[str, set[str]] = {}  # flow_name → set of node names with collisions
+    collision_fields_by_node: dict[str, list[str]] = {}  # "flow::node" → [field, ...]
+    for field, flow_names in collisions.items():
+        for fn in flow_names:
+            graph = graphs.get(fn, {})
+            for node in graph.get("nodes", []):
+                for fw in node.get("fields_written", []):
+                    if fw.replace("$Record.", "").strip() == field:
+                        collision_nodes.setdefault(fn, set()).add(node["name"])
+                        key = f"{fn}::{node['name']}"
+                        collision_fields_by_node.setdefault(key, []).append(field)
+
+    dot_lines = [
+        'digraph CombinedWorkflow {',
+        f'  bgcolor="{c["bg_colour"]}"',
+        '  rankdir=TB',
+        '  fontname="Arial"',
+        f'  fontcolor="{c["label_colour"]}"',
+        '  node [fontname="Arial" fontsize=10 style="filled"]',
+        f'  edge [color="{c["edge_colour"]}" fontcolor="{c["edge_colour"]}" fontsize=8]',
+        '',
+        f'  trigger_node [label="{obj}\\n{trigger}" shape=box style="filled,bold"'
+        f' fillcolor="{c["trigger_fill"]}" fontcolor="{c["trigger_font"]}" fontsize=12]',
+        '',
+    ]
+
+    # Sort lanes: clean first, then mixed, retired, legacy
+    lane_order = {"clean": 0, "mixed": 1, "retired": 2, "legacy": 3}
+    sorted_flows = sorted(
+        graphs.keys(),
+        key=lambda fn: (lane_order.get(member_classifications.get(fn, "clean"), 9), fn)
+    )
+
+    for flow_name in sorted_flows:
+        graph = graphs[flow_name]
+        cls   = member_classifications.get(flow_name, "clean")
+        border = c.get(f"{cls}_border", c["clean_border"])
+
+        # Sanitise flow name for DOT identifiers
+        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', flow_name)
+
+        # Build display label: "Label (ApiName)" with full tooltip
+        _cache_entry = cache.get(f"flow::{flow_name}") or cache.get(f"wfr::{flow_name}") or {}
+        _flow_label  = (_cache_entry.get("label") or "").strip()
+        if _flow_label and _flow_label != flow_name:
+            _display_label = f"{_flow_label}\\n({flow_name})"
+            _full_tooltip  = f"{_flow_label} ({flow_name})"
+        else:
+            _display_label = flow_name
+            _full_tooltip  = flow_name
+        _safe_flow_label = _display_label.replace('"', '\\"')
+        _safe_tooltip    = _full_tooltip.replace('"', '\\"')
+
+        dot_lines.append(f'  subgraph cluster_{safe_name} {{')
+        dot_lines.append(f'    label="{_safe_flow_label}"')
+        dot_lines.append(f'    tooltip="{_safe_tooltip}"')
+        dot_lines.append(f'    fontcolor="{c["label_colour"]}"')
+        dot_lines.append(f'    fontsize=11')
+        dot_lines.append(f'    style="dashed"')
+        dot_lines.append(f'    color="{border}"')
+        dot_lines.append(f'    penwidth=2')
+        dot_lines.append('')
+
+        for node in graph.get("nodes", []):
+            nname = node["name"]
+            nlabel = node["label"].replace('"', '\\"').replace('\n', '\\n')
+            etype  = node.get("element_type", "assignment")
+            shape  = _DOT_SHAPES.get(etype, "box")
+
+            # Collision highlighting
+            is_collision = nname in collision_nodes.get(flow_name, set())
+            coll_fields  = collision_fields_by_node.get(f"{flow_name}::{nname}", [])
+            if is_collision and coll_fields:
+                nlabel += "\\n" + "\\n".join(f"\u26a0 {cf}" for cf in coll_fields[:3])
+
+            border_col = c["collision"] if is_collision else border
+            pen = 3 if is_collision else 1
+
+            # Style tweaks per element type
+            extra = ""
+            if etype in ("action", "subflow"):
+                extra = ' style="filled,rounded"'
+            elif etype == "legacy_placeholder":
+                extra = ' style="filled,dashed"'
+            elif etype == "entry_criteria":
+                extra = ' style="filled,bold"'
+            else:
+                extra = ' style="filled"'
+
+            node_id = f"{safe_name}_{re.sub(r'[^a-zA-Z0-9_]', '_', nname)}"
+            # Tooltip: full untruncated label text (visible on hover)
+            _node_tip = node["label"].replace('"', '\\"')
+            dot_lines.append(
+                f'    {node_id} [label="{nlabel}" tooltip="{_node_tip}" shape={shape}'
+                f' fillcolor="{c["node_fill"]}" fontcolor="{c["node_font"]}"'
+                f' color="{border_col}" penwidth={pen}{extra}]'
+            )
+
+        dot_lines.append('  }')
+        dot_lines.append('')
+
+        # Connect trigger to each flow's start node
+        start_nodes = [n for n in graph["nodes"] if n["element_type"] == "entry_criteria"]
+        if start_nodes:
+            sn_id = f"{safe_name}_{re.sub(r'[^a-zA-Z0-9_]', '_', start_nodes[0]['name'])}"
+            dot_lines.append(f'  trigger_node -> {sn_id}')
+
+        # Internal edges
+        node_names_in_flow = {n["name"] for n in graph["nodes"]}
+        for src, tgt, elabel in graph.get("edges", []):
+            if src not in node_names_in_flow or tgt not in node_names_in_flow:
+                continue
+            src_id = f"{safe_name}_{re.sub(r'[^a-zA-Z0-9_]', '_', src)}"
+            tgt_id = f"{safe_name}_{re.sub(r'[^a-zA-Z0-9_]', '_', tgt)}"
+            _safe_elabel = elabel.replace('"', '\\"').replace('\n', '\\n') if elabel else ""
+            lbl = f' [label="{_safe_elabel}"]' if _safe_elabel else ""
+            dot_lines.append(f'  {src_id} -> {tgt_id}{lbl}')
+
+        dot_lines.append('')
+
+    # ── Legend ─────────────────────────────────────────────────────────────
+    dot_lines.append('  subgraph cluster_legend {')
+    dot_lines.append(f'    label="Legend"')
+    dot_lines.append(f'    fontcolor="{c["label_colour"]}"')
+    dot_lines.append(f'    style="rounded"')
+    dot_lines.append(f'    color="{c["edge_colour"]}"')
+    dot_lines.append(f'    bgcolor="{c["bg_colour"]}"')
+    dot_lines.append(f'    fontsize=9')
+    for lbl, col, shp in [
+        ("Clean Flow",   c["clean_border"],   "box"),
+        ("Mixed Flow",   c["mixed_border"],   "box"),
+        ("Retired Flow", c["retired_border"], "box"),
+        ("WFR or Apex",  c["legacy_border"],  "box"),
+        ("Decision",     c["node_font"],      "diamond"),
+        ("Data Op",      c["node_font"],      "box"),
+        ("Action",       c["node_font"],      "box"),
+        ("Collision",    c["collision"],       "box"),
+    ]:
+        safe_lbl = re.sub(r'[^a-zA-Z0-9_]', '_', lbl)
+        dot_lines.append(
+            f'    legend_{safe_lbl} [label="{lbl}" shape={shp} fillcolor="{c["node_fill"]}"'
+            f' fontcolor="{c["node_font"]}" color="{col}" penwidth=2'
+            f' fontsize=8 width=0.8 height=0.3]'
+        )
+    dot_lines.append('  }')
+    dot_lines.append('}')
+
+    return '\n'.join(dot_lines)
+
+
+def _generate_consolidated_dot(
+    graph: dict,
+    flow_name: str,
+    object_name: str,
+) -> str:
+    """
+    Generate a Graphviz DOT string for a single consolidated flow.
+
+    Simpler than _generate_dot_diagram: no subgraph clusters, no collision
+    highlighting, no classification legend — just the flow's nodes and edges.
+    """
+    c = _DIAGRAM_COLOURS
+    trigger = graph.get("trigger_type", "")
+    rec_trig = graph.get("record_trigger", "")
+    obj = object_name or graph.get("object_name", "")
+    trigger_label = f"{obj}\\n{trigger}" if trigger else obj or "Entry"
+    safe_flow = re.sub(r'[^a-zA-Z0-9_ ]', '', flow_name)[:50]
+
+    lines = [
+        'digraph ConsolidatedFlow {',
+        f'  bgcolor="{c["bg_colour"]}"',
+        '  rankdir=TB',
+        '  fontname="Arial"',
+        f'  fontcolor="{c["label_colour"]}"',
+        '  node [fontname="Arial" fontsize=10 style="filled"]',
+        f'  edge [color="{c["edge_colour"]}" fontcolor="{c["edge_colour"]}" fontsize=8]',
+        f'  labelloc=t',
+        f'  label="Consolidated: {safe_flow}"',
+        '  fontsize=14',
+        '',
+    ]
+
+    # Nodes
+    border = c["clean_border"]
+    for node in graph.get("nodes", []):
+        nname = node["name"]
+        nlabel = node["label"].replace('"', '\\"').replace('\n', '\\n')
+        etype = node.get("element_type", "assignment")
+        shape = _DOT_SHAPES.get(etype, "box")
+
+        if etype in ("action", "subflow"):
+            extra = ' style="filled,rounded"'
+        elif etype == "entry_criteria":
+            extra = ' style="filled,bold"'
+        else:
+            extra = ' style="filled"'
+
+        nid = re.sub(r'[^a-zA-Z0-9_]', '_', nname)
+        _node_tip = node["label"].replace('"', '\\"')
+        lines.append(
+            f'  {nid} [label="{nlabel}" tooltip="{_node_tip}" shape={shape}'
+            f' fillcolor="{c["node_fill"]}" fontcolor="{c["node_font"]}"'
+            f' color="{border}" penwidth=1{extra}]'
+        )
+
+    lines.append('')
+
+    # Edges
+    node_names = {n["name"] for n in graph.get("nodes", [])}
+    for src, tgt, elabel in graph.get("edges", []):
+        if src not in node_names or tgt not in node_names:
+            continue
+        sid = re.sub(r'[^a-zA-Z0-9_]', '_', src)
+        tid = re.sub(r'[^a-zA-Z0-9_]', '_', tgt)
+        _el = elabel.replace('"', '\\"') if elabel else ""
+        lbl = f' [label="{_el}"]' if _el else ""
+        lines.append(f'  {sid} -> {tid}{lbl}')
+
+    lines.append('')
+
+    # Compact legend (element types only)
+    lines.append('  subgraph cluster_legend {')
+    lines.append(f'    label="Legend"')
+    lines.append(f'    fontcolor="{c["label_colour"]}"')
+    lines.append(f'    style="rounded"')
+    lines.append(f'    color="{c["edge_colour"]}"')
+    lines.append(f'    bgcolor="{c["bg_colour"]}"')
+    lines.append(f'    fontsize=9')
+    for lbl, shp in [
+        ("Entry",      "invhouse"),
+        ("Decision",   "diamond"),
+        ("Assignment", "box"),
+        ("Data Op",    "box"),
+        ("Lookup",     "parallelogram"),
+        ("Action",     "box"),
+        ("Loop",       "hexagon"),
+    ]:
+        safe = re.sub(r'[^a-zA-Z0-9_]', '_', lbl)
+        lines.append(
+            f'    leg_{safe} [label="{lbl}" shape={shp}'
+            f' fillcolor="{c["node_fill"]}" fontcolor="{c["node_font"]}"'
+            f' color="{border}" penwidth=1 fontsize=8 width=0.7 height=0.25]'
+        )
+    lines.append('  }')
+    lines.append('}')
+
+    return '\n'.join(lines)
+
+
+def _generate_consolidated_mermaid(
+    graph: dict,
+    flow_name: str,
+    object_name: str,
+) -> str:
+    """
+    Generate Mermaid flowchart syntax for a single consolidated flow.
+    Fallback renderer when Graphviz is unavailable.
+    """
+    _MERM_SHAPES = {
+        "entry_criteria":     ("([", "])" ),
+        "decision":           ("{",  "}" ),
+        "assignment":         ("[",  "]" ),
+        "recordUpdate":       ("[",  "]" ),
+        "recordCreate":       ("[",  "]" ),
+        "recordDelete":       ("[",  "]" ),
+        "recordLookup":       ("[/", "/]"),
+        "action":             ("[[", "]]"),
+        "loop":               ("{{", "}}"),
+        "subflow":            ("[[", "]]"),
+        "screen":             ("(",  ")" ),
+        "wait":               (">",  "]" ),
+        "legacy_placeholder": ("[",  "]" ),
+    }
+
+    lines = ["flowchart TD"]
+    obj = object_name or graph.get("object_name", "")
+    safe_flow = flow_name.replace('"', "'")
+
+    # Nodes
+    for node in graph.get("nodes", []):
+        nname = node["name"]
+        nlabel = node["label"].replace('"', "'")
+        etype = node.get("element_type", "assignment")
+        l_wrap, r_wrap = _MERM_SHAPES.get(etype, ("[", "]"))
+        nid = re.sub(r'[^a-zA-Z0-9_]', '_', nname)
+        lines.append(f'    {nid}{l_wrap}"{nlabel}"{r_wrap}')
+
+    # Edges
+    node_names = {n["name"] for n in graph.get("nodes", [])}
+    for src, tgt, elabel in graph.get("edges", []):
+        if src not in node_names or tgt not in node_names:
+            continue
+        sid = re.sub(r'[^a-zA-Z0-9_]', '_', src)
+        tid = re.sub(r'[^a-zA-Z0-9_]', '_', tgt)
+        if elabel:
+            safe_el = elabel.replace('"', "'")
+            lines.append(f'    {sid} -->|"{safe_el}"| {tid}')
+        else:
+            lines.append(f'    {sid} --> {tid}')
+
+    # Styling
+    lines.append('')
+    lines.append('    classDef default fill:#1A2332,stroke:#00AA61,color:#D4E0EC')
+    lines.append('    classDef entry fill:#017551,stroke:#00AA61,color:#FFFFFF,font-weight:bold')
+    for node in graph.get("nodes", []):
+        if node.get("element_type") == "entry_criteria":
+            nid = re.sub(r'[^a-zA-Z0-9_]', '_', node["name"])
+            lines.append(f'    class {nid} entry')
+
+    return '\n'.join(lines)
+
+
+def _generate_mermaid_diagram(
+    graphs: dict[str, dict],
+    collisions: dict[str, list[str]],
+    group: dict,
+    member_classifications: dict[str, str],
+    cache: dict | None = None,
+) -> str:
+    """Generate Mermaid flowchart syntax as fallback."""
+    cache   = cache or {}
+    obj     = group.get("Object", "?")
+    trigger = group.get("TriggerEvent", "")
+    c       = _DIAGRAM_COLOURS
+
+    # Collision lookup
+    collision_nodes: dict[str, set[str]] = {}
+    for field, flow_names in collisions.items():
+        for fn in flow_names:
+            graph = graphs.get(fn, {})
+            for node in graph.get("nodes", []):
+                for fw in node.get("fields_written", []):
+                    if fw.replace("$Record.", "").strip() == field:
+                        collision_nodes.setdefault(fn, set()).add(node["name"])
+
+    lines = ['flowchart TD']
+    lines.append(f'  trigger_node["{obj}<br/>{trigger}"]')
+    lines.append('')
+
+    # Mermaid shape syntax by element type
+    _mermaid_shapes = {
+        "entry_criteria": ('[/', '/]'),   # trapezoid
+        "decision":       ('{', '}'),     # diamond
+        "assignment":     ('[', ']'),
+        "recordUpdate":   ('[', ']'),
+        "recordCreate":   ('[', ']'),
+        "recordDelete":   ('[', ']'),
+        "recordLookup":   ('[/', '/]'),
+        "action":         ('(', ')'),     # rounded
+        "loop":           ('{{', '}}'),   # hexagon
+        "subflow":        ('(', ')'),
+        "screen":         ('[', ']'),
+        "wait":           ('[', ']'),
+        "legacy_placeholder": ('[', ']'),
+    }
+
+    style_directives = []
+    lane_order = {"clean": 0, "mixed": 1, "retired": 2, "legacy": 3}
+    sorted_flows = sorted(
+        graphs.keys(),
+        key=lambda fn: (lane_order.get(member_classifications.get(fn, "clean"), 9), fn)
+    )
+
+    for flow_name in sorted_flows:
+        graph = graphs[flow_name]
+        cls   = member_classifications.get(flow_name, "clean")
+        safe  = re.sub(r'[^a-zA-Z0-9_]', '_', flow_name)
+
+        _merm_display = _flow_display_name(flow_name, cache) if cache else flow_name
+        lines.append(f'  subgraph {safe}["{_merm_display}"]')
+
+        node_names_in_flow = {n["name"] for n in graph["nodes"]}
+        for node in graph["nodes"]:
+            nname = node["name"]
+            nlabel = node["label"].replace('"', "'")
+            etype  = node.get("element_type", "assignment")
+            open_b, close_b = _mermaid_shapes.get(etype, ('[', ']'))
+            nid = f"{safe}_{re.sub(r'[^a-zA-Z0-9_]', '_', nname)}"
+            lines.append(f'    {nid}{open_b}"{nlabel}"{close_b}')
+
+            # Style: collision nodes get orange border
+            is_collision = nname in collision_nodes.get(flow_name, set())
+            if is_collision:
+                style_directives.append(
+                    f'  style {nid} stroke:{c["collision"]},stroke-width:3px'
+                )
+
+        # Internal edges
+        for src, tgt, elabel in graph.get("edges", []):
+            if src not in node_names_in_flow or tgt not in node_names_in_flow:
+                continue
+            src_id = f"{safe}_{re.sub(r'[^a-zA-Z0-9_]', '_', src)}"
+            tgt_id = f"{safe}_{re.sub(r'[^a-zA-Z0-9_]', '_', tgt)}"
+            if elabel:
+                lines.append(f'    {src_id} -->|"{elabel}"| {tgt_id}')
+            else:
+                lines.append(f'    {src_id} --> {tgt_id}')
+
+        lines.append('  end')
+        lines.append('')
+
+        # Connect trigger to entry
+        start_nodes = [n for n in graph["nodes"] if n["element_type"] == "entry_criteria"]
+        if start_nodes:
+            sn_id = f"{safe}_{re.sub(r'[^a-zA-Z0-9_]', '_', start_nodes[0]['name'])}"
+            lines.append(f'  trigger_node --> {sn_id}')
+
+    # Style directives
+    lines.append('')
+    lines.append(f'  style trigger_node fill:{c["trigger_fill"]},color:{c["trigger_font"]},stroke-width:2px')
+    lines.extend(style_directives)
+
+    return '\n'.join(lines)
+
+
+# ── Interactive SVG / HTML diagram wrapper ─────────────────────────────
+def _wrap_svg_interactive(inner_html: str, height: int = 700) -> str:
+    """Wrap SVG/HTML content in a draggable, zoomable container.
+
+    Returns a self-contained HTML string with:
+      • Click-and-drag panning  (cursor: grab / grabbing)
+      • Scroll-wheel zoom       (Ctrl+scroll or plain scroll)
+      • Double-click to reset   (returns to initial view)
+      • Zoom indicator badge    (top-right corner)
+    """
+    # Unique ID so multiple diagrams on one page don't collide
+    uid = f"diag_{id(inner_html) & 0xFFFFFFFF:08x}"
+    return f"""
+<style>
+  #{uid}_wrap {{
+    position: relative;
+    width: 100%;
+    height: {height}px;
+    overflow: hidden;
+    cursor: grab;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+  }}
+  #{uid}_wrap.dragging {{ cursor: grabbing; }}
+  #{uid}_content {{
+    position: absolute;
+    top: 0; left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }}
+  #{uid}_badge {{
+    position: absolute;
+    top: 6px; right: 8px;
+    background: rgba(0,0,0,0.55);
+    color: #aaa;
+    font: 11px/1.4 monospace;
+    padding: 2px 7px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 10;
+  }}
+  #{uid}_hint {{
+    position: absolute;
+    bottom: 8px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.55);
+    color: #888;
+    font: 11px/1.4 sans-serif;
+    padding: 3px 10px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 10;
+    opacity: 1;
+    transition: opacity 1.5s;
+  }}
+</style>
+<div id="{uid}_wrap">
+  <div id="{uid}_badge">100%</div>
+  <div id="{uid}_hint">Drag to pan \u2022 Scroll to zoom \u2022 Double-click to reset</div>
+  <div id="{uid}_content">{inner_html}</div>
+</div>
+<script>
+(function() {{
+  var wrap    = document.getElementById('{uid}_wrap');
+  var content = document.getElementById('{uid}_content');
+  var badge   = document.getElementById('{uid}_badge');
+  var hint    = document.getElementById('{uid}_hint');
+  var scale = 1, panX = 0, panY = 0;
+  var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
+  var MIN_SCALE = 0.15, MAX_SCALE = 5;
+
+  function apply() {{
+    content.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
+    badge.textContent = Math.round(scale * 100) + '%';
+  }}
+
+  // ── Drag to pan ──
+  wrap.addEventListener('mousedown', function(e) {{
+    if (e.button !== 0) return;
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    startPanX = panX; startPanY = panY;
+    wrap.classList.add('dragging');
+    e.preventDefault();
+  }});
+  window.addEventListener('mousemove', function(e) {{
+    if (!dragging) return;
+    panX = startPanX + (e.clientX - startX);
+    panY = startPanY + (e.clientY - startY);
+    apply();
+  }});
+  window.addEventListener('mouseup', function() {{
+    dragging = false;
+    wrap.classList.remove('dragging');
+  }});
+
+  // ── Scroll to zoom ──
+  wrap.addEventListener('wheel', function(e) {{
+    e.preventDefault();
+    var rect = wrap.getBoundingClientRect();
+    var mx = e.clientX - rect.left;
+    var my = e.clientY - rect.top;
+    var delta = e.deltaY > 0 ? 0.9 : 1.1;
+    var newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * delta));
+    // Zoom towards cursor position
+    panX = mx - (mx - panX) * (newScale / scale);
+    panY = my - (my - panY) * (newScale / scale);
+    scale = newScale;
+    apply();
+  }}, {{ passive: false }});
+
+  // ── Double-click to reset ──
+  wrap.addEventListener('dblclick', function() {{
+    scale = 1; panX = 0; panY = 0;
+    apply();
+  }});
+
+  // Fade out hint after 4 seconds
+  setTimeout(function() {{ if (hint) hint.style.opacity = '0'; }}, 4000);
+}})();
+</script>
+"""
+
+
+def _render_workflow_diagram(
+    group: dict,
+    cache: dict,
+    member_classifications: dict[str, str] | None = None,
+):
+    """
+    Render a combined workflow diagram for a conflict group inside Streamlit.
+
+    Uses st.graphviz_chart (JS-based, zero dependencies) as the primary renderer.
+    Falls back to Mermaid via HTML component if needed.
+    Offers SVG/PNG downloads when the system Graphviz library is available.
+    """
+    members = group.get("Members", [])
+    if not members:
+        st.info("No members in this group.")
+        return
+
+    # ── Build graphs for each member ──────────────────────────────────────
+    graphs: dict[str, dict] = {}
+    cls_map: dict[str, str] = member_classifications or {}
+
+    for m in members:
+        name  = m.get("Name", "")
+        mtype = m.get("Type", "")
+        if not name:
+            continue
+
+        # Try to get parsed metadata from cache
+        cache_key = f"flow::{name}" if mtype == "Flow" else f"wfr::{name}"
+        entry = cache.get(cache_key)
+
+        if entry and mtype == "Flow":
+            graph = _parse_flow_to_graph(entry)
+            if graph["nodes"]:
+                graphs[name] = graph
+            else:
+                graphs[name] = _build_simplified_node(m)
+        else:
+            # WFR, Apex, or uncached Flow → simplified placeholder
+            graphs[name] = _build_simplified_node(m)
+
+        if name not in cls_map:
+            cls_map[name] = _classify_member_for_diagram(m)
+
+    if not graphs:
+        st.info("No automation metadata available for diagram.")
+        return
+
+    # ── Collision detection ────────────────────────────────────────────────
+    collisions = _detect_field_collisions(graphs)
+    if collisions:
+        coll_summary = ", ".join(
+            f"**{f}** ({', '.join(fns)})" for f, fns in list(collisions.items())[:5]
+        )
+        st.warning(f"\u26a0\ufe0f **Field collisions detected:** {coll_summary}")
+    else:
+        st.caption("No field collisions detected — these automations write to different fields.")
+
+    # ── Graph metrics ─────────────────────────────────────────────────────
+    _total_nodes = sum(len(g.get("nodes", [])) for g in graphs.values())
+    _total_edges = sum(len(g.get("edges", [])) for g in graphs.values())
+    _cached_ct   = sum(1 for fn, g in graphs.items()
+                       if len(g.get("nodes", [])) > 1)
+    _simple_ct   = len(graphs) - _cached_ct
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("Flows parsed", len(graphs))
+    mc2.metric("Total nodes", _total_nodes)
+    mc3.metric("Total edges", _total_edges)
+    mc4.metric("Cached / Simplified", f"{_cached_ct} / {_simple_ct}")
+
+    # ── Generate DOT ──────────────────────────────────────────────────────
+    dot_source = _generate_dot_diagram(graphs, collisions, group, cls_map, cache=cache)
+
+    # ── Render ────────────────────────────────────────────────────────────
+    _render_ok = False
+    # Attempt 1: system Graphviz via Python package → SVG → HTML component
+    if _GRAPHVIZ_OK:
+        try:
+            import streamlit.components.v1 as _stc
+            svg_bytes = _gv.Source(dot_source).pipe(format="svg")
+            _svg_str = svg_bytes.decode("utf-8")
+            _svg_html = _wrap_svg_interactive(_svg_str, height=700)
+            _stc.html(_svg_html, height=720, scrolling=False)
+            _render_ok = True
+        except Exception as _svg_err:
+            st.caption(f"System Graphviz render failed: {_svg_err}")
+
+    # Attempt 2: Streamlit built-in JS renderer
+    if not _render_ok:
+        try:
+            st.graphviz_chart(dot_source, use_container_width=True)
+            _render_ok = True
+        except Exception as _js_err:
+            st.caption(f"JS Graphviz render error: {_js_err}")
+
+    # Attempt 3: Mermaid fallback via HTML component
+    if not _render_ok:
+        try:
+            mermaid_source = _generate_mermaid_diagram(graphs, collisions, group, cls_map, cache=cache)
+            mermaid_inner = (
+                '<div class="mermaid" style="background:transparent;">\n'
+                + mermaid_source
+                + '\n</div>\n'
+                '<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>\n'
+                '<script>mermaid.initialize({startOnLoad:true, theme:"dark"});</script>'
+            )
+            import streamlit.components.v1 as _stc
+            _stc.html(_wrap_svg_interactive(mermaid_inner, height=780), height=800, scrolling=False)
+        except Exception as _mm_err:
+            st.error(f"All renderers failed. Mermaid: {_mm_err}")
+
+    # DOT source preview for debugging
+    with st.expander("View DOT source", expanded=False):
+        st.code(dot_source, language="dot")
+
+    # ── Export buttons ────────────────────────────────────────────────────
+    _gkey = group.get("Object", "x") + "_" + group.get("Trigger", "x")
+    _gkey = _gkey.replace(" ", "_")[:40]
+    exp_cols = st.columns(3)
+    with exp_cols[0]:
+        st.download_button(
+            "\u2b07\ufe0f  Download DOT source",
+            data=dot_source,
+            file_name=f"{group.get('Object', 'diagram')}_workflow.dot",
+            mime="text/plain",
+            key=f"wf_dot_{_gkey}",
+        )
+    with exp_cols[1]:
+        if _GRAPHVIZ_OK:
+            try:
+                svg_bytes = _gv.Source(dot_source).pipe(format="svg")
+                st.download_button(
+                    "\u2b07\ufe0f  Download SVG",
+                    data=svg_bytes,
+                    file_name=f"{group.get('Object', 'diagram')}_workflow.svg",
+                    mime="image/svg+xml",
+                    key=f"wf_svg_{_gkey}",
+                )
+            except Exception:
+                st.caption("SVG export requires system Graphviz")
+        else:
+            st.caption("SVG export requires system Graphviz")
+    with exp_cols[2]:
+        mermaid_source = _generate_mermaid_diagram(graphs, collisions, group, cls_map, cache=cache)
+        st.download_button(
+            "\u2b07\ufe0f  Download Mermaid (.mmd)",
+            data=mermaid_source,
+            file_name=f"{group.get('Object', 'diagram')}_workflow.mmd",
+            mime="text/plain",
+            key=f"wf_mmd_{_gkey}",
+        )
+
+
+def _render_consolidated_flow_diagram(
+    flow_xml: str,
+    flow_name: str,
+    object_name: str,
+):
+    """
+    Render a visual diagram for an AI-designed consolidated flow.
+
+    Parses the flow XML, generates DOT, renders with 3-tier fallback
+    (system Graphviz SVG → st.graphviz_chart → Mermaid HTML).
+    """
+    if not flow_xml or not flow_xml.strip():
+        st.info("No Flow XML available to visualise.")
+        return
+
+    graph = _parse_flow_xml_to_graph(flow_xml, flow_name)
+    if len(graph.get("nodes", [])) <= 1:
+        st.info("Flow XML parsed but no elements found to visualise.")
+        return
+
+    # ── Metrics ───────────────────────────────────────────────────────────
+    _n = len(graph["nodes"])
+    _e = len(graph["edges"])
+    _tt = graph.get("trigger_type", "")
+    _rt = graph.get("record_trigger", "")
+    _trigger_str = f"{_tt} / {_rt}" if _tt else "N/A"
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("Elements", _n)
+    mc2.metric("Connections", _e)
+    mc3.metric("Trigger", _trigger_str)
+
+    # ── Generate DOT ──────────────────────────────────────────────────────
+    dot_source = _generate_consolidated_dot(graph, flow_name, object_name)
+
+    # ── Render (3-tier fallback) ──────────────────────────────────────────
+    _render_ok = False
+
+    # Attempt 1: system Graphviz → SVG → HTML component
+    if _GRAPHVIZ_OK:
+        try:
+            import streamlit.components.v1 as _stc
+            svg_bytes = _gv.Source(dot_source).pipe(format="svg")
+            _svg_str = svg_bytes.decode("utf-8")
+            _stc.html(
+                _wrap_svg_interactive(_svg_str, height=700),
+                height=720, scrolling=False,
+            )
+            _render_ok = True
+        except Exception as _err:
+            st.caption(f"System Graphviz failed: {_err}")
+
+    # Attempt 2: Streamlit built-in JS renderer
+    if not _render_ok:
+        try:
+            st.graphviz_chart(dot_source, use_container_width=True)
+            _render_ok = True
+        except Exception as _err:
+            st.caption(f"JS renderer failed: {_err}")
+
+    # Attempt 3: Mermaid fallback
+    if not _render_ok:
+        try:
+            mm_src = _generate_consolidated_mermaid(graph, flow_name, object_name)
+            import streamlit.components.v1 as _stc
+            _stc.html(
+                _wrap_svg_interactive(
+                    '<div class="mermaid" style="background:transparent;">\n'
+                    + mm_src + '\n</div>\n'
+                    '<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>\n'
+                    '<script>mermaid.initialize({startOnLoad:true,theme:"dark"});</script>',
+                    height=780,
+                ),
+                height=800, scrolling=False,
+            )
+        except Exception as _err:
+            st.error(f"All renderers failed: {_err}")
+
+    # DOT source preview
+    with st.expander("View DOT source", expanded=False):
+        st.code(dot_source, language="dot")
+
+    # ── Export buttons ────────────────────────────────────────────────────
+    _sfn = re.sub(r'[^a-zA-Z0-9_]', '_', flow_name)[:30]
+    exp_c = st.columns(3)
+    with exp_c[0]:
+        st.download_button(
+            "\u2b07\ufe0f  Download DOT",
+            data=dot_source,
+            file_name=f"{flow_name}_diagram.dot",
+            mime="text/plain",
+            key=f"cf_dot_{_sfn}",
+        )
+    with exp_c[1]:
+        if _GRAPHVIZ_OK:
+            try:
+                svg_bytes = _gv.Source(dot_source).pipe(format="svg")
+                st.download_button(
+                    "\u2b07\ufe0f  Download SVG",
+                    data=svg_bytes,
+                    file_name=f"{flow_name}_diagram.svg",
+                    mime="image/svg+xml",
+                    key=f"cf_svg_{_sfn}",
+                )
+            except Exception:
+                st.caption("SVG export failed")
+        else:
+            st.caption("SVG requires system Graphviz")
+    with exp_c[2]:
+        mm_src = _generate_consolidated_mermaid(graph, flow_name, object_name)
+        st.download_button(
+            "\u2b07\ufe0f  Download Mermaid",
+            data=mm_src,
+            file_name=f"{flow_name}_diagram.mmd",
+            mime="text/plain",
+            key=f"cf_mmd_{_sfn}",
+        )
+
+
+# ── Tab 4: Merge Planner (placeholder — full impl in Phase 4) ─────────────
+def _render_merge_planner_tab():
+    """Consolidated Merge Planner — cache mgmt + conflict groups + AI merge + flow design."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    df: pd.DataFrame = st.session_state.get("_auto_df")
+    if df is None:
+        st.info("Load the **Census** first.")
+        return
+    if df.empty:
+        st.warning("Census is empty.")
+        return
+
+    cache: dict = st.session_state.get("_flow_cache", {})
+    cache_meta  = cache.get("_meta", {})
+
+    # ── Section 1: Cache Management ───────────────────────────────────────
+    st.subheader("1️⃣  Metadata Cache")
+    st.caption(
+        "The cache stores element-level metadata (criteria, field updates, decisions, "
+        "formulas, variables) for each Flow and WorkflowRule. "
+        "Required for trigger-action grouping, health scoring, and merge recommendations."
+    )
+
+    n_flows_cached = cache_meta.get("flow_count", 0)
+    n_wfrs_cached  = cache_meta.get("wfr_count", 0)
+    fetched_at_str = cache_meta.get("fetched_at", "")
+    cache_age      = ""
+    if fetched_at_str:
+        try:
+            fetched_dt = _dt.fromisoformat(fetched_at_str.replace("Z", "+00:00"))
+            delta_h = (_dt.now(_tz.utc) - fetched_dt).total_seconds() / 3600
+            if delta_h < 1:
+                cache_age = "< 1 hour ago"
+            elif delta_h < 24:
+                cache_age = f"{int(delta_h)} hour{'s' if delta_h >= 2 else ''} ago"
+            else:
+                cache_age = f"{int(delta_h/24)} day{'s' if delta_h >= 48 else ''} ago"
+        except Exception:
+            cache_age = fetched_at_str
+
+    # Coverage breakdown
+    _flow_active_in_df   = len(df[(df["Type"] == "Flow") & (df["Status"] == "Active")])
+    _flow_inactive_in_df = len(df[df["Type"] == "Flow"]) - _flow_active_in_df
+    _wfrs_in_df          = len(df[df["Type"] == "WorkflowRule"])
+    _flow_errors         = cache_meta.get("flow_error_count", 0)
+    _flow_managed_in_df  = cache_meta.get("managed_flows_skipped", 0)
+
+    # Progress bar: org-owned active flows + WFRs
+    _target = _flow_active_in_df + _wfrs_in_df
+    _cached = n_flows_cached + n_wfrs_cached
+    if _target > 0:
+        _pct = int(_cached / _target * 100)
+        st.progress(
+            min(_cached / _target, 1.0),
+            text=f"{_cached}/{_target} org-owned active automations cached ({_pct}%)",
+        )
+
+    _c1, _c2, _c3 = st.columns(3)
+    _c1.metric(
+        "Cached",
+        f"{n_flows_cached} flows · {n_wfrs_cached} WFRs"
+        + (f" · {cache_age}" if cache_age else ""),
+    )
+    _skipped_label = []
+    if _flow_inactive_in_df:
+        _skipped_label.append(f"{_flow_inactive_in_df} inactive")
+    if _flow_managed_in_df:
+        _skipped_label.append(f"{_flow_managed_in_df} managed pkg")
+    _c2.metric("Skipped", " · ".join(_skipped_label) if _skipped_label else "0")
+    if _flow_errors:
+        _c3.metric("Fetch Errors", f"{_flow_errors} flows")
+    else:
+        _c3.metric("Fetch Errors", "0")
+
+    if _flow_errors:
+        with st.expander(f"⚠️ {_flow_errors} fetch error(s) from last build"):
+            for _err in cache_meta.get("flow_errors", [])[:50]:
+                st.caption(_err)
+
+    include_inactive_cache = st.toggle(
+        "Include inactive / draft Flows",
+        value=False,
+        key="mp_cache_include_inactive",
+        help="Off (default): only active Flows are cached. On: also cache deactivated/draft Flows.",
+    )
+
+    col_build, col_refresh, col_clear = st.columns(3)
+    build_btn   = col_build.button("🔨  Build Cache", key="mp_cache_build",
+                                   disabled=(_cached >= _target),
+                                   help="Fetch metadata for uncached automations.")
+    refresh_btn = col_refresh.button("🔄  Full Refresh", key="mp_cache_refresh",
+                                     help="Re-fetch ALL automation metadata.")
+    clear_btn   = col_clear.button("🗑️  Clear Cache", key="mp_cache_clear")
+
+    if clear_btn:
+        st.session_state["_flow_cache"] = {}
+        _save_flow_cache({})
+        st.success("Cache cleared.")
+        st.rerun()
+
+    if build_btn or refresh_btn:
+        prog_bar   = st.progress(0.0)
+        status_txt = st.empty()
+        with st.spinner("Fetching metadata — this may take a few minutes for large orgs…"):
+            updated = _build_flow_cache(
+                df,
+                progress_bar=prog_bar,
+                status_text=status_txt,
+                force_refresh=refresh_btn,
+                include_inactive=include_inactive_cache,
+            )
+        st.session_state["_flow_cache"] = updated
+        cache = updated
+        m = updated.get("_meta", {})
+        err_count = m.get("flow_error_count", 0)
+        st.success(
+            f"Done — {m.get('flow_count',0)} flows · "
+            f"{m.get('wfr_count',0)} WFRs cached."
+            + (f"  ⚠️ {err_count} flows failed." if err_count else "")
+        )
+        st.rerun()
+
+    st.markdown("---")
+
+    # ── Section 2: Conflict Groups ────────────────────────────────────────
+    st.subheader("2️⃣  Conflict Groups")
+    st.caption(
+        "Flows grouped by **Object + Timing + Trigger Action**. Groups with 2+ flows "
+        "are candidates for consolidation per Salesforce best practice (1 flow per trigger point)."
+    )
+
+    groups = _build_conflict_groups(df, include_inactive=include_inactive_cache, cache=cache)
+
+    if not groups:
+        st.success("No conflict groups found — each trigger point has at most 1 flow.")
+        return
+
+    # Summary metrics
+    sev_counts = {}
+    for g in groups:
+        s = g["Severity"]
+        sev_counts[s] = sev_counts.get(s, 0) + 1
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Total Groups", len(groups))
+    sc2.metric("🔴 Critical", sev_counts.get("🔴 Critical", 0))
+    sc3.metric("🟡 Moderate", sev_counts.get("🟡 Moderate", 0))
+    sc4.metric("🟢 Low", sev_counts.get("🟢 Low", 0))
+    st.markdown("")
+
+    # ── Object + Trigger selectors ────────────────────────────────────────
+    all_objects  = sorted({g["Object"] for g in groups})
+    sel_obj = st.selectbox(
+        "Object", ["(all)"] + all_objects, key="mp_filter_obj",
+    )
+
+    # Filter triggers to only those present for the selected object
+    if sel_obj == "(all)":
+        filtered_by_obj = groups
+    else:
+        filtered_by_obj = [g for g in groups if g["Object"] == sel_obj]
+
+    all_triggers = sorted({g["TriggerEvent"] for g in filtered_by_obj})
+    sel_trig = st.selectbox(
+        "Trigger", ["(all)"] + all_triggers, key="mp_filter_trig",
+    )
+
+    if sel_trig == "(all)":
+        filtered_groups = filtered_by_obj
+    else:
+        filtered_groups = [g for g in filtered_by_obj if g["TriggerEvent"] == sel_trig]
+
+    # Filtered groups table
+    tbl = []
+    for g in filtered_groups:
+        flags = []
+        if g.get("HasPB"):
+            flags.append("⚠️ PB")
+        if g.get("HasInactive"):
+            flags.append("💤 Inactive")
+        if g.get("HasCAAU"):
+            flags.append("🔄 C&U")
+        tbl.append({
+            "Object":     g["Object"],
+            "Trigger":    g["TriggerEvent"],
+            "Flows":      g["MemberCount"],
+            "Severity":   g["Severity"],
+            "Flags":      " ".join(flags),
+            "Flow Names": g["MembersLabel"],
+        })
+
+    if tbl:
+        st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
+    else:
+        st.info("No groups match the selected filters.")
+        return
+
+    st.markdown("---")
+
+    # ── Section 3: Merge Recommendations & Flow Design ────────────────────
+    st.subheader("3️⃣  Merge Recommendations & Flow Design")
+
+    # Group selector — pre-scoped to filtered results
+    group_labels = [
+        f"{g['Severity']}  {g['Object']} — {g['TriggerEvent']} ({g['MemberCount']} Flows)"
+        for g in filtered_groups
+    ]
+    sel_idx = st.selectbox(
+        "Select group to work on",
+        range(len(group_labels)),
+        format_func=lambda i: group_labels[i],
+        key="mp_group_sel",
+    )
+    sel_group = filtered_groups[sel_idx]
+    sel_label = group_labels[sel_idx]
+
+    # ── Combined Workflow Diagram ─────────────────────────────────────────
+    # (shown first — helps you understand the flows before acting)
+    with st.expander("📊  Combined Workflow Diagram", expanded=False):
+        _CLS_TO_LANE = {"Retired-only": "retired", "Mixed": "mixed",
+                        "Active-tool": "clean", "Clean": "clean"}
+        _cls_map: dict[str, str] = {}
+        for _m in sel_group.get("Members", []):
+            _mname = _m.get("Name", "")
+            if _mname and _m.get("_class"):
+                _cls_map[_mname] = _CLS_TO_LANE.get(_m["_class"], "clean")
+        _render_workflow_diagram(sel_group, cache, _cls_map)
+
+    st.markdown("")
+    col_gen, col_exp = st.columns([2, 1])
+    with col_gen:
+        gen_btn = st.button("🤖  Generate Merge Recommendation", key="mp_gen_btn", type="primary")
+    with col_exp:
+        export_btn = st.button("📥  Export Roadmap CSV", key="mp_export_btn")
+
+    if export_btn:
+        recs = st.session_state.get("_mp_recommendations", {})
+        if recs:
+            rows = []
+            for label, r in recs.items():
+                rows.append({
+                    "Group":      label,
+                    "Keep":       ", ".join(r.get("keep", [])),
+                    "Deactivate": ", ".join(r.get("retire", [])),
+                    "Review":     ", ".join(
+                        rv if isinstance(rv, str) else rv.get("name", "")
+                        for rv in r.get("manual_review", [])
+                    ),
+                    "Complexity": r.get("complexity", ""),
+                    "Risk Notes": r.get("risk_notes", ""),
+                })
+            st.download_button(
+                "⬇️  Download Roadmap CSV",
+                data=pd.DataFrame(rows).to_csv(index=False),
+                file_name="automation_merge_roadmap.csv",
+                mime="text/csv",
+                key="mp_download_btn",
+            )
+        else:
+            st.info("Generate at least one recommendation first.")
+
+    if gen_btn:
+        with st.spinner("Generating AI recommendation…"):
+            flow_names = [m["Name"] for m in sel_group["Members"]]
+            flow_details = _fetch_flow_detail(flow_names) if flow_names else {}
+            for m in sel_group["Members"]:
+                m["_class"], m["_tool"], _ = _classify_automation_full(m.get("Name", ""))
+            rec = _get_merge_recommendation(sel_group, flow_details)
+            recs = st.session_state.get("_mp_recommendations", {})
+            recs[sel_label] = rec
+            st.session_state["_mp_recommendations"] = recs
+
+    rec = st.session_state.get("_mp_recommendations", {}).get(sel_label)
+    if rec is None:
+        st.info("Click **Generate Merge Recommendation** to analyse this group.")
+        return
+
+    # ── Recommendation cards ──────────────────────────────────────────────
+    keeps   = rec.get("keep", [])
+    retires = rec.get("retire", [])
+    reviews = rec.get("manual_review", [])
+
+    col_k, col_r, col_m = st.columns(3)
+    with col_k:
+        st.markdown(f"**✅ Keep ({len(keeps)})**")
+        for k in keeps:
+            st.markdown(f"- {_flow_display_name(k, cache)}")
+    with col_r:
+        st.markdown(f"**🗑️ Deactivate after consolidation ({len(retires)})**")
+        for r in retires:
+            st.markdown(f"- {_flow_display_name(r, cache)}")
+    with col_m:
+        st.markdown(f"**👁️ Needs review ({len(reviews)})**")
+        for r in reviews:
+            _rn = r if isinstance(r, str) else r.get("name", "")
+            st.markdown(f"- {_flow_display_name(_rn, cache)}")
+
+    # ── Complexity + Risk (compact) ───────────────────────────────────────
+    complexity = rec.get("complexity", "Unknown")
+    risk       = rec.get("risk_notes", "")
+    _risk_icon = "⚠️" if risk else "✅"
+    st.caption(f"**Complexity:** {complexity}   {_risk_icon} **Risk:**  {'see notes below' if risk else 'None flagged'}")
+    if risk:
+        with st.expander("Risk notes", expanded=False):
+            st.warning(risk)
+
+    # ── Design Consolidation Flow ─────────────────────────────────────────
+    st.divider()
+    st.subheader("🛠️  Design Consolidation Flow")
+
+    group_members = sel_group.get("Members", [])
+    _dn_to_api: dict[str, str] = {}
+    for _m in group_members:
+        _api = _m.get("Name", "")
+        _dn  = _m.get("DisplayName") or _flow_display_name(_api, cache) or _api
+        _dn_to_api[_dn] = _api
+    all_display_names = list(_dn_to_api.keys())
+
+    _api_to_dn = {v: k for k, v in _dn_to_api.items()}
+    default_sel = [_api_to_dn.get(n, n) for n in keeps if n in _api_to_dn.values()] if keeps else all_display_names[:5]
+    st.caption(
+        "Select the flows to consolidate. Flows marked **Keep** are pre-selected. "
+        "Start with 2–5 related flows for best results."
+    )
+    _selected_display = st.multiselect(
+        "Flows to consolidate",
+        options=all_display_names,
+        default=default_sel[:10],
+        key="mp_design_flow_sel",
+    )
+    selected_flows = [_dn_to_api.get(dn, dn) for dn in _selected_display]
+
+    if not selected_flows:
+        st.info("Select at least 2 flows above to generate a consolidation design.")
+        return
+
+    cached_here = sum(
+        1 for n in selected_flows
+        if (f"flow::{n}" in cache or f"wfr::{n}" in cache)
+    )
+    sel_count = len(selected_flows)
+    if cached_here < sel_count:
+        st.warning(
+            f"⚠️ {cached_here}/{sel_count} selected flows have cached metadata. "
+            "Build the cache for the most accurate flow design."
+        )
+    else:
+        st.success(f"All {sel_count} selected flows have cached metadata.")
+
+    if sel_count > 8:
+        st.warning(
+            f"⚠️ {sel_count} flows selected — consider consolidating in smaller batches "
+            "of 3–5 flows for more reliable AI output and easier review."
+        )
+
+    # Build a subset group with only selected members
+    sel_member_set = set(selected_flows)
+    subset_group = {
+        **sel_group,
+        "Members": [m for m in group_members if m.get("Name") in sel_member_set],
+        "MemberCount": sel_count,
+    }
+    # Adjust recommendation to match selection
+    subset_rec = {
+        **rec,
+        "keep":   [n for n in keeps if n in sel_member_set],
+        "retire": [r for r in rec.get("retire", [])
+                   if (r if isinstance(r, str) else r.get("name", "")) in sel_member_set],
+        "manual_review": [r for r in rec.get("manual_review", [])
+                          if (r if isinstance(r, str) else r.get("name", "")) in sel_member_set],
+    }
+    # Any selected flow not in keep/retire/review is treated as "keep"
+    accounted = set(subset_rec["keep"])
+    accounted.update(r if isinstance(r, str) else r.get("name", "") for r in subset_rec["retire"])
+    accounted.update(r if isinstance(r, str) else r.get("name", "") for r in subset_rec["manual_review"])
+    for n in selected_flows:
+        if n not in accounted:
+            subset_rec["keep"].append(n)
+
+    design_key = f"{sel_label}__{'_'.join(sorted(selected_flows)[:5])}"
+
+    # Show last error prominently even if design_key changed (e.g. selection changed)
+    _last_err = st.session_state.get("_mp_last_design_error")
+    if _last_err:
+        with st.expander("⚠️ Last generation error (click to expand)", expanded=False):
+            st.error(_last_err)
+            if st.button("Clear error", key="mp_clear_err"):
+                st.session_state.pop("_mp_last_design_error", None)
+                st.rerun()
+
+    design_btn = st.button(
+        f"⚙️  Generate Flow Design ({sel_count} flow{'s' if sel_count != 1 else ''})",
+        key="mp_design_btn", type="primary",
+    )
+
+    if design_btn:
+        st.session_state.pop("_mp_last_design_error", None)
+        _ds = st.status(
+            f"⚙️ Generating consolidated flow for {sel_count} flows…",
+            expanded=True,
+        )
+        with _ds:
+            st.write(f"📋 Analysing {cached_here}/{sel_count} cached flows…")
+            _meta_preview = _summarise_metadata_for_prompt(subset_group, cache)
+            _prompt_chars = len(_meta_preview) + 3000  # approx overhead
+            st.write(f"📏 Metadata block: {len(_meta_preview):,} chars  |  "
+                     f"Token estimate: ~{_prompt_chars // 4:,}")
+            st.write("🤖 Calling AI model (this can take 30–120 seconds)…")
+            try:
+                design = _design_consolidation_flow(subset_group, subset_rec, cache)
+            except Exception as _outer_exc:
+                import traceback as _tb
+                design = {
+                    "error": f"{type(_outer_exc).__name__}: {_outer_exc}\n{_tb.format_exc()}",
+                    "flow_name": "", "flow_label": "", "flow_xml": "",
+                    "elements_summary": [], "variables": [], "formulas": [],
+                    "pre_deployment_checklist": [], "notes": "",
+                    "behavior_inventory": "", "coverage_text": "", "adapted_behaviors": [],
+                }
+
+            if design.get("error"):
+                _ds.update(label="❌ Flow design failed — see error below", state="error")
+                st.session_state["_mp_last_design_error"] = design["error"]
+            else:
+                _inv = design.get("behavior_inventory", "")
+                _b_count = len(re.findall(r'^\s*B\d+:', _inv, re.MULTILINE)) if _inv else 0
+                _adp = len(design.get("adapted_behaviors") or [])
+                st.write(
+                    f"✅ Generated — behaviors inventoried: {_b_count}, "
+                    f"adapted: {_adp}, "
+                    f"XML length: {len(design.get('flow_xml','') or ''):,} chars"
+                )
+                _ds.update(label="✅ Flow design ready", state="complete")
+
+            designs = st.session_state.get("_mp_flow_designs", {})
+            designs[design_key] = design
+            st.session_state["_mp_flow_designs"] = designs
+
+    design = st.session_state.get("_mp_flow_designs", {}).get(design_key)
+    if design is None:
+        st.info("Click **Generate Flow Design** to build the consolidated flow.")
+        return
+
+    if design.get("error"):
+        st.error(f"**Flow design failed:**\n\n{design['error']}")
+        _raw = design.get("_raw_response", "")
+        if _raw:
+            with st.expander("View raw AI response", expanded=False):
+                st.text(_raw[:3000] + ("…" if len(_raw) > 3000 else ""))
+        return
+
+    # ── Design output — header metrics ────────────────────────────────────
+    flow_name = design.get("flow_name", f"{sel_group['Object']}_Consolidated")
+    flow_label = design.get("flow_label", "")
+    st.markdown(
+        f"**Flow API Name:** `{flow_name}`"
+        + (f" &nbsp;·&nbsp; **Label:** {flow_label}" if flow_label else "")
+    )
+    el_count  = len(design.get("elements_summary", []))
+    var_count = len(design.get("variables", []))
+    frm_count = len(design.get("formulas", []))
+    dm1, dm2, dm3 = st.columns(3)
+    dm1.metric("Elements",  el_count)
+    dm2.metric("Variables", var_count)
+    dm3.metric("Formulas",  frm_count)
+
+    # ── Tabbed design output ──────────────────────────────────────────────
+    tab_coverage, tab_xml, tab_els, tab_vars, tab_check, tab_notes = st.tabs(
+        ["🔍 Coverage", "📄 Flow XML", "🗂️ Elements",
+         "📦 Variables & Formulas", "✅ Pre-Deployment", "📝 Notes & Caveats"]
+    )
+
+    flow_xml = design.get("flow_xml", "")
+
+    # ── Coverage tab (FIRST — most important for verifying completeness) ───
+    with tab_coverage:
+        inventory = design.get("behavior_inventory", "")
+        coverage  = design.get("coverage_text", "")
+        adapted   = design.get("adapted_behaviors") or []
+
+        if not inventory and not coverage:
+            st.info(
+                "No behavior inventory was generated. "
+                "This may happen if the response was truncated. "
+                "Check the Notes tab for details, or re-generate with fewer flows."
+            )
+        else:
+            # Summary metrics
+            total_b   = len(re.findall(r'^\s*B\d+:', inventory, re.MULTILINE)) if inventory else 0
+            covered_b = coverage.count("✅") if coverage else 0
+            adapted_b = coverage.count("⚠️") if coverage else (len(adapted))
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric("Behaviors Inventoried", total_b)
+            sc2.metric("✅ Fully Implemented", covered_b)
+            sc3.metric("⚠️ Adapted / Requires Review", adapted_b)
+
+            if adapted_b > 0:
+                st.warning(
+                    f"{adapted_b} behavior(s) were adapted rather than implemented verbatim. "
+                    "Review these carefully before deactivating source automations."
+                )
+
+            if inventory:
+                st.subheader("Behavior Inventory")
+                st.caption("Every distinct behavior extracted from each source automation.")
+                st.text(inventory)
+
+            if coverage:
+                st.subheader("Coverage Confirmation")
+                st.caption("Confirmation that each inventoried behavior is addressed in the consolidated flow.")
+                # Colour ✅ lines green and ⚠️ lines yellow
+                cov_lines = coverage.splitlines()
+                for line in cov_lines:
+                    if "✅" in line:
+                        st.markdown(f":green[{line}]")
+                    elif "⚠️" in line:
+                        st.warning(line)
+                    elif line.strip():
+                        st.markdown(line)
+
+            if adapted and isinstance(adapted, list):
+                st.subheader("Adapted Behaviors Detail")
+                for item in adapted:
+                    if isinstance(item, dict):
+                        st.markdown(f"**{item.get('id','')}**: {item.get('reason','')}")
+                    else:
+                        st.markdown(f"- {item}")
+
+        # Debug expander
+        with st.expander("🔧 Debug info", expanded=False):
+            st.caption(
+                f"Prompt size: {design.get('_prompt_chars',0):,} chars  |  "
+                f"Token limit: {design.get('_token_limit',0):,}  |  "
+                f"Stop reason: {design.get('_stop_reason','?')}"
+            )
+            raw = design.get("_raw_response", "")
+            if raw:
+                st.text_area("Raw AI response (first 4000 chars)", raw[:4000], height=200,
+                             key="mp_debug_raw")
+
+    with tab_xml:
+        if flow_xml:
+            st.download_button(
+                f"⬇️  Download {flow_name}.flow-meta.xml",
+                data=flow_xml,
+                file_name=f"{flow_name}.flow-meta.xml",
+                mime="application/xml",
+                key="mp_xml_dl",
+            )
+            with st.expander("View XML source", expanded=False):
+                st.code(flow_xml, language="xml")
+        else:
+            st.info("No Flow XML was generated.")
+
+    with tab_els:
+        els_data = design.get("elements_summary", [])
+        if els_data and isinstance(els_data, list):
+            st.dataframe(
+                pd.DataFrame(els_data),
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif els_data:
+            st.info(str(els_data))
+        else:
+            st.info("No element summary available.")
+
+    with tab_vars:
+        vars_data = design.get("variables", [])
+        if vars_data and isinstance(vars_data, list):
+            st.markdown("**Variables**")
+            st.dataframe(
+                pd.DataFrame(vars_data),
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif vars_data:
+            st.info(str(vars_data))
+        else:
+            st.caption("No variables in this flow.")
+        fmls_data = design.get("formulas", [])
+        if fmls_data and isinstance(fmls_data, list):
+            st.markdown("**Formulas**")
+            st.dataframe(
+                pd.DataFrame(fmls_data),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tab_check:
+        checklist = design.get("pre_deployment_checklist", [])
+        if checklist and isinstance(checklist, list):
+            for item in checklist:
+                st.markdown(f"- {item}")
+        elif checklist:
+            st.info(str(checklist))
+        else:
+            st.info("No checklist generated.")
+
+    with tab_notes:
+        notes_raw = design.get("notes", "")
+        if notes_raw:
+            parts = re.split(r'(?=\d+\.\s)', str(notes_raw))
+            parts = [p.strip() for p in parts if p.strip()]
+            if len(parts) > 1:
+                for p in parts:
+                    st.warning(p)
+            else:
+                st.warning(notes_raw)
+        else:
+            st.success("No caveats — the AI is confident in this design.")
+
+    # ── Deploy to Salesforce ──────────────────────────────────────────────
+    if flow_xml:
+        st.divider()
+        st.subheader("🚀  Deploy to Salesforce")
+
+        _sf = st.session_state.get("sf")
+        if _sf is None:
+            st.warning("No active Salesforce session — reconnect to deploy.")
+        else:
+            _check_only = st.toggle(
+                "Validate only (check-only deploy — no changes written to org)",
+                value=True,
+                key="mp_deploy_check_only",
+                help="Validate: Salesforce compiles and checks the flow but does not save it. "
+                     "Uncheck to perform a real deploy that creates/overwrites the flow.",
+            )
+            if not _check_only:
+                st.warning(
+                    f"⚠️ **Real deploy selected.** "
+                    f"This will **create or overwrite** `{flow_name}` in your Salesforce org. "
+                    "Deactivate the source flows manually after verifying the consolidated flow."
+                )
+
+            # Two-step confirm for real deploy
+            _confirm_key = f"mp_deploy_confirmed_{design_key}"
+            if not _check_only and not st.session_state.get(_confirm_key):
+                if st.button(
+                    f"⚠️  I understand — confirm real deploy of `{flow_name}`",
+                    key="mp_deploy_confirm_btn",
+                ):
+                    st.session_state[_confirm_key] = True
+                    st.rerun()
+                st.caption("You must confirm above before the deploy button is enabled.")
+                _deploy_ready = False
+            else:
+                _deploy_ready = True
+
+            _deploy_label = (
+                f"✅ Validate `{flow_name}` against org"
+                if _check_only
+                else f"🚀 Deploy `{flow_name}` to org"
+            )
+            _deploy_btn = st.button(
+                _deploy_label,
+                key="mp_deploy_btn",
+                type="primary",
+                disabled=not _deploy_ready,
+            )
+
+            if _deploy_btn:
+                _dstatus = st.status(
+                    f"{'Validating' if _check_only else 'Deploying'} {flow_name}…",
+                    expanded=True,
+                )
+                with _dstatus:
+                    st.write(f"📦 Packaging `{flow_name}.flow-meta.xml` ({len(flow_xml):,} chars)…")
+                    st.write("📡 Sending to Metadata API…")
+                    try:
+                        _result = _deploy_flow_to_sf(
+                            _sf, flow_xml, flow_name,
+                            check_only=_check_only,
+                        )
+                    except Exception as _exc:
+                        _result = {
+                            "success": False, "id": "", "done": True, "status": "Exception",
+                            "errors": [str(_exc)], "state_detail": "", "check_only": _check_only,
+                        }
+                    st.write(f"📊 Status: **{_result.get('status', '?')}**")
+
+                if _result.get("success"):
+                    _verb = "Validation" if _check_only else "Deployment"
+                    _dstatus.update(label=f"✅ {_verb} succeeded!", state="complete")
+                    st.success(
+                        f"**{'Validation' if _check_only else 'Deployment'} succeeded!**  "
+                        f"Deploy ID: `{_result.get('id', '')}`"
+                        + (
+                            "\n\nNext steps:\n"
+                            "1. Activate the consolidated flow in Salesforce Setup.\n"
+                            "2. Test each behavior from the Coverage tab.\n"
+                            "3. Deactivate the old source flows once verified."
+                            if not _check_only else
+                            "\n\nValidation passed — uncheck **Validate only** to deploy for real."
+                        )
+                    )
+                else:
+                    _dstatus.update(label="❌ Deploy failed — see errors below", state="error")
+                    st.error(
+                        f"**{'Validation' if _check_only else 'Deployment'} failed.**  "
+                        f"Status: {_result.get('status', '?')}  "
+                        f"Deploy ID: `{_result.get('id', '')}`"
+                    )
+                    _errs = _result.get("errors") or []
+                    if _errs:
+                        st.subheader("Errors")
+                        for _e in _errs:
+                            st.markdown(f"- {_e}")
+                    if _result.get("state_detail"):
+                        st.caption(f"State detail: {_result['state_detail']}")
+
+                # Clear confirm flag after deploy attempt
+                st.session_state.pop(_confirm_key, None)
+
+    # ── Consolidated Flow Diagram ──────────────────────────────────────────
+    if flow_xml:
+        with st.expander("📊  Consolidated Flow Diagram", expanded=False):
+            _render_consolidated_flow_diagram(
+                flow_xml, flow_name, sel_group.get("Object", "")
+            )
+
+
+# ── Tab 5: Stale Automations ─────────────────────────────────────────────
+def _render_stale_automations_tab():
+    """Stale automation detection — execution history + unreachable criteria."""
+    df: pd.DataFrame = st.session_state.get("_auto_df")
+    if df is None:
+        st.info("Load the **Census** first.")
+        return
+    if df.empty:
+        st.warning("Census is empty.")
+        return
+
+    cache = st.session_state.get("_flow_cache", {})
+    import pytz
+    now = pd.Timestamp.now(tz=pytz.UTC)
+    not_executed: list[dict] = []   # populated in Section 1 if exec history loaded
+
+    # ── Section 1: Not Executed Recently (FlowInterview) ──────────────────
+    st.subheader("1️⃣  Flows Not Executed Recently")
+    st.caption(
+        "Active flows with no execution (FlowInterview) record in the last 3+ months. "
+        "Click below to load execution history from the org."
+    )
+
+    exec_hist: dict = st.session_state.get("_exec_history")
+
+    if st.button("📊  Load Execution History", key="stale_load_exec"):
+        with st.spinner("Querying FlowInterview execution history…"):
+            vid_map = _build_version_id_map(cache, df)
+            exec_hist = _fetch_flow_execution_history(vid_map, months_back=6)
+            st.session_state["_exec_history"] = exec_hist
+        diag = st.session_state.get("_flow_interview_diag", "")
+        if diag:
+            st.warning(f"FlowInterview note: {diag}")
+        elif exec_hist:
+            st.success(f"Loaded execution data for {len(exec_hist)} flow versions.")
+        else:
+            st.info("No FlowInterview records found (may be restricted in this org).")
+
+    if exec_hist:
+        # Match execution data to active record-triggered flows
+        vid_map = _build_version_id_map(cache, df)
+        vid_to_name = {v: k for k, v in vid_map.items() if v}
+
+        active_flows = df[(df["Type"] == "Flow") & (df["Status"] == "Active")].copy()
+        # Exclude known non-record types but keep AutoLaunchedFlow (can be record-triggered)
+        _STALE_NON_RECORD = {
+            "Screen", "Survey", "CheckoutFlow", "ContactRequestFlow",
+            "FieldServiceMobile", "FieldServiceWeb",
+            "TransactionSecurityPolicy", "ActionCadenceFlow",
+        }
+        active_flows = active_flows[~active_flows["TriggerEvent"].isin(_STALE_NON_RECORD)]
+
+        not_executed = []
+        cutoff_90 = now - pd.DateOffset(days=90)
+        cutoff_180 = now - pd.DateOffset(days=180)
+
+        for _, row in active_flows.iterrows():
+            name = (row.get("Name") or "").strip()
+            vid = vid_map.get(name, "")
+            exec_data = exec_hist.get(vid, {}) if vid else {}
+
+            last_run_str = exec_data.get("last_run", "")
+            run_count = exec_data.get("run_count", 0)
+
+            if last_run_str:
+                try:
+                    last_run = pd.Timestamp(last_run_str)
+                    if last_run.tzinfo is None:
+                        last_run = last_run.tz_localize("UTC")
+                except Exception:
+                    last_run = None
+            else:
+                last_run = None
+
+            severity = ""
+            if last_run is None and run_count == 0:
+                severity = "🔴 Never Executed"
+            elif last_run is not None and last_run < cutoff_180:
+                severity = "🟠 6+ Months"
+            elif last_run is not None and last_run < cutoff_90:
+                severity = "🟡 3+ Months"
+            else:
+                continue  # recently executed — not stale
+
+            not_executed.append({
+                "Flow":          _flow_display_name(name, cache) or name,
+                "Object":        row.get("Object", ""),
+                "Last Executed":  last_run.strftime("%Y-%m-%d") if last_run else "Never",
+                "Run Count":      run_count,
+                "Last Modified":  row["LastModifiedDate"].strftime("%Y-%m-%d") if pd.notna(row.get("LastModifiedDate")) else "",
+                "Severity":       severity,
+            })
+
+        if not_executed:
+            ne_df = pd.DataFrame(not_executed).sort_values("Severity")
+            sev_summary = ne_df["Severity"].value_counts()
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric("🔴 Never", int(sev_summary.get("🔴 Never Executed", 0)))
+            sc2.metric("🟠 6+ Months", int(sev_summary.get("🟠 6+ Months", 0)))
+            sc3.metric("🟡 3+ Months", int(sev_summary.get("🟡 3+ Months", 0)))
+            st.dataframe(ne_df, use_container_width=True, hide_index=True)
+        else:
+            st.success("All active record-triggered flows have been executed in the last 3 months.")
+    else:
+        st.info("Click **Load Execution History** to check which flows haven't run recently.")
+
+    st.markdown("---")
+
+    # ── Section 2: Inactive + Stale ───────────────────────────────────────
+    st.subheader("2️⃣  Inactive & Stale Automations")
+    st.caption("Inactive automations not modified in 12+ months.")
+
+    cutoff_12m = now - pd.DateOffset(months=12)
+    stale_mask = (
+        (df["Status"] == "Inactive") &
+        (df["LastModifiedDate"].notna()) &
+        (df["LastModifiedDate"] < cutoff_12m)
+    )
+    stale_df = df[stale_mask].copy()
+
+    if not stale_df.empty:
+        stale_df["LastModifiedDate"] = stale_df["LastModifiedDate"].dt.strftime("%Y-%m-%d")
+
+        # Enrich with execution history if available
+        if exec_hist:
+            vid_map = _build_version_id_map(cache, df)
+            last_exec_col = []
+            for _, row in stale_df.iterrows():
+                name = (row.get("Name") or "").strip()
+                vid = vid_map.get(name, "")
+                ex = exec_hist.get(vid, {}) if vid else {}
+                last_exec_col.append(ex.get("last_run", "—")[:10] if ex.get("last_run") else "—")
+            stale_df["Last Executed"] = last_exec_col
+
+        st.metric("Stale inactive automations", len(stale_df))
+        _name_col = "DisplayName" if "DisplayName" in stale_df.columns else "Name"
+        show_cols = [_name_col, "Type", "Object", "LastModifiedDate"]
+        if "Last Executed" in stale_df.columns:
+            show_cols.append("Last Executed")
+        _stale_show = stale_df[show_cols].copy()
+        _stale_show.rename(columns={"DisplayName": "Flow", "Name": "Flow"}, inplace=True)
+        st.dataframe(_stale_show, use_container_width=True, hide_index=True)
+    else:
+        st.success("No inactive automations older than 12 months found.")
+
+    st.markdown("---")
+
+    # ── Section 3: Unreachable Criteria ───────────────────────────────────
+    st.subheader("3️⃣  Unreachable Criteria")
+    st.caption(
+        "Flow decision elements with potentially unreachable conditions — "
+        "empty rules, contradictory filters, or references to deleted fields."
+    )
+
+    if not cache or sum(1 for k in cache if k.startswith("flow::")) == 0:
+        st.info("Build the metadata cache in **Merge Planner** to enable unreachable criteria detection.")
+    else:
+        issues = _detect_unreachable_criteria(cache)
+        if issues:
+            sc1, sc2 = st.columns(2)
+            high = sum(1 for i in issues if i.get("severity") == "high")
+            med  = sum(1 for i in issues if i.get("severity") == "medium")
+            sc1.metric("🔴 High Severity", high)
+            sc2.metric("🟡 Medium Severity", med)
+
+            issues_df = pd.DataFrame(issues)
+            issues_df.columns = [c.replace("_", " ").title() for c in issues_df.columns]
+            st.dataframe(issues_df, use_container_width=True, hide_index=True)
+        else:
+            st.success("No unreachable criteria detected in cached flows.")
+
+    # ── CSV export ────────────────────────────────────────────────────────
+    st.markdown("---")
+    export_parts = []
+    if not stale_df.empty:
+        stale_export = stale_df[["Name", "Type", "Object", "LastModifiedDate"]].copy()
+        stale_export["Category"] = "Inactive & Stale"
+        export_parts.append(stale_export)
+    if exec_hist and not_executed:
+        ne_export = pd.DataFrame(not_executed)
+        ne_export["Category"] = "Not Executed Recently"
+        export_parts.append(ne_export)
+    if export_parts:
+        combined = pd.concat(export_parts, ignore_index=True)
+        st.download_button(
+            "📥  Export Stale Automations (CSV)",
+            combined.to_csv(index=False),
+            file_name="stale_automations.csv",
+            mime="text/csv",
+            key="stale_csv_dl",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTOMATION GOVERNANCE CENTER  — Brief: AutomationGovernanceCenter
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ProcessType values that normalise to the "After Save" bucket
+_AFTER_SAVE_PROCESS_TYPES = frozenset({
+    "RecordAfterSave",   # Modern record-triggered flow (fires after commit)
+    "Workflow",          # Process Builder — always fires after save
+    "InvocableProcess",  # Invocable Process Builder
+})
+# ProcessType values that normalise to the "Before Save" bucket
+_BEFORE_SAVE_PROCESS_TYPES = frozenset({
+    "RecordBeforeSave",  # Modern before-save triggered flow
+})
+
+
+def _classify_automation_full(name: str) -> tuple[str, str, str]:
+    """
+    Classifies an automation against both RETIRED_TOOLS and ACTIVE_TOOLS.
+
+    Returns (classification, tool_name, tool_status):
+      classification: "Retired-only" | "Mixed" | "Active-tool" | "Clean"
+      tool_name:      matched tool name or ""
+      tool_status:    "Retired" | "Active" | "None"
+    """
+    haystack = name.lower()
+
+    retired_tool = ""
+    for tool_name, prefixes in RETIRED_TOOLS.items():
+        for prefix in prefixes:
+            if prefix.lower() in haystack:
+                retired_tool = tool_name
+                break
+        if retired_tool:
+            break
+
+    active_tool = ""
+    for tool_name, prefixes in ACTIVE_TOOLS.items():
+        for prefix in prefixes:
+            if prefix.lower() in haystack:
+                active_tool = tool_name
+                break
+        if active_tool:
+            break
+
+    if retired_tool and not active_tool:
+        has_biz = any(kw in haystack for kw in _MOD_A_BUSINESS_KEYWORDS)
+        if has_biz:
+            return ("Mixed", retired_tool, "Retired")
+        return ("Retired-only", retired_tool, "Retired")
+
+    if active_tool:
+        if retired_tool:
+            return ("Mixed", f"{active_tool} / {retired_tool}", "Active")
+        return ("Active-tool", active_tool, "Active")
+
+    return ("Clean", "", "None")
+
+
+def _normalise_trigger_bucket(row: "pd.Series") -> "str | None":
+    """
+    Map a Flow census row to a broad timing bucket for conflict grouping.
+
+    Collapses modern record-triggered Flows (ProcessType="RecordAfterSave")
+    and legacy Process Builder flows (ProcessType="Workflow" /
+    "InvocableProcess") into the same "After Save" bucket so that orgs
+    mixing old and new Flow technology still surface conflict groups.
+
+    Only called for rows where Type == "Flow".
+
+    Returns one of:
+      "Before Save" – RecordBeforeSave Flows
+      "After Save"  – RecordAfterSave, Workflow, InvocableProcess,
+                      AutoLaunchedFlow (legacy record-triggered), or unknown
+      None          – non-record-triggered, caller should drop row
+    """
+    te = (row.get("TriggerEvent") or "")
+
+    if te in _BEFORE_SAVE_PROCESS_TYPES:
+        return "Before Save"
+    if te in _AFTER_SAVE_PROCESS_TYPES:
+        return "After Save"
+    # Empty ProcessType on a Flow that survived the non-record-type filter is
+    # almost always an old Process Builder variant — treat as After Save.
+    if te == "":
+        return "After Save"
+    # AutoLaunchedFlow is the legacy ProcessType for record-triggered flows
+    # before Salesforce split into RecordBeforeSave / RecordAfterSave.
+    # Callers pre-filter truly non-record types, so if this reaches here
+    # it's likely record-triggered.  Default to After Save.
+    if te == "AutoLaunchedFlow":
+        return "After Save"
+    return None  # Unknown / non-record ProcessType, skip
+
+
+def _build_conflict_groups(
+    df: pd.DataFrame,
+    *,
+    include_inactive: bool = False,
+    cache: "dict | None" = None,
+) -> list[dict]:
+    """
+    Find sets of Flows on the same Salesforce object that fire on the same
+    trigger (object + timing + action) and could be consolidated into one Flow.
+
+    Only Flows are considered — Apex Triggers and WorkflowRules are a
+    different technology and cannot be "merged" into a Flow.  This function
+    deliberately ignores them so the Merge Planner only shows actionable
+    Flow-on-Flow duplicates.
+
+    Grouping key: (Object, timing bucket, trigger action)
+      timing bucket  — "Before Save" or "After Save"
+      trigger action — "On Create" / "On Update" / "On Delete"
+                       derived from the metadata cache (start.recordTriggerType).
+                       Falls back to the timing bucket alone when the cache is
+                       absent or the flow is not yet cached.
+
+    A "CreateAndUpdate" Flow is expanded into BOTH an "On Create" row AND an
+    "On Update" row so it appears in both conflict groups and merge candidates.
+
+    Parameters
+    ----------
+    include_inactive : bool
+        When True, inactive Flows are included alongside active ones so you
+        can see all technical debt, not just currently live Flows.
+        Default is False (active-only).
+    cache : dict | None
+        Metadata cache returned by _load_flow_cache() / _build_flow_cache().
+        Used to read start.recordTriggerType for each Flow.  When None (or
+        the Flow is not yet in the cache) the group falls back to timing-only.
+    """
+    if df.empty:
+        return []
+
+    # ── Flows only ────────────────────────────────────────────────────────
+    mask = df["Type"] == "Flow"
+    if not include_inactive:
+        mask &= df["Status"] == "Active"
+    candidates = df[mask].copy()
+
+    # Drop known non-record ProcessTypes (Screen, Survey, etc.)
+    # NOTE: AutoLaunchedFlow is NOT excluded — older record-triggered flows
+    # use this ProcessType.  We use the cache triggerType to classify them.
+    _DEFINITELY_NON_RECORD_CG = {
+        "Screen", "Survey", "CheckoutFlow", "ContactRequestFlow",
+        "FieldServiceMobile", "FieldServiceWeb",
+        "TransactionSecurityPolicy", "ActionCadenceFlow",
+    }
+    candidates = candidates[
+        ~candidates["TriggerEvent"].isin(_DEFINITELY_NON_RECORD_CG)
+    ].copy()
+
+    if candidates.empty:
+        return []
+
+    # ── Normalise ProcessType → timing bucket ─────────────────────────────
+    # Use cache triggerType as primary signal (handles AutoLaunchedFlow etc.)
+    # Fall back to ProcessType-based mapping for uncached flows.
+    def _bucket_with_cache(row):
+        name = (row.get("Name") or "").strip()
+        # Try cache first
+        if cache and name:
+            meta  = cache.get(f"flow::{name}") or {}
+            start = meta.get("start") or {}
+            tt = (start.get("triggerType") or "").strip()
+            if tt == "RecordBeforeSave":
+                return "Before Save"
+            if tt == "RecordAfterSave":
+                return "After Save"
+        # Fallback to ProcessType
+        bucket = _normalise_trigger_bucket(row)
+        if bucket is not None:
+            return bucket
+        # AutoLaunchedFlow / Scheduled on a real object → default After Save
+        obj = (row.get("Object") or "")
+        if obj and not obj.startswith("No Object"):
+            return "After Save"
+        return None  # truly unknown → drop
+
+    candidates["_bucket"] = candidates.apply(_bucket_with_cache, axis=1)
+    candidates = candidates[candidates["_bucket"].notna()].copy()
+
+    if candidates.empty:
+        return []
+
+    # ── Classify each Flow for retirement/tool signals ────────────────────
+    classified = candidates["Name"].apply(_classify_automation_full)
+    candidates["_class"] = [c[0] for c in classified]
+    candidates["_tool"]  = [c[1] for c in classified]
+
+    # ── Flag Process Builder flows (harder to read / maintain) ────────────
+    candidates["_is_pb"] = candidates["TriggerEvent"].isin(
+        {"Workflow", "InvocableProcess"}
+    )
+
+    # ── Expand rows by trigger action (from metadata cache) ───────────────
+    # recordTriggerType: "Create" | "Update" | "CreateAndUpdate" | "Delete"
+    # A CreateAndUpdate Flow is duplicated so it appears in both Create and
+    # Update groups.
+    _RTT_TO_ACTIONS: dict[str, list[str]] = {
+        "Create":          ["On Create"],
+        "Update":          ["On Update"],
+        "CreateAndUpdate": ["On Create", "On Update"],
+        "Delete":          ["On Delete"],
+    }
+
+    expanded_rows: list = []
+    for _, row in candidates.iterrows():
+        name = (row.get("Name") or "").strip()
+        rtt  = ""
+        if cache and name:
+            _flow_meta  = cache.get(f"flow::{name}") or {}
+            _start_node = _flow_meta.get("start") or {}   # "start" key can be None
+            rtt = _start_node.get("recordTriggerType", "") or ""
+
+        actions = _RTT_TO_ACTIONS.get(rtt, [""])  # "" = no cache data
+        is_caau = rtt == "CreateAndUpdate"
+
+        for action in actions:
+            new_row = row.copy()
+            new_row["_trigger_action"] = action
+            new_row["_is_caau"]        = is_caau
+            expanded_rows.append(new_row)
+
+    if not expanded_rows:
+        return []
+
+    expanded = pd.DataFrame(expanded_rows)
+
+    # ── Build conflict groups ─────────────────────────────────────────────
+    def _trigger_label(bucket: str, action: str) -> str:
+        """Human-readable label for a (bucket, action) pair."""
+        if action:
+            return f"Before Save — {action}" if bucket == "Before Save" else action
+        return bucket  # no cache data — fall back to timing only
+
+    _action_order = {"On Create": 0, "On Update": 1, "On Delete": 2, "": 3}
+    sev_order     = {"🔴 Critical": 0, "🟡 Moderate": 1, "🟢 Low": 2}
+
+    groups: list[dict] = []
+    for (obj, bucket, action), grp in expanded.groupby(
+        ["Object", "_bucket", "_trigger_action"]
+    ):
+        if len(grp) < 2:
+            continue
+
+        members    = grp.to_dict("records")
+        count      = len(members)
+        class_set  = set(grp["_class"])
+        status_set = set(grp["Status"].tolist()) if "Status" in grp.columns else set()
+
+        has_retired  = "Retired-only" in class_set
+        has_mixed    = "Mixed" in class_set
+        has_inactive = "Inactive" in status_set
+        has_pb       = bool(grp["_is_pb"].any())
+        has_caau     = bool(grp["_is_caau"].any())
+
+        if count >= 4 or has_retired:
+            severity = "🔴 Critical"
+        elif count == 3 or has_mixed or has_pb:
+            severity = "🟡 Moderate"
+        else:
+            severity = "🟢 Low"
+
+        trigger_lbl = _trigger_label(bucket, action)
+
+        groups.append({
+            "Object":        obj,
+            "TriggerEvent":  trigger_lbl,    # human-readable label used by both renderers
+            "TriggerAction": action,          # raw: "On Create" / "On Update" / "On Delete" / ""
+            "TriggerBucket": bucket,          # "Before Save" or "After Save"
+            "MemberCount":   count,
+            "Severity":      severity,
+            "Members":       members,
+            "MembersLabel":  ", ".join(
+                (grp["DisplayName"] if "DisplayName" in grp.columns else grp["Name"]).tolist()
+            ),
+            "HasInactive":   has_inactive,
+            "HasPB":         has_pb,
+            "HasCAAU":       has_caau,
+        })
+
+    groups.sort(key=lambda g: (
+        sev_order.get(g["Severity"], 9),
+        -g["MemberCount"],
+        g["Object"],
+        _action_order.get(g["TriggerAction"], 99),
+    ))
+    return groups
+
+
+def _fetch_flow_detail(api_names: list[str]) -> dict[str, dict]:
+    """
+    Fetch additional Flow metadata from the Tooling API for a list of ApiNames.
+
+    Queries ProcessType, TriggerType, RecordTriggerType, and Description.
+    Metadata XML bulk-query is not supported; summary is best-effort.
+    Returns dict keyed by ApiName.
+    """
+    if not api_names:
+        return {}
+
+    names_csv = ", ".join(f"'{n}'" for n in api_names)
+    soql = (
+        "SELECT ApiName, MasterLabel, Description, ProcessType, "
+        "TriggerType, RecordTriggerType "
+        f"FROM Flow WHERE Status = 'Active' AND ApiName IN ({names_csv})"
+    )
+    records = _run_tooling_query(soql)
+
+    result: dict[str, dict] = {}
+    for r in records:
+        api_name = r.get("ApiName", "")
+        result[api_name] = {
+            "label":               r.get("MasterLabel", api_name),
+            "description":         r.get("Description") or "",
+            "process_type":        r.get("ProcessType") or "",
+            "trigger_type":        r.get("TriggerType") or "",
+            "record_trigger_type": r.get("RecordTriggerType") or "",
+        }
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FLOW & WFR METADATA CACHE
+# Persistent JSON cache so expensive per-record Tooling API calls happen once.
+# File: flow_metadata_cache.json  (alongside sf_query_tool.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+import os as _os
+_FLOW_CACHE_PATH = _os.path.join(
+    _os.path.dirname(_os.path.abspath(__file__)), "flow_metadata_cache.json"
+)
+
+
+def _load_flow_cache() -> dict:
+    """Load the persisted flow/WFR metadata cache from disk."""
+    try:
+        if _os.path.exists(_FLOW_CACHE_PATH):
+            with open(_FLOW_CACHE_PATH, "r", encoding="utf-8") as _f:
+                return json.load(_f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_flow_cache(cache: dict) -> None:
+    """Persist the flow/WFR metadata cache to disk."""
+    try:
+        with open(_FLOW_CACHE_PATH, "w", encoding="utf-8") as _f:
+            json.dump(cache, _f, indent=2, default=str)
+    except Exception:
+        pass
+
+
+# ── Phase 1 infrastructure functions ──────────────────────────────────────────
+
+def _build_version_id_map(cache: dict, df: "pd.DataFrame | None" = None) -> dict[str, str]:
+    """
+    Build a mapping from flow ApiName → FlowVersionId.
+
+    Reads ``version_id`` from cache entries first (populated by
+    ``_fetch_flow_metadata_single`` since the rebuild).  For any entries
+    that were cached before ``version_id`` was stored, falls back to a
+    single bulk query against ``FlowDefinitionView``.
+
+    Returns ``{"My_Flow_Name": "301xx0000abc123", …}``.
+    """
+    result: dict[str, str] = {}
+    missing: list[str] = []
+
+    for key, meta in cache.items():
+        if not key.startswith("flow::"):
+            continue
+        api_name = (meta.get("api_name") or "").strip()
+        vid      = (meta.get("version_id") or "").strip()
+        if api_name and vid:
+            result[api_name] = vid
+        elif api_name:
+            missing.append(api_name)
+
+    if missing:
+        records, _ = _run_rest_query_raw(
+            "SELECT ApiName, ActiveVersionId FROM FlowDefinitionView "
+            "WHERE ActiveVersionId != null AND NamespacePrefix = null LIMIT 2000"
+        )
+        for r in records:
+            name = (r.get("ApiName") or "").strip()
+            vid  = (r.get("ActiveVersionId") or "").strip()
+            if name and vid and name in missing:
+                result[name] = vid
+
+    return result
+
+
+def _fetch_flow_execution_history(
+    version_id_map: dict[str, str] | None = None,
+    months_back: int = 6,
+) -> dict[str, dict]:
+    """
+    Query ``FlowInterview`` via REST API to get flow execution history.
+
+    Uses GROUP BY so we never pull individual interview records (which can
+    be millions in a busy org).
+
+    Parameters
+    ----------
+    version_id_map : dict | None
+        ApiName → FlowVersionId mapping.  Not used directly in the query
+        (we fetch all versions) but the caller needs it to map results
+        back to flow names.
+    months_back : int
+        How far back to look for executions (default 6 months).
+
+    Returns
+    -------
+    dict keyed by FlowVersionId::
+
+        {"301xx...": {"last_run": "2026-01-15T10:30:00.000Z",
+                      "run_count": 42}}
+
+    Returns ``{}`` if FlowInterview is not queryable in this org (some
+    orgs restrict it).  Stores a diagnostic message in
+    ``st.session_state["_flow_interview_diag"]`` on failure.
+    """
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    cutoff = (_dt.now(_tz.utc) - _td(days=months_back * 30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    soql = (
+        "SELECT FlowVersionId, MAX(CreatedDate) lastRun, COUNT(Id) runCount "
+        "FROM FlowInterview "
+        f"WHERE CreatedDate >= {cutoff} "
+        "GROUP BY FlowVersionId LIMIT 2000"
+    )
+
+    try:
+        records, err = _run_rest_query_raw(soql)
+    except Exception as exc:
+        err = str(exc)
+        records = []
+
+    if err:
+        # FlowInterview may be restricted — degrade gracefully
+        import streamlit as _st
+        _st.session_state["_flow_interview_diag"] = (
+            f"FlowInterview query failed: {err}. "
+            "Stale detection will fall back to LastModifiedDate only."
+        )
+        return {}
+
+    result: dict[str, dict] = {}
+    for r in records:
+        vid = (r.get("FlowVersionId") or "").strip()
+        if not vid:
+            continue
+        result[vid] = {
+            "last_run":  r.get("lastRun") or r.get("expr0", ""),
+            "run_count": r.get("runCount") or r.get("expr1", 0),
+        }
+
+    return result
+
+
+def _compute_object_health_v2(
+    df: "pd.DataFrame",
+    cache: dict,
+    groups: list[dict] | None = None,
+) -> "pd.DataFrame":
+    """
+    Compute a per-object health score based on Salesforce automation best
+    practices.
+
+    Scoring rubric (higher = worse, 0 = perfect):
+
+      multi_flow_penalty      +5 per extra flow beyond 1 per trigger action
+      process_builder_penalty +3 per active Process Builder automation
+      workflow_rule_penalty   +3 per active Workflow Rule
+      before_after_balance    +2 per After Save flow doing field-only $Record updates
+      stale_penalty           +1 per inactive automation > 12 months old
+      recursion_risk          +4 if Before + After Save flows both update the object
+      governor_risk           +3 if >= 5 active automations, +6 if >= 8
+
+    Grades:
+      A (0-4) | B (5-9) | C (10-19) | D (20-29) | F (30+)
+
+    Returns DataFrame with columns:
+      Object, Score, Grade, Breakdown
+    """
+    import pandas as _pd
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    if df.empty:
+        return _pd.DataFrame(columns=["Object", "Score", "Grade", "Breakdown"])
+
+    _12mo_ago = _dt.now(_tz.utc) - _td(days=365)
+    active = df[df["Status"] == "Active"]
+    objects = sorted(active["Object"].dropna().unique())
+
+    # ── Pre-compute conflict group penalties per object ────────────────────
+    _conflict_extra: dict[str, int] = {}  # obj → total extra flows
+    if groups:
+        for g in groups:
+            obj = g["Object"]
+            extra = max(0, g["MemberCount"] - 1)
+            _conflict_extra[obj] = _conflict_extra.get(obj, 0) + extra
+
+    rows: list[dict] = []
+    for obj in objects:
+        obj_df     = df[df["Object"] == obj]
+        obj_active = active[active["Object"] == obj]
+        n_active   = len(obj_active)
+        breakdown: dict[str, dict] = {}
+
+        # 1. Multiple flows per trigger action
+        extra = _conflict_extra.get(obj, 0)
+        multi_score = extra * 5
+        breakdown["multi_flow"] = {
+            "score": multi_score,
+            "detail": f"{extra} extra flow(s) beyond best-practice 1-per-trigger-action" if extra else "OK",
+        }
+
+        # 2. Process Builder penalty
+        pb_count = len(obj_active[obj_active["TriggerEvent"].isin({"Workflow", "InvocableProcess"})])
+        pb_score = pb_count * 3
+        breakdown["process_builder"] = {
+            "score": pb_score,
+            "detail": f"{pb_count} active Process Builder automation(s) — should migrate to Flows" if pb_count else "OK",
+        }
+
+        # 3. Workflow Rule penalty
+        wfr_count = len(obj_active[obj_active["Type"] == "WorkflowRule"])
+        wfr_score = wfr_count * 3
+        breakdown["workflow_rules"] = {
+            "score": wfr_score,
+            "detail": f"{wfr_count} active Workflow Rule(s) — should migrate to Flows" if wfr_count else "OK",
+        }
+
+        # 4. After Save doing field-only $Record updates (should be Before Save)
+        misplaced = 0
+        for _, row in obj_active[obj_active["Type"] == "Flow"].iterrows():
+            name = (row.get("Name") or "").strip()
+            meta = cache.get(f"flow::{name}") or {}
+            start = meta.get("start") or {}
+            if start.get("triggerType") not in ("RecordAfterSave",):
+                continue
+            updates = meta.get("recordUpdates") or []
+            actions = meta.get("actionCalls") or []
+            lookups = meta.get("recordLookups") or []
+            # If ONLY doing recordUpdates (no actionCalls or lookups) → likely a
+            # field-update-only flow that should be Before Save
+            if updates and not actions and not lookups:
+                misplaced += 1
+        ba_score = misplaced * 2
+        breakdown["before_after"] = {
+            "score": ba_score,
+            "detail": f"{misplaced} After Save flow(s) with only field updates — consider Before Save" if misplaced else "OK",
+        }
+
+        # 5. Stale inactive automations
+        stale_mask = (
+            (obj_df["Status"] == "Inactive") &
+            obj_df["LastModifiedDate"].notna() &
+            (obj_df["LastModifiedDate"] < _12mo_ago)
+        )
+        stale_count = int(stale_mask.sum())
+        stale_score = stale_count * 1
+        breakdown["stale"] = {
+            "score": stale_score,
+            "detail": f"{stale_count} inactive automation(s) not modified in 12+ months" if stale_count else "OK",
+        }
+
+        # 6. Recursion risk — Before + After Save both doing updates
+        has_before = False
+        has_after_update = False
+        for _, row in obj_active[obj_active["Type"] == "Flow"].iterrows():
+            bucket = _normalise_trigger_bucket(row)
+            name = (row.get("Name") or "").strip()
+            meta = cache.get(f"flow::{name}") or {}
+            if bucket == "Before Save":
+                has_before = True
+            elif bucket == "After Save" and (meta.get("recordUpdates") or []):
+                has_after_update = True
+        recursion_score = 4 if (has_before and has_after_update) else 0
+        breakdown["recursion"] = {
+            "score": recursion_score,
+            "detail": "Before + After Save flows both update this object — recursion risk" if recursion_score else "OK",
+        }
+
+        # 7. Governor density
+        if n_active >= 8:
+            gov_score = 6
+            gov_detail = f"{n_active} active automations (threshold: 8)"
+        elif n_active >= 5:
+            gov_score = 3
+            gov_detail = f"{n_active} active automations (threshold: 5)"
+        else:
+            gov_score = 0
+            gov_detail = "OK"
+        breakdown["governor"] = {"score": gov_score, "detail": gov_detail}
+
+        # ── Total ──────────────────────────────────────────────────────────
+        total = sum(v["score"] for v in breakdown.values())
+
+        if total <= 4:
+            grade = "A"
+        elif total <= 9:
+            grade = "B"
+        elif total <= 19:
+            grade = "C"
+        elif total <= 29:
+            grade = "D"
+        else:
+            grade = "F"
+
+        rows.append({
+            "Object":    obj,
+            "Score":     total,
+            "Grade":     grade,
+            "Breakdown": breakdown,
+        })
+
+    result = _pd.DataFrame(rows)
+    if not result.empty:
+        result = result.sort_values("Score", ascending=False).reset_index(drop=True)
+    return result
+
+
+def _detect_unreachable_criteria(cache: dict) -> list[dict]:
+    """
+    Analyze cached flow decisions for likely-unreachable criteria.
+
+    Checks performed (conservative to avoid false positives):
+      1. Empty decision rules — a rule with zero conditions (always false in
+         AND-logic, so the branch can never be taken).
+      2. Contradictory conditions — two conditions on the same field with
+         ``EqualTo`` but different literal values within the same rule (AND).
+      3. Deleted-field patterns — ``leftValueReference`` containing
+         ``__del`` or ``_deleted`` (common patterns when fields are removed
+         but automations are not updated).
+
+    Returns list of dicts::
+
+        [{"flow_name": "...", "element_name": "...",
+          "issue": "...", "severity": "High"|"Medium"|"Low"}]
+    """
+    issues: list[dict] = []
+
+    for key, meta in cache.items():
+        if not key.startswith("flow::"):
+            continue
+        _api = meta.get("api_name") or key.replace("flow::", "")
+        _lbl = (meta.get("label") or "").strip()
+        flow_name = f"{_lbl} ({_api})" if _lbl and _lbl != _api else _api
+        decisions = meta.get("decisions") or []
+        if not isinstance(decisions, list):
+            continue
+
+        for dec in decisions:
+            if not isinstance(dec, dict):
+                continue
+            dec_name = dec.get("name") or dec.get("label") or "Unknown decision"
+            rules = dec.get("rules") or []
+            if not isinstance(rules, list):
+                continue
+
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    continue
+                rule_label = rule.get("label") or rule.get("name") or ""
+                conditions = rule.get("conditions") or []
+
+                # Check 1: empty conditions (always-false branch)
+                if not conditions and rule_label:
+                    issues.append({
+                        "flow_name":    flow_name,
+                        "element_name": f"{dec_name} → {rule_label}",
+                        "issue":        "Empty conditions — branch can never be taken (AND of nothing = false in SF)",
+                        "severity":     "Medium",
+                    })
+                    continue
+
+                if not isinstance(conditions, list):
+                    continue
+
+                # Check 2: contradictory EqualTo on same field
+                equal_vals: dict[str, list[str]] = {}
+                for cond in conditions:
+                    if not isinstance(cond, dict):
+                        continue
+                    op    = (cond.get("operator") or "").strip()
+                    field = (cond.get("leftValueReference") or "").strip()
+                    value = str(cond.get("rightValue") or cond.get("rightValueReference") or "")
+
+                    if not field:
+                        continue
+
+                    # Check 3: deleted-field pattern
+                    field_lower = field.lower()
+                    if "__del" in field_lower or "_deleted" in field_lower:
+                        issues.append({
+                            "flow_name":    flow_name,
+                            "element_name": f"{dec_name} → {rule_label}",
+                            "issue":        f"References possibly deleted field: {field}",
+                            "severity":     "High",
+                        })
+
+                    if op == "EqualTo" and value:
+                        equal_vals.setdefault(field, []).append(value)
+
+                # Find contradictions
+                for field, vals in equal_vals.items():
+                    unique = set(vals)
+                    if len(unique) > 1:
+                        issues.append({
+                            "flow_name":    flow_name,
+                            "element_name": f"{dec_name} → {rule_label}",
+                            "issue":        f"Contradictory: {field} = {' AND '.join(repr(v) for v in unique)} (can never both be true)",
+                            "severity":     "High",
+                        })
+
+    # Sort: High first, then Medium, then Low
+    _sev_order = {"High": 0, "Medium": 1, "Low": 2}
+    issues.sort(key=lambda i: (_sev_order.get(i["severity"], 9), i["flow_name"]))
+    return issues
+
+
+def _fetch_flow_metadata_single(
+    api_name: str,
+    version_id: str = "",
+) -> "tuple[dict | None, str]":
+    """
+    Fetch full Flow element metadata for one Flow via Tooling API.
+    Returns (metadata_dict, error_message).  error_message is "" on success.
+
+    IMPORTANT: Neither Flow.ApiName nor Flow.FullName can be used in a WHERE
+    clause (v59.0 raises INVALID_FIELD).  The only reliable path is:
+
+      1. If version_id is not supplied, look it up via
+         FlowDefinitionView WHERE ApiName = api_name   ← ApiName IS filterable here
+      2. Query  Flow WHERE Id = version_id             ← Id is always filterable
+
+    Pass version_id directly (pre-fetched in _build_flow_cache) to skip step 1.
+    """
+    def _extract(records: list[dict]) -> "dict | None":
+        if not records:
+            return None
+        meta = records[0].get("Metadata") or {}
+        return {
+            "api_name":       api_name,
+            "version_id":     version_id,   # for FlowInterview correlation
+            "description":    meta.get("description", ""),
+            "label":          meta.get("label", ""),
+            "start":          meta.get("start", {}),
+            "variables":      meta.get("variables", []),
+            "decisions":      meta.get("decisions", []),
+            "assignments":    meta.get("assignments", []),
+            "formulas":       meta.get("formulas", []),
+            "recordLookups":  meta.get("recordLookups", []),
+            "recordUpdates":  meta.get("recordUpdates", []),
+            "actionCalls":    meta.get("actionCalls", []),
+            # ── additional element types for diagram visualiser ──
+            "loops":          meta.get("loops", []),
+            "recordCreates":  meta.get("recordCreates", []),
+            "recordDeletes":  meta.get("recordDeletes", []),
+            "subflows":       meta.get("subflows", []),
+            "screens":        meta.get("screens", []),
+            "waits":          meta.get("waits", []),
+        }
+
+    # ── Step 1: resolve ApiName → version Id (skip if already known) ────────
+    # FlowDefinitionView is a standard REST object — use _run_rest_query_raw,
+    # NOT _run_tooling_query_raw (which raises INVALID_TYPE for this object).
+    # Prefer ActiveVersionId; LatestVersionId is a fallback for callers that
+    # intentionally pass inactive/draft flows (include_inactive=True path).
+    if not version_id:
+        view_records, err1 = _run_rest_query_raw(
+            f"SELECT ActiveVersionId, LatestVersionId FROM FlowDefinitionView "
+            f"WHERE ApiName = '{api_name}' LIMIT 1"
+        )
+        if err1:
+            return None, f"FlowDefinitionView lookup: {err1}"
+        if not view_records:
+            return None, "Not found in FlowDefinitionView (may be deleted)"
+        row = view_records[0]
+        version_id = (
+            (row.get("ActiveVersionId") or "")
+            or (row.get("LatestVersionId") or "")
+        ).strip()
+        if not version_id:
+            return None, "Flow has no version (ActiveVersionId and LatestVersionId both null)"
+
+    # ── Step 2: fetch Metadata by Flow Id ─────────────────────────────────
+    # Guard: a real Salesforce ID is 15 or 18 alphanumeric characters.
+    # Managed-package flows return a FullName string (e.g. "Ns__Flow-1") instead
+    # of a real ID from FlowDefinitionView.ActiveVersionId — reject those early
+    # so we never hit the Tooling API with an invalid ID.
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9]{15,18}$', version_id):
+        return None, (
+            f"Skipping managed-package flow — ActiveVersionId '{version_id}' "
+            "is a FullName, not a Salesforce record ID"
+        )
+    flow_records, err2 = _run_tooling_query_raw(
+        f"SELECT Id, Metadata FROM Flow WHERE Id = '{version_id}' LIMIT 1"
+    )
+    if err2:
+        return None, f"Flow Metadata query (Id={version_id}): {err2}"
+    result = _extract(flow_records)
+    if result:
+        return result, ""
+    return None, f"Flow Id={version_id} returned no Metadata"
+
+
+def _fetch_wfr_metadata_single(wfr_id: str, name: str) -> dict | None:
+    """
+    Fetch full WorkflowRule metadata (criteria + all actions) via Tooling API.
+    Returns None if not found.
+    """
+    records = _run_tooling_query(
+        f"SELECT Id, Name, Metadata FROM WorkflowRule WHERE Id = '{wfr_id}' LIMIT 1"
+    )
+    if not records:
+        return None
+    meta = records[0].get("Metadata") or {}
+    return {
+        "name":           name,
+        "trigger_type":   meta.get("triggerType", ""),
+        "criteria_items": meta.get("criteriaItems", []),
+        "formula":        meta.get("formula", ""),
+        "actions":        meta.get("actions", []),
+    }
+
+
+def _build_flow_cache(
+    df: pd.DataFrame,
+    progress_bar=None,
+    status_text=None,
+    force_refresh: bool = False,
+    include_inactive: bool = False,
+) -> dict:
+    """
+    Fetch and persist metadata for every Flow and WorkflowRule in the census df.
+    Skips entries already cached unless force_refresh=True.
+    Checkpoints to disk every 10 records so partial runs survive interruption.
+
+    include_inactive : bool
+        False (default) — only Flows that have an active version are fetched.
+        True  — also fetch deactivated and draft Flows (uses LatestVersionId
+                as a fallback when ActiveVersionId is null).
+
+    Returns the updated cache dict.
+    """
+    from datetime import datetime as _dt
+    cache = {} if force_refresh else _load_flow_cache()
+
+    flow_rows = df[df["Type"] == "Flow"].copy()
+    if not include_inactive:
+        flow_rows = flow_rows[flow_rows["Status"] == "Active"].copy()
+    wfr_rows  = df[df["Type"] == "WorkflowRule"].copy()
+    total     = len(flow_rows) + len(wfr_rows)
+    done      = 0
+    saved_at  = 0
+
+    def _tick(msg: str) -> None:
+        nonlocal done
+        done += 1
+        if progress_bar is not None:
+            progress_bar.progress(min(done / max(total, 1), 1.0))
+        if status_text is not None:
+            status_text.text(msg)
+
+    def _checkpoint() -> None:
+        nonlocal saved_at
+        if done - saved_at >= 10:
+            _save_flow_cache(cache)
+            saved_at = done
+
+    flow_errors: list[str] = []
+
+    # ── Pre-fetch FlowDefinitionView → ActiveVersionId (single full query) ───
+    # FlowDefinitionView does NOT support IN(...) in Tooling API WHERE clauses,
+    # so batched IN queries silently return nothing.  Fetch all definitions at
+    # once (no WHERE filter) to build the version-ID map in one round-trip.
+    # If the query fails or the org has >5000 flows (extremely unlikely), the
+    # per-flow loop falls back to _fetch_flow_metadata_single's own lookup.
+    _name_to_vid: dict[str, str] = {}
+    # FlowDefinitionView is a standard REST object — use _run_rest_query_raw.
+    # NamespacePrefix = null excludes managed-package flows: those return a
+    # FullName string (e.g. "Namespace__Flow-1") in ActiveVersionId instead of
+    # a real Salesforce record ID, which makes the subsequent Tooling API query fail.
+    # Active-only mode: also require ActiveVersionId != null.
+    # Inactive mode: fetch all org-owned definitions and fall back to LatestVersionId.
+    if include_inactive:
+        _fdv_q = (
+            "SELECT ApiName, ActiveVersionId, LatestVersionId "
+            "FROM FlowDefinitionView "
+            "WHERE NamespacePrefix = null LIMIT 2000"
+        )
+    else:
+        _fdv_q = (
+            "SELECT ApiName, ActiveVersionId "
+            "FROM FlowDefinitionView "
+            "WHERE ActiveVersionId != null AND NamespacePrefix = null LIMIT 2000"
+        )
+    _fdv_records, _fdv_err = _run_rest_query_raw(_fdv_q)
+    for _r in _fdv_records:
+        _aname = _r.get("ApiName", "")
+        if include_inactive:
+            _vid = (
+                (_r.get("ActiveVersionId") or "")
+                or (_r.get("LatestVersionId") or "")
+            ).strip()
+        else:
+            _vid = (_r.get("ActiveVersionId") or "").strip()
+        if _aname and _vid:
+            _name_to_vid[_aname] = _vid
+
+    # ── Flows ────────────────────────────────────────────────────────────────
+    for _, row in flow_rows.iterrows():
+        api_name = (row.get("Name") or "").strip()
+        if not api_name:
+            _tick("Skipping unnamed flow…")
+            continue
+        key = f"flow::{api_name}"
+        if key in cache and not force_refresh:
+            _tick(f"Cache hit: {api_name}")
+            continue
+        # _name_to_vid was built with NamespacePrefix = null, so managed-package
+        # flows are intentionally absent.  Do NOT fall back to an individual
+        # FlowDefinitionView lookup — that would find the managed flow record and
+        # return a FullName string as ActiveVersionId (e.g. "Ns__Flow-1"), which
+        # the Tooling API rejects as an invalid ID.  If a flow isn't in the map,
+        # it belongs to a managed package and should be skipped silently.
+        version_id = _name_to_vid.get(api_name, "")
+        if not version_id:
+            _tick(f"Skipping (managed pkg or not org-owned): {api_name}")
+            continue
+        _tick(f"Fetching Flow: {api_name}")
+        meta, err = _fetch_flow_metadata_single(api_name, version_id=version_id)
+        if meta:
+            cache[key] = meta
+        elif err:
+            flow_errors.append(f"{api_name}: {err}")
+        _checkpoint()
+
+    # ── WorkflowRules (batch ID lookup per object) ───────────────────────────
+    if not wfr_rows.empty:
+        for obj in wfr_rows["Object"].dropna().unique():
+            obj_wfrs   = wfr_rows[wfr_rows["Object"] == obj]
+            names_list = obj_wfrs["Name"].dropna().unique().tolist()
+            # Batch lookups in groups of 50 to stay within SOQL IN-list limits
+            for i in range(0, len(names_list), 50):
+                batch   = names_list[i : i + 50]
+                escaped = ", ".join(
+                    f"'{n.replace(chr(39), chr(39)*2)}'" for n in batch
+                )
+                id_records = _run_tooling_query(
+                    f"SELECT Id, Name FROM WorkflowRule "
+                    f"WHERE Name IN ({escaped}) AND TableEnumOrId = '{obj}' LIMIT 500"
+                )
+                for r in id_records:
+                    wfr_id   = r.get("Id", "")
+                    wfr_name = r.get("Name", "")
+                    key = f"wfr::{wfr_name}"
+                    if key in cache and not force_refresh:
+                        _tick(f"Cache hit WFR: {wfr_name}")
+                        continue
+                    _tick(f"Fetching WFR: {wfr_name}")
+                    meta = _fetch_wfr_metadata_single(wfr_id, wfr_name)
+                    if meta:
+                        cache[key] = meta
+                    _checkpoint()
+
+    # Final save with updated _meta bookkeeping
+    _all_flows_in_df      = len(df[df["Type"] == "Flow"])
+    _active_flows_in_df   = len(df[(df["Type"] == "Flow") & (df["Status"] == "Active")])
+    _inactive_flows_in_df = _all_flows_in_df - _active_flows_in_df
+    # Managed-package flows: active flows that were in the census but absent from
+    # _name_to_vid (which was filtered to NamespacePrefix = null).
+    _active_names   = set(df.loc[(df["Type"] == "Flow") & (df["Status"] == "Active"), "Name"].dropna())
+    _managed_count  = len(_active_names - set(_name_to_vid.keys()))
+    meta_entry = cache.get("_meta", {})
+    meta_entry.update({
+        "fetched_at":            _dt.utcnow().isoformat(timespec="seconds") + "Z",
+        "flow_count":            sum(1 for k in cache if k.startswith("flow::")),
+        "wfr_count":             sum(1 for k in cache if k.startswith("wfr::")),
+        "flow_errors":           flow_errors[:50],   # cap stored errors at 50
+        "flow_error_count":      len(flow_errors),
+        "include_inactive":      include_inactive,
+        "active_flows_in_df":    _active_flows_in_df,
+        "inactive_flows_in_df":  _inactive_flows_in_df,
+        "managed_flows_skipped": _managed_count,
+    })
+    cache["_meta"] = meta_entry
+    _save_flow_cache(cache)
+    return cache
+
+
+def _summarise_metadata_for_prompt(group: dict, cache: dict) -> str:
+    """
+    Serialise cached Flow/WFR metadata for a conflict group into complete,
+    faithful plain text for an AI prompt.  Caps are intentionally generous —
+    the goal is to give the AI FULL fidelity so no logic is missed.
+    """
+    lines: list[str] = []
+
+    for m in group.get("Members", []):
+        name  = m.get("Name", "")
+        mtype = m.get("Type", "")
+
+        if mtype == "Flow":
+            entry = cache.get(f"flow::{name}")
+            if not entry:
+                lines.append(f"\n[Flow] {name}\n  (not in cache — logic unknown, treat as manual review)")
+                continue
+            label = (entry.get("label") or "").strip()
+            header = f"[Flow] {name}" + (f" — {label}" if label and label != name else "")
+            lines.append(f"\n{header}")
+            if entry.get("description"):
+                lines.append(f"  Description: {entry['description'][:500]}")
+            start = entry.get("start") or {}
+            if start:
+                ec_parts = []
+                for filt in (start.get("filters") or []):
+                    rv   = (filt.get("rightValue") or {})
+                    rval = rv.get("stringValue") or rv.get("elementReference") or rv.get("numberValue", "")
+                    ec_parts.append(
+                        f"{filt.get('leftValueReference','')} {filt.get('operator','')} '{rval}'"
+                    )
+                ec_str = " AND ".join(ec_parts) if ec_parts else "always"
+                lines.append(
+                    f"  Trigger: object={start.get('object','')}  "
+                    f"recordTriggerType={start.get('recordTriggerType','')}  "
+                    f"triggerType={start.get('triggerType','')}  "
+                    f"entryCriteria={ec_str}"
+                )
+            for v in (entry.get("variables") or []):
+                lines.append(
+                    f"  Variable {v.get('name','')} ({v.get('dataType','')}) "
+                    f"in={v.get('isInput',False)} out={v.get('isOutput',False)}"
+                )
+            for f in (entry.get("formulas") or []):
+                lines.append(
+                    f"  Formula {f.get('name','')} ({f.get('dataType','')}): "
+                    f"{str(f.get('expression',''))[:300]}"
+                )
+            for d in (entry.get("decisions") or []):
+                rules = d.get("rules", [])
+                lines.append(f"  Decision {d.get('name','')} ({len(rules)} branches):")
+                for rule in rules:
+                    conds = rule.get("conditions", [])
+                    parts = []
+                    for c in conds:
+                        rv   = c.get("rightValue") or {}
+                        rval = rv.get("stringValue") or rv.get("elementReference") or rv.get("numberValue","")
+                        parts.append(
+                            f"{c.get('leftValueReference','')} "
+                            f"{c.get('operator','')} '{rval}'"
+                        )
+                    cond_logic = rule.get("conditionLogic", "and")
+                    joined = f" {cond_logic.upper()} ".join(parts) if parts else "(default)"
+                    lines.append(f"    [{rule.get('name','')}] {joined}")
+            for a in (entry.get("assignments") or []):
+                items = a.get("assignmentItems", [])
+                item_strs = []
+                for i in items:
+                    val = i.get("value") or {}
+                    v_str = val.get("stringValue") or val.get("elementReference") or ""
+                    item_strs.append(
+                        f"{i.get('assignToReference','')} {i.get('operator','=')} {v_str}"
+                    )
+                lines.append(f"  Assignment {a.get('name','')}: {'; '.join(item_strs)}")
+            for ru in (entry.get("recordUpdates") or []):
+                ia = ru.get("inputAssignments", [])
+                ia_strs = []
+                for i in ia:
+                    val = i.get("value") or {}
+                    v_str = val.get("stringValue") or val.get("elementReference") or ""
+                    ia_strs.append(f"{i.get('field','')} = {v_str}")
+                filters = ru.get("filters") or []
+                filt_strs = []
+                for filt in filters:
+                    rv   = (filt.get("value") or {})
+                    rval = rv.get("stringValue") or rv.get("elementReference") or ""
+                    filt_strs.append(f"{filt.get('field','')} {filt.get('operator','')} '{rval}'")
+                filt_clause = f" WHERE {' AND '.join(filt_strs)}" if filt_strs else " (on $Record)"
+                lines.append(f"  RecordUpdate {ru.get('name','')}{filt_clause}: {'; '.join(ia_strs)}")
+            for ac in (entry.get("actionCalls") or []):
+                params = ac.get("inputParameters") or []
+                param_strs = [
+                    f"{p.get('name','')}={((p.get('value') or {}).get('stringValue') or (p.get('value') or {}).get('elementReference') or '')}"
+                    for p in params[:6]
+                ]
+                lines.append(
+                    f"  ActionCall {ac.get('name','')} "
+                    f"({ac.get('actionType','')}): {ac.get('actionName','')} "
+                    + (f"[{', '.join(param_strs)}]" if param_strs else "")
+                )
+
+        elif mtype == "WorkflowRule":
+            entry = cache.get(f"wfr::{name}")
+            if not entry:
+                lines.append(f"\n[WorkflowRule] {name}\n  (not in cache — logic unknown, treat as manual review)")
+                continue
+            lines.append(f"\n[WorkflowRule] {name}")
+            lines.append(f"  TriggerType: {entry.get('trigger_type','')}")
+            if entry.get("formula"):
+                lines.append(f"  Criteria (formula): {entry['formula'][:400]}")
+            elif entry.get("criteria_items"):
+                for ci in (entry["criteria_items"] or []):
+                    lines.append(
+                        f"  Criteria: {ci.get('field','')} "
+                        f"{ci.get('operation','')} '{ci.get('value','')}'"
+                    )
+            for action in (entry.get("actions") or []):
+                atype = action.get("type", "")
+                if atype == "FieldUpdate":
+                    val = action.get("literalValue") or action.get("formula") or ""
+                    lines.append(
+                        f"  FieldUpdate → {action.get('field','')} = '{val}' "
+                        f"(op: {action.get('operation','')})"
+                    )
+                elif atype == "Alert":
+                    lines.append(f"  EmailAlert → {action.get('description','')}")
+                else:
+                    lines.append(f"  Action ({atype}): {action.get('name','')}")
+
+        else:
+            lines.append(f"\n[{mtype}] {name}  (no metadata extraction for this type)")
+
+    return "\n".join(lines)
+
+
+def _deploy_flow_to_sf(
+    sf,
+    flow_xml: str,
+    flow_api_name: str,
+    check_only: bool = True,
+) -> dict:
+    """
+    Deploy a single Flow to Salesforce via the Metadata API SOAP endpoint.
+
+    Uses the existing simple_salesforce session (sf.session_id + sf.sf_instance).
+    Builds an in-memory zip (package.xml + flows/<name>.flow-meta.xml), sends it
+    to /services/Soap/m/<version>/, then polls checkDeployStatus until done.
+
+    Args:
+        sf:            simple_salesforce Salesforce instance
+        flow_xml:      Complete Flow XML string (must include <?xml …> header)
+        flow_api_name: Flow API name (no extension)
+        check_only:    True = validate only (no changes written); False = real deploy
+
+    Returns dict:
+        success (bool), id (str), done (bool), status (str),
+        errors (list[str]), state_detail (str), check_only (bool)
+    """
+    import zipfile, io, base64, time
+
+    api_version = getattr(sf, "sf_version", "62.0")
+    instance    = getattr(sf, "sf_instance", "")
+    if not instance.startswith("http"):
+        instance = f"https://{instance}"
+    endpoint = f"{instance}/services/Soap/m/{api_version}/"
+
+    # ── Build package.xml ─────────────────────────────────────────────────
+    package_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Package xmlns="http://soap.sforce.com/2006/04/metadata">\n'
+        '    <types>\n'
+        f'        <members>{flow_api_name}</members>\n'
+        '        <name>Flow</name>\n'
+        '    </types>\n'
+        f'    <version>{api_version}</version>\n'
+        '</Package>\n'
+    )
+
+    # ── Ensure flow XML has the <?xml ?> header ────────────────────────────
+    if not flow_xml.strip().startswith("<?xml"):
+        flow_xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + flow_xml
+
+    # ── Build in-memory zip ────────────────────────────────────────────────
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("package.xml", package_xml)
+        zf.writestr(f"flows/{flow_api_name}.flow-meta.xml", flow_xml)
+    zip_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    # ── SOAP deploy() ─────────────────────────────────────────────────────
+    deploy_soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<soapenv:Envelope'
+        ' xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"'
+        ' xmlns:met="http://soap.sforce.com/2006/04/metadata">'
+        '<soapenv:Header>'
+        f'<met:SessionHeader><met:sessionId>{sf.session_id}</met:sessionId></met:SessionHeader>'
+        '</soapenv:Header>'
+        '<soapenv:Body><met:deploy>'
+        f'<met:ZipFile>{zip_b64}</met:ZipFile>'
+        '<met:DeployOptions>'
+        '<met:allowMissingFiles>false</met:allowMissingFiles>'
+        '<met:autoUpdatePackage>false</met:autoUpdatePackage>'
+        f'<met:checkOnly>{"true" if check_only else "false"}</met:checkOnly>'
+        '<met:ignoreWarnings>false</met:ignoreWarnings>'
+        '<met:performRetrieve>false</met:performRetrieve>'
+        '<met:purgeOnDelete>false</met:purgeOnDelete>'
+        '<met:rollbackOnError>true</met:rollbackOnError>'
+        '<met:singlePackage>true</met:singlePackage>'
+        '<met:testLevel>NoTestRun</met:testLevel>'
+        '</met:DeployOptions>'
+        '</met:deploy></soapenv:Body>'
+        '</soapenv:Envelope>'
+    )
+    try:
+        resp = requests.post(
+            endpoint,
+            data=deploy_soap.encode("utf-8"),
+            headers={"Content-Type": "text/xml; charset=UTF-8", "SOAPAction": '""'},
+            timeout=60,
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        return {"success": False, "id": "", "done": True, "status": "RequestFailed",
+                "errors": [str(exc)], "state_detail": "", "check_only": check_only}
+
+    # ── Parse async deploy ID ──────────────────────────────────────────────
+    _MNS = "http://soap.sforce.com/2006/04/metadata"
+    try:
+        root = ET.fromstring(resp.text)
+    except ET.ParseError as exc:
+        return {"success": False, "id": "", "done": True, "status": "ParseError",
+                "errors": [f"Could not parse deploy response: {exc}\n{resp.text[:300]}"],
+                "state_detail": "", "check_only": check_only}
+
+    deploy_id_el = root.find(f".//{{{_MNS}}}id")
+    if deploy_id_el is None:
+        return {"success": False, "id": "", "done": True, "status": "NoID",
+                "errors": [f"No deploy ID in response: {resp.text[:500]}"],
+                "state_detail": "", "check_only": check_only}
+    deploy_id = deploy_id_el.text.strip()
+
+    # ── Poll checkDeployStatus ─────────────────────────────────────────────
+    check_tpl = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<soapenv:Envelope'
+        ' xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"'
+        ' xmlns:met="http://soap.sforce.com/2006/04/metadata">'
+        '<soapenv:Header>'
+        f'<met:SessionHeader><met:sessionId>{sf.session_id}</met:sessionId></met:SessionHeader>'
+        '</soapenv:Header>'
+        '<soapenv:Body><met:checkDeployStatus>'
+        f'<met:asyncProcessId>{deploy_id}</met:asyncProcessId>'
+        '<met:includeDetails>true</met:includeDetails>'
+        '</met:checkDeployStatus></soapenv:Body>'
+        '</soapenv:Envelope>'
+    )
+
+    def _txt(el, tag):
+        found = el.find(f".//{{{_MNS}}}{tag}")
+        return found.text.strip() if found is not None and found.text else ""
+
+    for _poll in range(40):   # max ~120 s
+        time.sleep(3)
+        try:
+            cr = requests.post(
+                endpoint,
+                data=check_tpl.encode("utf-8"),
+                headers={"Content-Type": "text/xml; charset=UTF-8", "SOAPAction": '""'},
+                timeout=30,
+            )
+            cr.raise_for_status()
+            croot = ET.fromstring(cr.text)
+        except Exception as exc:
+            continue   # transient error — keep polling
+
+        done    = _txt(croot, "done").lower() == "true"
+        status  = _txt(croot, "status")
+        success = _txt(croot, "success").lower() == "true"
+        detail  = _txt(croot, "stateDetail")
+
+        if done:
+            errors = []
+            for cf in croot.findall(f".//{{{_MNS}}}componentFailures"):
+                msg  = _txt(cf, "problem")
+                comp = _txt(cf, "fullName")
+                line = _txt(cf, "lineNumber")
+                errors.append(f"{comp}: {msg}" + (f" (line {line})" if line else ""))
+            return {
+                "success": success, "id": deploy_id, "done": True,
+                "status": status, "errors": errors,
+                "state_detail": detail, "check_only": check_only,
+            }
+
+    return {
+        "success": False, "id": deploy_id, "done": False, "status": "Timeout",
+        "errors": ["Deploy polling timed out after 120 s — check Setup → Deployment Status in Salesforce."],
+        "state_detail": "", "check_only": check_only,
+    }
+
+
+def _design_consolidation_flow(group: dict, recommendation: dict, cache: dict) -> dict:
+    """
+    Call Claude with cached metadata to generate a production-ready
+    Salesforce Record-Triggered Flow that consolidates a conflict group.
+
+    Returns dict with keys:
+      flow_name, flow_label, flow_xml, elements_summary,
+      variables, formulas, pre_deployment_checklist, notes, error
+    """
+    obj     = group.get("Object", "")
+    trigger = group.get("TriggerEvent", "")
+    keep    = recommendation.get("keep", [])
+    retire  = recommendation.get("retire", [])
+    review  = recommendation.get("manual_review", [])
+
+    metadata_block = _summarise_metadata_for_prompt(group, cache)
+    cached_count   = sum(
+        1 for m in group.get("Members", [])
+        if (f"flow::{m['Name']}" in cache or f"wfr::{m['Name']}" in cache)
+    )
+    total_members = len(group.get("Members", []))
+
+    def _name_str(item) -> str:
+        return item if isinstance(item, str) else item.get("name", "")
+
+    # All selected members — their logic is ALWAYS consolidated regardless of recommendation.
+    # The keep/retire split only controls the post-deployment deactivation list.
+    all_member_names = [m.get("Name", "") for m in group.get("Members", []) if m.get("Name")]
+    deactivate_after = [_name_str(r) for r in retire]   # deactivate old flows after deploy
+
+    prompt = (
+        "You are a Salesforce architect. Your task is to consolidate multiple automations "
+        "into a single production-ready Record-Triggered Flow, with ZERO loss of functionality.\n\n"
+        f"Object: {obj}\n"
+        f"Shared trigger: {trigger}\n"
+        f"Metadata coverage: {cached_count}/{total_members} members have full cached metadata\n\n"
+        "AUTOMATIONS TO CONSOLIDATE — preserve ALL logic from EVERY one of these:\n"
+        + "\n".join(f"  - {n}" for n in all_member_names) + "\n\n"
+        "AFTER DEPLOYMENT — deactivate these old automations (but still consolidate their logic):\n"
+        + ("\n".join(f"  - {n}" for n in deactivate_after) or "  (all)") + "\n\n"
+        "AUTOMATIONS FOR MANUAL REVIEW — add as TODO comments in the flow description:\n"
+        + ("\n".join(f"  - {_name_str(r)}" for r in review) or "  (none)") + "\n\n"
+        "DETAILED AUTOMATION METADATA (complete — do not skip any element):\n"
+        + metadata_block + "\n\n"
+        "══════════════════════════════════════════════\n"
+        "COMPLETENESS REQUIREMENT (CRITICAL)\n"
+        "══════════════════════════════════════════════\n"
+        "Before writing any XML, you MUST produce a BEHAVIOR INVENTORY that enumerates\n"
+        "every distinct behavior from EVERY automation above. For each behavior, assign a\n"
+        "unique ID (B1, B2, …). Then produce a COVERAGE CONFIRMATION confirming each\n"
+        "behavior ID is addressed in the consolidated flow.\n\n"
+        "Missing any behavior is a defect. If you cannot implement a behavior directly,\n"
+        "mark it ⚠️ ADAPTED and explain why.\n\n"
+        "RESPONSE FORMAT — output FOUR sections in this exact order:\n\n"
+        "SECTION 1 — BEHAVIOR INVENTORY\n"
+        "===BEHAVIOR_INVENTORY_START===\n"
+        "[AutomationName]\n"
+        "  B1: Entry criteria: [condition] — Then: [what happens]\n"
+        "  B2: When [Decision branch]: [field/action result]\n"
+        "  B3: Always: [unconditional action]\n"
+        "[NextAutomationName]\n"
+        "  B4: ...\n"
+        "===BEHAVIOR_INVENTORY_END===\n\n"
+        "SECTION 2 — COVERAGE CONFIRMATION\n"
+        "===COVERAGE_START===\n"
+        "B1: ✅ Implemented in [ElementName]\n"
+        "B2: ✅ Implemented in [ElementName]\n"
+        "B3: ⚠️ ADAPTED — [reason]\n"
+        "===COVERAGE_END===\n\n"
+        "SECTION 3 — FLOW XML (output this BEFORE the JSON — it is the most critical part)\n"
+        "===FLOW_XML_START===\n"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<Flow xmlns=\"http://soap.sforce.com/2006/04/metadata\">\n"
+        "  ... complete flow XML ...\n"
+        "</Flow>\n"
+        "===FLOW_XML_END===\n\n"
+        "SECTION 4 — JSON METADATA (no markdown fences)\n"
+        "{\n"
+        '  "flow_name": "PascalCase_API_Name",\n'
+        '  "flow_label": "Human Readable Label",\n'
+        '  "elements_summary": [\n'
+        '    {"element_type": "Decision|Assignment|RecordUpdate|ActionCall|Formula|Variable",\n'
+        '     "name": "API_name", "description": "what it does", "covers_behaviors": ["B1","B2"]}\n'
+        '  ],\n'
+        '  "variables": [\n'
+        '    {"name": "...", "data_type": "String|Boolean|Number|Date|DateTime|Record",\n'
+        '     "input": true, "output": false, "description": "..."}\n'
+        '  ],\n'
+        '  "formulas": [\n'
+        '    {"name": "...", "data_type": "...", "expression": "...", "description": "..."}\n'
+        '  ],\n'
+        '  "pre_deployment_checklist": [\n'
+        '    "Deactivate [AutomationName] after deploying consolidated flow",\n'
+        '    "Test: verify B1 (entry criteria) fires correctly",\n'
+        '    "Test: verify B2 (field update) sets [Field] to [Value]"\n'
+        '  ],\n'
+        '  "adapted_behaviors": [{"id": "B3", "reason": "..."}],\n'
+        '  "notes": "Max 3 sentences of high-level assumptions."\n'
+        "}\n\n"
+        "FLOW DESIGN RULES:\n"
+        "- apiVersion 62.0, namespace http://soap.sforce.com/2006/04/metadata\n"
+        "- triggerType RecordAfterSave (matches WFR after-save behaviour); "
+        "use RecordBeforeSave only when source flows explicitly use before-save\n"
+        "- recordTriggerType: CreateAndUpdate unless ALL rules are create-only\n"
+        "- Reproduce EXACT field API names, picklist values, and formula expressions from source\n"
+        "- Decision branches: reproduce EVERY condition from the source — do not simplify or merge\n"
+        "- RecordUpdate: batch all field changes on $Record into one Update Records element\n"
+        "- Email alerts → actionType emailAlert with actionName matching source WFR alert name\n"
+        "- Add processMetadataValues description listing all consolidated automations\n"
+        "- locationX/Y: start=56,0; space 200px apart vertically\n"
+        "- Define every variable and formula referenced in conditions or assignments\n\n"
+        "CRITICAL OUTPUT RULES:\n"
+        "- Output all 4 sections in order: INVENTORY → COVERAGE → XML → JSON\n"
+        "- The JSON must NOT contain a flow_xml key\n"
+        "- Do not truncate the XML — it must be complete and deployable"
+    )
+
+    def _parse_design_response(raw: str) -> dict:
+        """
+        Parse the four-section AI response:
+          Section 1  — Behavior Inventory (===BEHAVIOR_INVENTORY_START/END===)
+          Section 2  — Coverage Confirmation (===COVERAGE_START/END===)
+          Section 3  — Flow XML (===FLOW_XML_START/END===)
+          Section 4  — JSON metadata
+
+        The XML section comes before JSON so if the response is truncated
+        the deployable XML is fully generated before metadata.
+        """
+        flow_xml        = ""
+        json_text       = ""
+        behavior_inventory = ""
+        coverage_text   = ""
+
+        # ── Extract behavior inventory ─────────────────────────────────────
+        inv_start = raw.find("===BEHAVIOR_INVENTORY_START===")
+        inv_end   = raw.find("===BEHAVIOR_INVENTORY_END===")
+        if inv_start >= 0 and inv_end > inv_start:
+            behavior_inventory = raw[
+                inv_start + len("===BEHAVIOR_INVENTORY_START==="):inv_end
+            ].strip()
+
+        # ── Extract coverage confirmation ──────────────────────────────────
+        cov_start = raw.find("===COVERAGE_START===")
+        cov_end   = raw.find("===COVERAGE_END===")
+        if cov_start >= 0 and cov_end > cov_start:
+            coverage_text = raw[cov_start + len("===COVERAGE_START==="):cov_end].strip()
+
+        # ── Extract Flow XML via delimiters ────────────────────────────────
+        xml_start = raw.find("===FLOW_XML_START===")
+        xml_end   = raw.find("===FLOW_XML_END===")
+        if xml_start >= 0 and xml_end > xml_start:
+            flow_xml  = raw[xml_start + len("===FLOW_XML_START==="):xml_end].strip()
+            json_text = raw[xml_end + len("===FLOW_XML_END==="):]
+            # Also check before the XML for any JSON (old order compat)
+            _before_xml = raw[:xml_start].strip()
+            if not json_text.strip() and _before_xml:
+                json_text = _before_xml
+        else:
+            # Fallback: try regex for <Flow>...</Flow> anywhere
+            xm = re.search(
+                r'(<\?xml.*?</Flow>|<Flow[\s>].*?</Flow>)', raw, re.DOTALL
+            )
+            if xm:
+                flow_xml  = xm.group(0).strip()
+                json_text = raw[:xm.start()] + raw[xm.end():]
+            else:
+                # No XML found at all — entire response is (hopefully) JSON
+                json_text = raw
+
+        # ── Step 2: Clean up JSON text ────────────────────────────────────
+        # Strip SECTION labels, markdown fences
+        json_text = re.sub(r'SECTION\s*\d\s*[:\-—]', '', json_text, flags=re.IGNORECASE)
+        json_text = re.sub(r'```[a-z]*\n?', '', json_text)
+        json_text = re.sub(r'\n?```', '', json_text)
+        json_text = json_text.strip()
+
+        # ── Step 3: Extract JSON via brace-matching ───────────────────────
+        result: dict = {}
+        first_brace = json_text.find("{")
+        if first_brace >= 0:
+            depth = 0
+            in_str = False
+            escaped = False
+            end_pos = -1
+            for i in range(first_brace, len(json_text)):
+                ch = json_text[i]
+                if escaped:
+                    escaped = False
+                    continue
+                if ch == '\\':
+                    escaped = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_pos = i
+                        break
+
+            candidate = (
+                json_text[first_brace:end_pos + 1]
+                if end_pos > first_brace
+                else json_text[first_brace:]
+            )
+
+            try:
+                result = json.loads(candidate)
+            except json.JSONDecodeError:
+                # Repair: fix unterminated strings
+                fixed = candidate
+                _in_s = False
+                _esc  = False
+                for ch in fixed:
+                    if _esc:
+                        _esc = False
+                        continue
+                    if ch == '\\':
+                        _esc = True
+                        continue
+                    if ch == '"':
+                        _in_s = not _in_s
+                if _in_s:
+                    fixed += '"'
+                ob    = fixed.count("{") - fixed.count("}")
+                ob_br = fixed.count("[") - fixed.count("]")
+                for attempt in [
+                    fixed.rstrip().rstrip(",") + "]" * max(ob_br, 0) + "}" * max(ob, 0),
+                    fixed + "]" * max(ob_br, 0) + "}" * max(ob, 0),
+                ]:
+                    try:
+                        result = json.loads(attempt)
+                        break
+                    except json.JSONDecodeError:
+                        continue
+
+        # ── Step 4: Reconcile flow_xml + attach inventory/coverage ──────────
+        if not flow_xml and isinstance(result.get("flow_xml"), str):
+            flow_xml = result.pop("flow_xml", "")
+
+        result["flow_xml"]           = flow_xml
+        result["behavior_inventory"] = behavior_inventory
+        result["coverage_text"]      = coverage_text
+        return result
+
+    try:
+        # Token budget: behavior inventory (~2K/flow) + coverage (~1K) +
+        # XML (4-12K) + JSON metadata (3-5K).  Use generous headroom.
+        _token_limit = min(32768, max(20480, total_members * 3000))
+        response = get_anthropic_client().messages.create(
+            model=AI_MODEL,
+            max_tokens=_token_limit,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = response.content[0].text
+        stop_reason = getattr(response, "stop_reason", "")
+
+        result = _parse_design_response(raw_text)
+        # Always store raw response for debugging
+        result["_raw_response"]  = raw_text
+        result["_prompt_chars"]  = len(prompt)
+        result["_token_limit"]   = _token_limit
+        result["_stop_reason"]   = stop_reason
+
+        # Detect truncation — if the AI hit max_tokens, the XML may be incomplete
+        _truncated = stop_reason == "max_tokens"
+        if _truncated:
+            _trunc_note = "⚠️ Response truncated (hit token limit). "
+            if not result.get("flow_xml"):
+                _trunc_note += "The Flow XML was cut off. Try selecting fewer flows or run again."
+            elif not result.get("behavior_inventory"):
+                _trunc_note += "Behavior inventory was cut off — XML may be present."
+            else:
+                _trunc_note += "XML appears complete; JSON metadata may be partial."
+            existing_notes = result.get("notes", "")
+            result["notes"] = (_trunc_note + " | " + existing_notes) if existing_notes else _trunc_note
+
+        # Validate we got something useful
+        if not result.get("flow_name") and not result.get("flow_xml"):
+            return {
+                "flow_name": "", "flow_label": "", "flow_xml": "",
+                "elements_summary": [], "variables": [], "formulas": [],
+                "pre_deployment_checklist": [], "notes": "",
+                "behavior_inventory": "", "coverage_text": "",
+                "adapted_behaviors": [],
+                "_raw_response": raw_text, "_prompt_chars": len(prompt),
+                "_token_limit": _token_limit, "_stop_reason": stop_reason,
+                "error": (
+                    "AI response could not be parsed. "
+                    + ("TRUNCATED by token limit — try fewer flows. " if _truncated else "")
+                    + f"Response preview: {raw_text[:300]}…"
+                ),
+            }
+
+        result.setdefault("flow_name", "")
+        result.setdefault("flow_label", "")
+        result.setdefault("elements_summary", [])
+        result.setdefault("variables", [])
+        result.setdefault("formulas", [])
+        result.setdefault("pre_deployment_checklist", [])
+        result.setdefault("adapted_behaviors", [])
+        result.setdefault("notes", "")
+        result.setdefault("behavior_inventory", "")
+        result.setdefault("coverage_text", "")
+        result["error"] = None
+        return result
+    except Exception as exc:
+        import traceback
+        return {
+            "flow_name": "", "flow_label": "", "flow_xml": "",
+            "elements_summary": [], "variables": [], "formulas": [],
+            "pre_deployment_checklist": [], "notes": "",
+            "behavior_inventory": "", "coverage_text": "", "adapted_behaviors": [],
+            "_raw_response": "", "_prompt_chars": len(prompt),
+            "_token_limit": 0, "_stop_reason": "",
+            "error": f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}",
+        }
+
+
+def _get_merge_recommendation(group: dict, flow_details: dict) -> dict:
+    """
+    Build a context-rich prompt and call the Anthropic API for a structured
+    merge recommendation.  Returns a dict with keys: keep, retire,
+    manual_review, merge_steps, complexity, risk_notes, test_plan.
+    """
+    members = group.get("Members", [])
+    active_tools  = ", ".join(ACTIVE_TOOLS.keys())
+    retired_tools = ", ".join(RETIRED_TOOLS.keys())
+
+    # Cap detail lines at 20 to keep prompt within token budget.
+    # For large groups, show full detail for the 20 oldest (most stale) members
+    # and list remaining names only.
+    _DETAIL_CAP = 20
+    if len(members) > _DETAIL_CAP:
+        sorted_members = sorted(
+            members,
+            key=lambda m: m.get("LastModifiedDate") or pd.Timestamp.min,
+        )
+        detail_members = sorted_members[:_DETAIL_CAP]
+        overflow_names  = [m.get("Name", "") for m in sorted_members[_DETAIL_CAP:]]
+    else:
+        detail_members = members
+        overflow_names  = []
+
+    _PB_LABEL = {"Workflow": "Process Builder (After Save)", "InvocableProcess": "Process Builder – Invocable"}
+    member_lines = []
+    for m in detail_members:
+        detail   = flow_details.get(m.get("Name", ""), {})
+        lmd      = m.get("LastModifiedDate")
+        lmd_str  = lmd.strftime("%Y-%m-%d") if pd.notna(lmd) and lmd else "Unknown"
+        desc     = (detail.get("description") or "None provided")[:200]
+        proc_raw = m.get("TriggerEvent", "")
+        proc_lbl = _PB_LABEL.get(proc_raw, proc_raw or "RecordAfterSave")
+        member_lines.append(
+            f"- Flow name: {m.get('Name', '')}\n"
+            f"  Flow technology: {proc_lbl}\n"
+            f"  Last modified: {lmd_str}\n"
+            f"  Record trigger type: {detail.get('record_trigger_type', 'Unknown')}\n"
+            f"  Description: {desc}\n"
+            f"  Integration classification: {m.get('_class', 'Unknown')}\n"
+            f"  Status: {m.get('Status', 'Active')}\n"
+            f"  Managed package: {'Yes' if m.get('Managed') else 'No'}"
+        )
+
+    overflow_note = ""
+    if overflow_names:
+        overflow_note = (
+            f"\nADDITIONAL FLOWS (names only — include in your lists):\n"
+            + "\n".join(f"- {n}" for n in overflow_names)
+            + "\n"
+        )
+
+    prompt = (
+        "You are a Salesforce architect helping consolidate automations that share the same "
+        "trigger point. Your job is to categorise each flow and identify consolidation risk.\n\n"
+        f"Object:   {group.get('Object', '')}\n"
+        f"Timing:   {group.get('TriggerEvent', '')}\n"
+        f"Severity: {group.get('Severity', '')}\n\n"
+        "FLOWS:\n" + "\n".join(member_lines) + "\n"
+        + overflow_note + "\n"
+        f"ORG CONTEXT:\n"
+        f"  Active integrations:  {active_tools}\n"
+        f"  Retired integrations: {retired_tools}\n\n"
+        "Categorise each flow into EXACTLY ONE of: keep, deactivate_after_consolidation, manual_review.\n\n"
+        "CATEGORISATION RULES — read carefully:\n\n"
+        "keep: Flows whose logic MUST be preserved in the consolidated flow. "
+        "When in doubt, put a flow here — it is always safer to keep logic than lose it.\n\n"
+        "deactivate_after_consolidation: ONLY flows that are completely redundant — "
+        "i.e. their logic is a strict subset of another flow being kept, "
+        "OR they are provably inactive/empty with no meaningful logic. "
+        "DO NOT put a flow here just because its name contains an integration tool name. "
+        "DO NOT put a flow here because it was last modified a long time ago. "
+        "The integration_classification field is a hint, not a decision. "
+        "If a flow touches real fields or sends real emails, it must be kept or reviewed.\n\n"
+        "manual_review: Managed-package flows (cannot be edited), flows whose purpose "
+        "is unclear from the description alone, flows that reference integrations listed "
+        "under 'Active integrations' (need business confirmation before deactivating), "
+        "and any flow you are not confident about.\n\n"
+        "Return a JSON object with EXACTLY these keys:\n"
+        '{\n'
+        '  "keep": ["flow api name", ...],\n'
+        '  "retire": ["flow api name", ...],\n'
+        '  "manual_review": ["flow api name (reason)", ...],\n'
+        '  "complexity": "Low|Medium|High",\n'
+        '  "risk_notes": "2-4 sentences: managed packages, active integration risks, order-of-execution, anything a deployer must know"\n'
+        "}\n\n"
+        "The JSON key 'retire' maps to deactivate_after_consolidation — use that key name.\n"
+        "Return ONLY valid JSON, no markdown fences."
+    )
+
+    def _repair_json(raw: str) -> dict:
+        """Best-effort recovery for truncated JSON responses."""
+        # Strip markdown fences
+        raw = re.sub(r"^```[a-z]*\n?", "", raw.strip())
+        raw = re.sub(r"\n?```$", "", raw)
+        # Try as-is first
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        # Attempt to close unclosed structures so json.loads can recover partial content
+        open_braces   = raw.count("{") - raw.count("}")
+        open_brackets = raw.count("[") - raw.count("]")
+        # Truncate to last complete key-value separator to avoid partial strings
+        last_comma = max(raw.rfind(","), raw.rfind("}"))
+        if last_comma > 0:
+            candidate = raw[: last_comma + 1]
+            candidate += "]" * open_brackets + "}" * open_braces
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+        # Final fallback: close whatever is open
+        repaired = raw + "]" * max(open_brackets, 0) + "}" * max(open_braces, 0)
+        return json.loads(repaired)  # may still raise — caught by outer try/except
+
+    try:
+        response = get_anthropic_client().messages.create(
+            model=AI_MODEL,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        return _repair_json(raw)
+    except Exception as exc:
+        return {
+            "keep": [], "retire": [], "manual_review": [],
+            "merge_steps": f"AI recommendation failed: {exc}",
+            "complexity": "Unknown", "risk_notes": "", "test_plan": "",
+        }
+
+
+
+def render_integration_map():
+    """🏷️ Integration Map sub-tab renderer."""
+    df: pd.DataFrame = st.session_state.get("_auto_df")
+    if df is None:
+        st.info("Load the **Census** first (📊 Census tab).")
+        return
+
+    # Classify every row against both ACTIVE_TOOLS and RETIRED_TOOLS
+    results = df["Name"].apply(_classify_automation_full).tolist()
+    classified = df.copy()
+    classified["Classification"] = [r[0] for r in results]
+    classified["Tool Tag"]        = [r[1] for r in results]
+    classified["Tool Status"]     = [r[2] for r in results]
+
+    # ── Summary metrics ────────────────────────────────────────────────────
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    mc1.metric("Total Automations",  len(classified))
+    mc2.metric("🔴 Retired-only",    int((classified["Classification"] == "Retired-only").sum()))
+    mc3.metric("🟡 Mixed",           int((classified["Classification"] == "Mixed").sum()))
+    mc4.metric("🟢 Active-tool",     int((classified["Classification"] == "Active-tool").sum()))
+    mc5.metric("⚪ Clean",           int((classified["Classification"] == "Clean").sum()))
+    st.markdown("")
+
+    # ── Filters ───────────────────────────────────────────────────────────
+    all_tools = sorted(classified[classified["Tool Tag"] != ""]["Tool Tag"].unique().tolist())
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        sel_tools = st.multiselect(
+            "Filter by Tool", ["All"] + all_tools, default=["All"], key="im_tool_filter",
+        )
+    with col_f2:
+        sel_class = st.multiselect(
+            "Filter by Classification",
+            ["Retired-only", "Mixed", "Active-tool", "Clean"],
+            default=["Retired-only", "Mixed"], key="im_class_filter",
+        )
+
+    view = classified.copy()
+    if sel_tools and "All" not in sel_tools:
+        view = view[view["Tool Tag"].isin(sel_tools)]
+    if sel_class:
+        view = view[view["Classification"].isin(sel_class)]
+
+    # ── Row highlighting ──────────────────────────────────────────────────
+    _CLASS_BG = {
+        "Retired-only": "background-color:#2a0d0d",
+        "Mixed":        "background-color:#2a1d0d",
+        "Active-tool":  "background-color:#0d2a1a",
+    }
+
+    def _highlight(row):
+        bg = _CLASS_BG.get(row["Classification"], "")
+        return [bg] * len(row)
+
+    lmd_view = view.copy()
+    lmd_view["LastModifiedDate"] = lmd_view["LastModifiedDate"].dt.strftime("%Y-%m-%d").fillna("")
+    display_cols = ["Name", "Object", "Type", "Status", "Tool Tag", "Tool Status", "Classification"]
+    st.dataframe(
+        lmd_view[display_cols].style.apply(_highlight, axis=1),
+        use_container_width=True, hide_index=True,
+    )
+    st.markdown("")
+
+    # ── CSV export ────────────────────────────────────────────────────────
+    st.download_button(
+        "📥  Export CSV",
+        data=lmd_view[display_cols].to_csv(index=False),
+        file_name="automation_integration_map.csv",
+        mime="text/csv",
+        key="im_export_btn",
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: SCHEMA EXPLORER  (page = "schema_explorer")  — Brief 04
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Field types that cannot be queried with GROUP BY or NULL check
+_SKIP_SAMPLE_TYPES = {"textarea", "encryptedstring", "base64", "anytype"}
+# Field types that are always populated (exclude from cleanup)
+_ALWAYS_POPULATED_TYPES = {"id", "autonumber", "formula", "rollup"}
+
+
+def _detect_integration_owner(api_name: str) -> tuple[str, str]:
+    """Return (owner_label, pill_class) based on field prefix matching."""
+    prefix = api_name.split("__")[0].lower() if "__" in api_name else ""
+    for tool in ACTIVE_TOOLS:
+        if prefix and tool.lower().startswith(prefix):
+            return tool, "pill-active"
+    for tool in RETIRED_TOOLS:
+        if prefix and tool.lower().startswith(prefix):
+            return tool, "pill-retired"
+    if api_name.endswith("__c"):
+        return "Custom", "pill-neutral"
+    return "Standard", "pill-neutral"
+
+
+def _load_field_inventory(object_name: str) -> pd.DataFrame:
+    """Describe the object and return a DataFrame of all fields."""
+    sf = get_sf_connection()
+    try:
+        desc = getattr(sf, object_name).describe()
+    except Exception:
+        try:
+            desc = sf.restful(f"sobjects/{object_name}/describe")
+        except Exception as exc:
+            st.error(f"Could not describe {object_name}: {exc}")
+            return pd.DataFrame()
+
+    rows = []
+    for f in desc.get("fields", []):
+        api_name = f.get("name", "")
+        owner, _ = _detect_integration_owner(api_name)
+        rows.append({
+            "Label":       f.get("label", ""),
+            "API Name":    api_name,
+            "Type":        f.get("type", ""),
+            "Length":      f.get("length") or f.get("precision") or "",
+            "Owner":       owner,
+            "PopRate":     None,   # filled in on demand
+            "CreatedDate": "",
+        })
+    return pd.DataFrame(rows)
+
+
+def _fetch_population_rates(object_name: str, fields: list[str], total_count: int) -> dict[str, float]:
+    """Run batched COUNT queries to get population rate per field."""
+    sf = get_sf_connection()
+    rates = {}
+    # Process in batches of 5 fields (avoid SOQL length limits)
+    batch_size = 5
+    for i in range(0, len(fields), batch_size):
+        batch = fields[i:i+batch_size]
+        for fld in batch:
+            try:
+                res = sf.query(f"SELECT COUNT(Id) cnt FROM {object_name} WHERE {fld} != null LIMIT 1")
+                populated = res["records"][0]["cnt"]
+                rates[fld] = round(populated / total_count * 100, 1) if total_count > 0 else 0.0
+            except Exception:
+                rates[fld] = None
+    return rates
+
+
+def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("📄  Schema Explorer")
+    st.caption(
+        "Browse fields on any object. Detect integration ownership, calculate population rates, "
+        "and surface cleanup candidates."
+    )
+
+    sf = get_sf_connection()
+
+    # Object picker
+    try:
+        describe = sf.describe()
+        all_objects = sorted(
+            s["name"] for s in describe["sobjects"]
+            if s.get("queryable") and s.get("createable")
+        )
+    except Exception:
+        all_objects = ["Account", "Contact", "Opportunity", "Case", "Lead"]
+
+    col_obj, col_search = st.columns([2, 3])
+    with col_obj:
+        sel_obj = st.selectbox("Object", all_objects, key="se_object")
+    with col_search:
+        field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search")
+
+    schema_section = st.radio(
+        "View",
+        ["📋  All Fields", "🧹  Cleanup Candidates"],
+        key="se_view",
+        label_visibility="collapsed",
+        horizontal=True,
+    )
+
+    col_load, col_pop = st.columns([1, 2])
+    with col_load:
+        load_clicked = st.button("🔍  Load Fields", key="se_load_btn")
+    with col_pop:
+        pop_clicked = st.button(
+            "📊  Calculate Population Rates",
+            key="se_pop_btn",
+            help="Runs COUNT queries — may take 30-60 seconds on large objects.",
+        )
+
+    if load_clicked:
+        with st.spinner(f"Describing {sel_obj}…"):
+            df = _load_field_inventory(sel_obj)
+            st.session_state["_se_obj"] = sel_obj
+            st.session_state["_se_df"]  = df
+            st.session_state.pop("_se_pop_rates", None)
+
+    df: pd.DataFrame = st.session_state.get("_se_df")
+    current_obj = st.session_state.get("_se_obj")
+
+    if df is None or current_obj != sel_obj:
+        st.info("Select an object and click **Load Fields**.")
+        return
+    if df.empty:
+        st.warning("No fields found.")
+        return
+
+    if pop_clicked:
+        with st.spinner("Calculating population rates (this may take a moment)…"):
+            try:
+                total_res = sf.query(f"SELECT COUNT(Id) cnt FROM {sel_obj}")
+                total = total_res["records"][0]["cnt"]
+            except Exception:
+                total = 0
+            queryable_fields = df[
+                ~df["Type"].str.lower().isin(_SKIP_SAMPLE_TYPES) &
+                ~df["Type"].str.lower().isin(_ALWAYS_POPULATED_TYPES)
+            ]["API Name"].tolist()
+            rates = _fetch_population_rates(sel_obj, queryable_fields, total)
+            st.session_state["_se_pop_rates"] = rates
+            # Merge into df
+            df = df.copy()
+            df["PopRate"] = df["API Name"].map(lambda x: rates.get(x))
+            st.session_state["_se_df"] = df
+
+    # Apply search filter
+    view = df.copy()
+    if field_search:
+        mask = (
+            view["Label"].str.contains(field_search, case=False, na=False) |
+            view["API Name"].str.contains(field_search, case=False, na=False)
+        )
+        view = view[mask]
+
+    if schema_section == "🧹  Cleanup Candidates":
+        # 0% population OR retired tool prefix
+        has_rates = view["PopRate"].notna().any()
+        if has_rates:
+            zero_mask = view["PopRate"] == 0.0
+        else:
+            zero_mask = pd.Series(False, index=view.index)
+        retired_mask = view["Owner"].isin(RETIRED_TOOLS)
+        view = view[zero_mask | retired_mask]
+        st.caption(
+            f"{len(view)} cleanup candidates: 0% populated fields and/or retired tool fields."
+        )
+
+    # Owner pill column
+    def _owner_badge(row):
+        _, cls = _detect_integration_owner(row["API Name"])
+        return f"[{row['Owner']}]"  # plain text for dataframe
+
+    display = view[["Label", "API Name", "Type", "Owner", "PopRate"]].copy()
+    display["PopRate"] = display["PopRate"].apply(
+        lambda v: f"{v:.0f}%" if v is not None else "—"
+    )
+    display = display.rename(columns={"PopRate": "Population"})
+
+    st.metric("Fields shown", len(display))
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+    if schema_section == "🧹  Cleanup Candidates" and not view.empty:
+        csv_data = display.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "📥  Export Cleanup Candidates as CSV",
+            data=csv_data,
+            file_name=f"{sel_obj}_cleanup_candidates.csv",
+            mime="text/csv",
+            key="se_export_csv",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: REPORT & DASHBOARD SCANNER  (page = "report_scanner")  — Brief 07
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _load_report_inventory() -> pd.DataFrame:
+    """Query all reports. Paginate via queryMore."""
+    sf = get_sf_connection()
+    soql = (
+        "SELECT Id, Name, FolderName, Owner.Name, Owner.IsActive, "
+        "LastRunDate, CreatedDate, DeveloperName "
+        "FROM Report ORDER BY LastRunDate ASC NULLS FIRST LIMIT 2000"
+    )
+    rows = []
+    try:
+        result = sf.query(soql)
+        rows.extend(result.get("records", []))
+        while not result.get("done", True):
+            result = sf.query_more(result["nextRecordsUrl"], identifier_is_url=True)
+            rows.extend(result.get("records", []))
+    except Exception as exc:
+        st.error(f"Could not load reports: {exc}")
+        return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame([{
+        "Id":          r.get("Id"),
+        "Name":        r.get("Name"),
+        "Folder":      r.get("FolderName") or "Unfiled",
+        "Owner":       (r.get("Owner") or {}).get("Name", "Unknown"),
+        "OwnerActive": (r.get("Owner") or {}).get("IsActive", True),
+        "LastRunDate": r.get("LastRunDate"),
+        "CreatedDate": r.get("CreatedDate"),
+    } for r in rows])
+    df["LastRunDate"] = pd.to_datetime(df["LastRunDate"], errors="coerce", utc=True)
+    df["CreatedDate"] = pd.to_datetime(df["CreatedDate"], errors="coerce", utc=True)
+    return df
+
+
+def _load_dashboard_inventory() -> pd.DataFrame:
+    sf = get_sf_connection()
+    soql = (
+        "SELECT Id, Title, FolderName, RunningUser.Name, LastViewedDate, CreatedDate "
+        "FROM Dashboard ORDER BY LastViewedDate ASC NULLS FIRST LIMIT 2000"
+    )
+    rows = []
+    try:
+        result = sf.query(soql)
+        rows.extend(result.get("records", []))
+    except Exception as exc:
+        st.warning(f"Could not load dashboards: {exc}")
+        return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame([{
+        "Id":            r.get("Id"),
+        "Title":         r.get("Title"),
+        "Folder":        r.get("FolderName") or "Unfiled",
+        "RunningUser":   (r.get("RunningUser") or {}).get("Name", "Unknown"),
+        "LastViewedDate": r.get("LastViewedDate"),
+        "CreatedDate":   r.get("CreatedDate"),
+    } for r in rows])
+    df["LastViewedDate"] = pd.to_datetime(df["LastViewedDate"], errors="coerce", utc=True)
+    df["CreatedDate"]    = pd.to_datetime(df["CreatedDate"], errors="coerce", utc=True)
+    return df
+
+
+def render_report_scanner_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("📊  Report & Dashboard Cleanup Scanner")
+    st.caption(
+        "Surface stale and orphaned reports and dashboards across the org. "
+        "Read-only — no records are modified."
+    )
+
+    scanner_section = st.radio(
+        "Section",
+        ["📋  Report Inventory", "📊  Dashboard Inventory", "📁  Folder Summary"],
+        key="report_scanner_section",
+        label_visibility="collapsed",
+        horizontal=True,
+    )
+    st.markdown("---")
+
+    if scanner_section == "📋  Report Inventory":
+        stale_months = st.slider(
+            "Stale threshold (months since last run)", 1, 24, 6,
+            key="report_stale_months",
+        )
+        show_diff_only = st.checkbox("Show stale / orphaned only", key="report_stale_only")
+
+        if st.button("🔍  Load Reports", key="load_reports_btn"):
+            with st.spinner("Loading report inventory…"):
+                st.session_state["_report_df"] = _load_report_inventory()
+
+        df: pd.DataFrame = st.session_state.get("_report_df")
+        if df is None:
+            st.info("Click **Load Reports** to fetch the report inventory.")
+            return
+        if df.empty:
+            st.warning("No reports found or query unavailable.")
+            return
+
+        import pytz
+        now = pd.Timestamp.now(tz=pytz.UTC)
+        cutoff = now - pd.DateOffset(months=stale_months)
+
+        df["Stale"]    = df["LastRunDate"].isna() | (df["LastRunDate"] < cutoff)
+        df["Orphaned"] = ~df["OwnerActive"]
+
+        stale_ct   = df["Stale"].sum()
+        orphan_ct  = df["Orphaned"].sum()
+
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Total Reports", len(df))
+        col_b.metric(f"Stale (>{stale_months}mo)", int(stale_ct))
+        col_c.metric("Orphaned", int(orphan_ct))
+        st.markdown("")
+
+        view = df.copy()
+        if show_diff_only:
+            view = view[view["Stale"] | view["Orphaned"]]
+
+        def _flag(row):
+            flags = []
+            if row["Stale"]:    flags.append("🟠 Stale")
+            if row["Orphaned"]: flags.append("🔴 Orphaned")
+            return ", ".join(flags) if flags else "✅ OK"
+
+        view["Status"] = view.apply(_flag, axis=1)
+        display_cols = ["Name", "Folder", "Owner", "LastRunDate", "CreatedDate", "Status"]
+        st.dataframe(
+            view[display_cols].rename(columns={
+                "LastRunDate": "Last Run", "CreatedDate": "Created"
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        if st.button("📥  Export cleanup candidates as CSV", key="export_stale_reports"):
+            candidates = df[df["Stale"] | df["Orphaned"]][display_cols]
+            csv_data = candidates.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download CSV",
+                data=csv_data,
+                file_name="stale_orphaned_reports.csv",
+                mime="text/csv",
+                key="download_stale_reports",
+            )
+
+    elif scanner_section == "📊  Dashboard Inventory":
+        if st.button("🔍  Load Dashboards", key="load_dashboards_btn"):
+            with st.spinner("Loading dashboard inventory…"):
+                st.session_state["_dashboard_df"] = _load_dashboard_inventory()
+
+        df: pd.DataFrame = st.session_state.get("_dashboard_df")
+        if df is None:
+            st.info("Click **Load Dashboards** to fetch the dashboard inventory.")
+            return
+        if df.empty:
+            st.warning("No dashboards found or query unavailable.")
+            return
+
+        st.metric("Total Dashboards", len(df))
+        st.markdown("")
+        st.dataframe(
+            df[["Title", "Folder", "RunningUser", "LastViewedDate", "CreatedDate"]].rename(
+                columns={"LastViewedDate": "Last Viewed", "CreatedDate": "Created"}
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    elif scanner_section == "📁  Folder Summary":
+        stale_months = st.session_state.get("report_stale_months", 6)
+        df: pd.DataFrame = st.session_state.get("_report_df")
+        if df is None:
+            st.info("Load the Report Inventory first to see folder summaries.")
+            return
+
+        import pytz
+        now = pd.Timestamp.now(tz=pytz.UTC)
+        cutoff = now - pd.DateOffset(months=stale_months)
+        df["Stale"]    = df["LastRunDate"].isna() | (df["LastRunDate"] < cutoff)
+        df["Orphaned"] = ~df["OwnerActive"]
+
+        folder_summary = (
+            df.groupby("Folder")
+            .agg(
+                Total=("Id", "count"),
+                Stale=("Stale", "sum"),
+                Orphaned=("Orphaned", "sum"),
+            )
+            .reset_index()
+            .sort_values("Total", ascending=False)
+        )
+        folder_summary["Stale"]    = folder_summary["Stale"].astype(int)
+        folder_summary["Orphaned"] = folder_summary["Orphaned"].astype(int)
+        st.dataframe(folder_summary, use_container_width=True, hide_index=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: BULK OWNERSHIP TRANSFER  (page = "ownership_transfer")  — Brief 06
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Session state key prefix
+_OT = "ot_"
+
+
+def _ot_state(key: str, default=None):
+    full_key = _OT + key
+    if full_key not in st.session_state:
+        st.session_state[full_key] = default
+    return st.session_state[full_key]
+
+
+def _ot_set(key: str, value):
+    st.session_state[_OT + key] = value
+
+
+def _fetch_user_ownership_summary(user_id: str) -> dict[str, int]:
+    """Count records owned by user across key objects."""
+    sf = get_sf_connection()
+    counts = {}
+    queries = {
+        "Accounts":              f"SELECT COUNT(Id) c FROM Account WHERE OwnerId = '{user_id}'",
+        "Contacts":              f"SELECT COUNT(Id) c FROM Contact WHERE OwnerId = '{user_id}'",
+        "Open Opportunities":    f"SELECT COUNT(Id) c FROM Opportunity WHERE OwnerId = '{user_id}' AND IsClosed = false",
+        "Closed Opportunities":  f"SELECT COUNT(Id) c FROM Opportunity WHERE OwnerId = '{user_id}' AND IsClosed = true",
+        "Open Cases":            f"SELECT COUNT(Id) c FROM Case WHERE OwnerId = '{user_id}' AND IsClosed = false",
+        "Open Tasks":            f"SELECT COUNT(Id) c FROM Task WHERE OwnerId = '{user_id}' AND IsClosed = false",
+    }
+    for label, soql in queries.items():
+        try:
+            res = sf.query(soql)
+            counts[label] = res["records"][0]["c"]
+        except Exception:
+            counts[label] = 0
+    return counts
+
+
+def _fetch_owned_records(object_name: str, user_id: str, extra_filter: str = "") -> pd.DataFrame:
+    sf = get_sf_connection()
+    filt = f"OwnerId = '{user_id}'"
+    if extra_filter:
+        filt += f" AND {extra_filter}"
+    soql = f"SELECT Id, Name, OwnerId FROM {object_name} WHERE {filt} LIMIT 5000"
+    try:
+        result = sf.query(soql)
+        rows = result.get("records", [])
+        return pd.DataFrame([{"Id": r["Id"], "Name": r.get("Name", r["Id"])} for r in rows])
+    except Exception:
+        return pd.DataFrame()
+
+
+def render_ownership_transfer_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("👤  Bulk Ownership Transfer Wizard")
+    st.caption(
+        "Transfer all records owned by a departing user to one or more new owners. "
+        "Step through the wizard to preview before executing."
+    )
+
+    # ── Wizard step indicator ──────────────────────────────────────────────────
+    step = _ot_state("step", 1)
+    step_labels = ["1. Source User", "2. Target User", "3. Preview", "4. Execute"]
+    col_steps = st.columns(4)
+    for i, (col, label) in enumerate(zip(col_steps, step_labels), start=1):
+        with col:
+            color = COLOR_SUCCESS if i < step else ("#017551" if i == step else "#234035")
+            st.markdown(
+                f'<div style="text-align:center;padding:6px;border-radius:6px;'
+                f'background:{color};color:white;font-size:0.8rem;">{label}</div>',
+                unsafe_allow_html=True,
+            )
+    st.markdown("---")
+
+    # ── Step 1: Select source user ─────────────────────────────────────────────
+    if step == 1:
+        st.subheader("Step 1 — Select source user")
+        users = get_all_active_users()
+        user_labels = [f"{u['Name']} ({u.get('Email', '')})" for u in users]
+        user_ids    = [u["Id"] for u in users]
+        sel_idx = st.selectbox(
+            "Source user (the user whose records will be transferred)",
+            range(len(user_labels)),
+            format_func=lambda i: user_labels[i],
+            key="ot_src_idx",
+        )
+        sel_user = users[sel_idx]
+
+        if st.button("Load ownership summary", key="ot_load_summary"):
+            with st.spinner("Counting records…"):
+                summary = _fetch_user_ownership_summary(sel_user["Id"])
+                _ot_set("src_user", sel_user)
+                _ot_set("src_summary", summary)
+
+        summary = _ot_state("src_summary")
+        if summary:
+            src = _ot_state("src_user")
+            st.markdown(f"**{src['Name']}** owns:")
+            cols = st.columns(3)
+            for i, (label, count) in enumerate(summary.items()):
+                with cols[i % 3]:
+                    color = COLOR_WARNING if "Closed" in label else COLOR_SUCCESS
+                    st.markdown(
+                        f'<div style="background:#1a3028;border-radius:6px;padding:0.6rem 1rem;margin-bottom:0.5rem;">'
+                        f'<div style="font-size:1.4rem;font-weight:700;color:{color};">{count:,}</div>'
+                        f'<div style="font-size:0.75rem;color:#b8ccbf;">{label}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+            if st.button("Next →", key="ot_step1_next"):
+                _ot_set("step", 2)
+                st.rerun()
+
+    # ── Step 2: Select target user ─────────────────────────────────────────────
+    elif step == 2:
+        src = _ot_state("src_user", {})
+        st.subheader(f"Step 2 — Select target user")
+        st.caption(f"Records currently owned by **{src.get('Name', '?')}** will be transferred to:")
+        users = get_all_active_users()
+        user_labels = [f"{u['Name']} ({u.get('Email', '')})" for u in users]
+        sel_idx = st.selectbox(
+            "Target user",
+            range(len(user_labels)),
+            format_func=lambda i: user_labels[i],
+            key="ot_tgt_idx",
+        )
+        cascade = st.checkbox(
+            "Also transfer Contacts whose Account is being transferred",
+            value=True,
+            key="ot_cascade",
+        )
+        include_tasks = st.checkbox("Include open Tasks and Events", value=True, key="ot_tasks")
+
+        col_back, col_next = st.columns([1, 5])
+        with col_back:
+            if st.button("← Back", key="ot_step2_back"):
+                _ot_set("step", 1)
+                st.rerun()
+        with col_next:
+            if st.button("Next →", key="ot_step2_next"):
+                _ot_set("tgt_user", users[sel_idx])
+                _ot_set("cascade", cascade)
+                _ot_set("include_tasks", include_tasks)
+                _ot_set("step", 3)
+                st.rerun()
+
+    # ── Step 3: Preview ────────────────────────────────────────────────────────
+    elif step == 3:
+        src = _ot_state("src_user", {})
+        tgt = _ot_state("tgt_user", {})
+        cascade = _ot_state("cascade", True)
+        include_tasks = _ot_state("include_tasks", True)
+        st.subheader("Step 3 — Preview transfer")
+        st.caption(
+            f"**{src.get('Name', '?')}** → **{tgt.get('Name', '?')}**. "
+            "Records shown below will be updated."
+        )
+
+        if st.button("🔍  Load preview", key="ot_load_preview"):
+            with st.spinner("Loading records…"):
+                src_id = src["Id"]
+                preview: dict[str, pd.DataFrame] = {}
+                preview["Accounts"]           = _fetch_owned_records("Account", src_id)
+                preview["Open Opportunities"] = _fetch_owned_records("Opportunity", src_id, "IsClosed = false")
+                preview["Open Cases"]         = _fetch_owned_records("Case", src_id, "IsClosed = false")
+                if cascade:
+                    preview["Contacts"] = _fetch_owned_records("Contact", src_id)
+                if include_tasks:
+                    preview["Open Tasks"] = _fetch_owned_records("Task", src_id, "IsClosed = false")
+
+                # Closed Opps warning
+                closed_opps = _fetch_owned_records("Opportunity", src_id, "IsClosed = true")
+                _ot_set("closed_opps_count", len(closed_opps))
+                _ot_set("preview", preview)
+
+        preview = _ot_state("preview")
+        if preview:
+            closed_count = _ot_state("closed_opps_count", 0)
+            if closed_count:
+                st.warning(
+                    f"⚠️ {closed_count:,} closed Opportunities are excluded from the transfer "
+                    "(closed deals are not typically reassigned)."
+                )
+            total_records = sum(len(df) for df in preview.values())
+            st.markdown(f"**{total_records:,} records will be transferred.**")
+            for obj_label, df in preview.items():
+                with st.expander(f"{obj_label} ({len(df):,} records)"):
+                    st.dataframe(df.head(10), use_container_width=True, hide_index=True)
+                    if len(df) > 10:
+                        st.caption(f"Showing first 10 of {len(df):,}.")
+
+            col_back2, col_exec = st.columns([1, 5])
+            with col_back2:
+                if st.button("← Back", key="ot_step3_back"):
+                    _ot_set("step", 2)
+                    st.rerun()
+            with col_exec:
+                if st.button("Next →  Execute", key="ot_step3_next"):
+                    _ot_set("step", 4)
+                    st.rerun()
+        else:
+            if st.button("← Back", key="ot_step3_back_empty"):
+                _ot_set("step", 2)
+                st.rerun()
+
+    # ── Step 4: Execute ────────────────────────────────────────────────────────
+    elif step == 4:
+        src = _ot_state("src_user", {})
+        tgt = _ot_state("tgt_user", {})
+        preview: dict[str, pd.DataFrame] = _ot_state("preview", {})
+
+        st.subheader("Step 4 — Execute transfer")
+        if not preview:
+            st.error("No preview data. Go back and load the preview first.")
+            if st.button("← Back", key="ot_step4_back_empty"):
+                _ot_set("step", 3)
+                st.rerun()
+            return
+
+        total_records = sum(len(df) for df in preview.values())
+        st.markdown(
+            f'<div class="safety-banner" style="background:#1a2a1a;border-color:{COLOR_WARNING};color:{COLOR_WARNING};">'
+            f'⚠️ About to transfer {total_records:,} records from <strong>{src.get("Name","?")}</strong> '
+            f'→ <strong>{tgt.get("Name","?")}</strong>.'
+            f'{"<br>DRY RUN MODE — no changes will be made." if dry_run_mode else ""}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("")
+
+        col_back3, col_go = st.columns([1, 5])
+        with col_back3:
+            if st.button("← Back", key="ot_step4_back"):
+                _ot_set("step", 3)
+                st.rerun()
+        with col_go:
+            go_label = "🔍  Dry Run (preview)" if dry_run_mode else "⚡  Execute Transfer"
+            if st.button(go_label, key="ot_execute_btn"):
+                sf = get_sf_connection()
+                tgt_id = tgt["Id"]
+                results_summary = []
+                for obj_label, df in preview.items():
+                    if df.empty:
+                        continue
+                    obj_map = {
+                        "Accounts": "Account",
+                        "Open Opportunities": "Opportunity",
+                        "Open Cases": "Case",
+                        "Contacts": "Contact",
+                        "Open Tasks": "Task",
+                    }
+                    sf_obj = obj_map.get(obj_label, obj_label)
+                    if auto_backup:
+                        backup_records(df, "ownership_transfer", sf_obj)
+                    records = [{"Id": row["Id"], "OwnerId": tgt_id} for row in df.to_dict("records")]
+                    if not dry_run_mode:
+                        result = execute_update(sf, sf_obj, records)
+                        success = result.get("success_count", 0)
+                        failed  = result.get("error_count", 0)
+                        results_summary.append(f"✅ {obj_label}: {success:,} transferred, {failed:,} failed")
+                    else:
+                        results_summary.append(f"🔍 {obj_label}: {len(records):,} would be transferred")
+
+                for line in results_summary:
+                    st.markdown(line)
+
+                if not dry_run_mode:
+                    st.success("Transfer complete!")
+                    if st.button("↩️  Start over", key="ot_reset"):
+                        for key in list(st.session_state.keys()):
+                            if key.startswith(_OT):
+                                del st.session_state[key]
+                        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: CHANGE LOG GENERATOR  (page = "change_log")  — Brief 08
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _fetch_audit_trail_range(start_date: str, end_date: str) -> list[dict]:
+    """Query SetupAuditTrail for a date range. Returns records or raises."""
+    sf = get_sf_connection()
+    soql = (
+        "SELECT CreatedDate, CreatedBy.Name, Action, Section, Display "
+        "FROM SetupAuditTrail "
+        f"WHERE CreatedDate >= {start_date}T00:00:00Z "
+        f"AND CreatedDate <= {end_date}T23:59:59Z "
+        "ORDER BY CreatedDate DESC LIMIT 2000"
+    )
+    result = sf.query(soql)
+    rows = list(result.get("records", []))
+    while not result.get("done", True):
+        result = sf.query_more(result["nextRecordsUrl"], identifier_is_url=True)
+        rows.extend(result.get("records", []))
+    return rows
+
+
+def _generate_release_notes(rows: list[dict]) -> str:
+    """Send audit trail rows to Claude and return formatted release notes."""
+    client = get_anthropic_client()
+    # Build a compact text summary to send
+    lines = []
+    for r in rows:
+        ts = (r.get("CreatedDate") or "")[:10]
+        user = (r.get("CreatedBy") or {}).get("Name", "Unknown")
+        section = r.get("Section", "")
+        display = r.get("Display", r.get("Action", ""))
+        lines.append(f"[{ts}] {user} | {section} | {display}")
+
+    change_text = "\n".join(lines[:500])  # cap at 500 lines to stay within token limits
+    prompt = (
+        "You are a Salesforce admin assistant helping prepare release notes for stakeholders.\n\n"
+        "Below is a raw export from Salesforce SetupAuditTrail. "
+        "Please organise these changes into a clean, readable release notes document with these sections:\n"
+        "- Field Changes\n- Automation Changes (Flows, Workflow Rules, Triggers)\n"
+        "- Permission & Access Changes\n- User Management\n- Configuration & Setup\n- Other\n\n"
+        "Rules:\n"
+        "- Group related changes together under each section.\n"
+        "- Omit noise: skip login/logout events and trivial repeated actions.\n"
+        "- Write in plain language suitable for non-technical stakeholders.\n"
+        "- Use bullet points within each section.\n"
+        "- If a section has no relevant changes, omit it.\n"
+        "- Start with a one-paragraph executive summary.\n\n"
+        f"SetupAuditTrail export:\n{change_text}"
+    )
+    response = client.messages.create(
+        model=AI_MODEL,
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text
+
+
+def render_change_log_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("🗓️  Change Log & Release Notes Generator")
+    st.caption(
+        "Load SetupAuditTrail data for a date range, filter, and generate "
+        "AI-formatted release notes. SetupAuditTrail retains 180 days of history."
+    )
+
+    col_start, col_end, col_load = st.columns([2, 2, 1])
+    import datetime as _dt
+    today = _dt.date.today()
+    week_ago = today - _dt.timedelta(days=7)
+
+    with col_start:
+        start_date = st.date_input("Start date", value=week_ago, key="cl_start_date")
+    with col_end:
+        end_date = st.date_input("End date", value=today, key="cl_end_date")
+    with col_load:
+        st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+        load_clicked = st.button("Load Changes", key="cl_load_btn")
+
+    if start_date > end_date:
+        st.error("Start date must be before end date.")
+        return
+
+    days_range = (end_date - start_date).days
+    if days_range > 180:
+        st.warning("SetupAuditTrail retains only 180 days. Results before that will be empty.")
+
+    if load_clicked:
+        with st.spinner("Fetching audit trail…"):
+            try:
+                rows = _fetch_audit_trail_range(
+                    start_date.isoformat(), end_date.isoformat()
+                )
+                st.session_state["_cl_rows"] = rows
+                if len(rows) >= 2000:
+                    st.warning("Result capped at 2,000 rows. Narrow the date range for complete results.")
+            except Exception as exc:
+                st.error(f"SetupAuditTrail unavailable: {exc}")
+                return
+
+    rows = st.session_state.get("_cl_rows")
+    if rows is None:
+        st.info("Select a date range and click **Load Changes**.")
+        return
+
+    if not rows:
+        st.info("No audit trail entries found for the selected date range.")
+        return
+
+    st.markdown(f"**{len(rows):,} entries loaded.**")
+
+    # ── Noise filter ──────────────────────────────────────────────────────────
+    cl_show_all = st.toggle(
+        "Show all entries (include logins, report runs, etc.)",
+        value=False,
+        key="cl_show_all",
+    )
+    df = pd.DataFrame([{
+        "_row_idx": i,
+        "Date":    (r.get("CreatedDate") or "")[:16].replace("T", " "),
+        "User":    (r.get("CreatedBy") or {}).get("Name", "Unknown"),
+        "Section": r.get("Section", ""),
+        "Action":  r.get("Action", ""),
+        "Display": r.get("Display", ""),
+    } for i, r in enumerate(rows)])
+
+    df_signal = filter_audit_trail(df, signal_only=not cl_show_all)
+    cl_filtered = len(df) - len(df_signal)
+    if not cl_show_all:
+        st.caption(
+            f"Showing {len(df_signal):,} of {len(df):,} entries "
+            f"({cl_filtered:,} filtered)"
+        )
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        sections = ["All"] + sorted(df_signal["Section"].dropna().unique().tolist())
+        sel_section = st.selectbox("Filter by Section", sections, key="cl_section_filter")
+    with col_f2:
+        users = ["All"] + sorted(df_signal["User"].dropna().unique().tolist())
+        sel_user = st.selectbox("Filter by User", users, key="cl_user_filter")
+
+    view = df_signal.copy()
+    if sel_section != "All":
+        view = view[view["Section"] == sel_section]
+    if sel_user != "All":
+        view = view[view["User"] == sel_user]
+
+    st.dataframe(
+        view[["Date", "User", "Section", "Display"]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("---")
+
+    # ── AI Release Notes ──────────────────────────────────────────────────────
+    st.subheader("Generate Release Notes")
+    if st.button("🤖  Generate with AI", key="cl_gen_btn"):
+        with st.spinner("Generating release notes with Claude…"):
+            try:
+                # Pass only signal rows so the AI doesn't waste tokens on noise.
+                signal_indices = set(df_signal["_row_idx"].tolist())
+                signal_rows = [r for i, r in enumerate(rows) if i in signal_indices]
+                notes = _generate_release_notes(signal_rows)
+                st.session_state["_cl_notes"] = notes
+            except Exception as exc:
+                st.error(f"AI generation failed: {exc}")
+
+    notes = st.session_state.get("_cl_notes")
+    if notes:
+        st.markdown(notes)
+        st.markdown("---")
+
+        col_md, _ = st.columns([2, 3])
+        with col_md:
+            st.download_button(
+                "📥  Export as Markdown",
+                data=notes.encode("utf-8"),
+                file_name=f"release_notes_{start_date}_{end_date}.md",
+                mime="text/markdown",
+                key="cl_export_md",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DATA ARCHIVAL ASSISTANT  (page = "archival")  — Brief 09
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Default archival scan definitions
+_ARCHIVAL_SCANS = [
+    {
+        "label":   "Closed-Won Opportunities (3+ years)",
+        "object":  "Opportunity",
+        "where":   "StageName = 'Closed Won' AND CloseDate < LAST_N_YEARS:3",
+        "fields":  "Id, Name, CloseDate, StageName, Amount",
+    },
+    {
+        "label":   "Closed-Lost Opportunities (3+ years)",
+        "object":  "Opportunity",
+        "where":   "StageName = 'Closed Lost' AND CloseDate < LAST_N_YEARS:3",
+        "fields":  "Id, Name, CloseDate, StageName",
+    },
+    {
+        "label":   "Resolved Cases (2+ years)",
+        "object":  "Case",
+        "where":   "IsClosed = true AND ClosedDate < LAST_N_YEARS:2",
+        "fields":  "Id, Subject, ClosedDate, Status",
+    },
+    {
+        "label":   "Completed Tasks (2+ years)",
+        "object":  "Task",
+        "where":   "IsClosed = true AND ActivityDate < LAST_N_YEARS:2",
+        "fields":  "Id, Subject, ActivityDate, Status",
+    },
+    {
+        "label":   "Completed Events (2+ years)",
+        "object":  "Event",
+        "where":   "EndDateTime < LAST_N_YEARS:2",
+        "fields":  "Id, Subject, EndDateTime",
+    },
+    {
+        "label":   "Dormant Non-Customer Accounts (3+ years, no activity)",
+        "object":  "Account",
+        "where":   "LastActivityDate < LAST_N_YEARS:3 AND Type != 'Customer'",
+        "fields":  "Id, Name, Type, LastActivityDate",
+    },
+]
+
+
+def _run_archival_count(scan: dict) -> int:
+    sf = get_sf_connection()
+    try:
+        res = sf.query(f"SELECT COUNT(Id) c FROM {scan['object']} WHERE {scan['where']}")
+        return res["records"][0]["c"]
+    except Exception:
+        return -1
+
+
+def _run_archival_fetch(scan: dict, batch_size: int = 2000) -> pd.DataFrame:
+    sf = get_sf_connection()
+    soql = f"SELECT {scan['fields']} FROM {scan['object']} WHERE {scan['where']} LIMIT {batch_size}"
+    try:
+        result = sf.query(soql)
+        return pd.DataFrame(result.get("records", []))
+    except Exception as exc:
+        st.error(f"Fetch failed: {exc}")
+        return pd.DataFrame()
+
+
+def render_archival_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("📦  Data Archival Assistant")
+    st.caption(
+        "Identify, export, and bulk-delete stale records to recover storage. "
+        "Always exports to CSV before any deletion."
+    )
+
+    archival_section = st.radio(
+        "Section",
+        ["📋  Archival Candidates", "🔧  Custom Scan", "🗑️  Archive & Delete"],
+        key="archival_section",
+        label_visibility="collapsed",
+        horizontal=True,
+    )
+    st.markdown("---")
+
+    if archival_section == "📋  Archival Candidates":
+        st.subheader("Default Archival Scans")
+        if st.button("🔍  Run All Scans", key="archival_scan_all"):
+            counts = {}
+            with st.spinner("Running archival scans…"):
+                for scan in _ARCHIVAL_SCANS:
+                    counts[scan["label"]] = _run_archival_count(scan)
+            st.session_state["_archival_counts"] = counts
+
+        counts = st.session_state.get("_archival_counts")
+        if counts is None:
+            st.info("Click **Run All Scans** to count archival candidates.")
+            return
+
+        # Fetch storage limits for impact estimate
+        limits = _fetch_org_limits()
+        data_max = (limits.get("DataStorageMB") or {}).get("Max", 0)
+        data_remaining = (limits.get("DataStorageMB") or {}).get("Remaining", 0)
+        data_used = data_max - data_remaining
+
+        total_records = sum(c for c in counts.values() if c >= 0)
+        est_storage_mb = round(total_records * 2 / 1024, 1)  # ~2 KB per record
+        est_pct = (est_storage_mb / data_used * 100) if data_used > 0 else 0
+
+        col_a, col_b, col_c = st.columns(3)
+        col_a.metric("Total candidates", f"{total_records:,}")
+        col_b.metric("Est. storage recovery", f"{est_storage_mb:.1f} MB")
+        col_c.metric("% of used storage", f"{est_pct:.1f}%")
+        st.caption("Storage estimate assumes ~2 KB per record (approximate).")
+        st.markdown("")
+
+        for scan in _ARCHIVAL_SCANS:
+            count = counts.get(scan["label"], 0)
+            color = COLOR_WARNING if count > 0 else COLOR_SUCCESS
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'background:#1a3028;border-radius:6px;padding:0.6rem 1rem;margin-bottom:0.4rem;">'
+                f'<span style="font-size:0.85rem;color:#c9d9cf;">{scan["label"]}</span>'
+                f'<span style="font-size:1.1rem;font-weight:700;color:{color};">'
+                f'{"N/A" if count < 0 else f"{count:,}"}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if count > 0:
+                if st.button(
+                    f"Archive & Delete: {scan['label']}",
+                    key=f"archival_goto_{scan['label'][:20]}",
+                    help="Go to Archive & Delete tab with this scan pre-selected.",
+                ):
+                    st.session_state["_archival_selected"] = scan
+                    st.session_state["archival_section"] = "🗑️  Archive & Delete"
+                    st.rerun()
+
+    elif archival_section == "🔧  Custom Scan":
+        st.subheader("Custom Scan Builder")
+        col_obj, col_where = st.columns([1, 2])
+        with col_obj:
+            custom_obj = st.text_input("Object API name", placeholder="Opportunity", key="cs_obj")
+        with col_where:
+            custom_where = st.text_input(
+                "WHERE clause",
+                placeholder="StageName = 'Closed Won' AND CloseDate < LAST_N_YEARS:3",
+                key="cs_where",
+            )
+        if st.button("🔍  Run COUNT", key="cs_run") and custom_obj and custom_where:
+            with st.spinner("Counting…"):
+                scan = {"object": custom_obj, "where": custom_where,
+                        "label": f"Custom: {custom_obj}", "fields": "Id, Name"}
+                count = _run_archival_count(scan)
+                if count >= 0:
+                    st.metric(f"Matching {custom_obj} records", f"{count:,}")
+                    if st.button("Use in Archive & Delete", key="cs_use"):
+                        st.session_state["_archival_selected"] = scan
+                        st.session_state["archival_section"] = "🗑️  Archive & Delete"
+                        st.rerun()
+                else:
+                    st.error("Query failed. Check object name and WHERE clause.")
+
+    elif archival_section == "🗑️  Archive & Delete":
+        st.subheader("Archive & Delete Workflow")
+
+        selected = st.session_state.get("_archival_selected")
+        if selected is None:
+            st.info("Select a scan from **Archival Candidates** or run a **Custom Scan** first.")
+            return
+
+        st.markdown(
+            f'<div style="background:#1a3028;border-radius:6px;padding:0.8rem 1rem;margin-bottom:1rem;">'
+            f'<div style="font-weight:600;color:#c9d9cf;">{selected["label"]}</div>'
+            f'<div style="font-size:0.75rem;color:#6e8c7a;margin-top:4px;">'
+            f'{selected["object"]} WHERE {selected["where"]}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        batch_size = st.slider(
+            "Batch size (records per delete call)", 500, 10000, 2000, step=500,
+            key="archival_batch_size",
+        )
+
+        # Step 1: Export
+        if st.button("📥  Step 1: Export to CSV Archive", key="archival_export_btn"):
+            with st.spinner("Fetching records for archive…"):
+                df = _run_archival_fetch(selected, batch_size=batch_size)
+            if df.empty:
+                st.info("No records found.")
+            else:
+                ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{selected['object']}_archive_{ts}_{len(df)}_records.csv"
+                path = os.path.join("sf_backups", filename)
+                os.makedirs("sf_backups", exist_ok=True)
+                df.to_csv(path, index=False)
+                st.success(f"Archived {len(df):,} records to {path}")
+                st.session_state["_archival_export_df"]   = df
+                st.session_state["_archival_export_path"] = path
+                st.dataframe(df.head(10), use_container_width=True, hide_index=True)
+                if len(df) > 10:
+                    st.caption(f"Showing first 10 of {len(df):,}.")
+
+        export_df = st.session_state.get("_archival_export_df")
+        export_path = st.session_state.get("_archival_export_path")
+
+        if export_df is not None and export_path:
+            st.markdown("---")
+            # Step 2: Dry-run preview
+            if dry_run_mode:
+                st.info(
+                    f"🔍 Dry Run: would delete {len(export_df):,} {selected['object']} records. "
+                    "Disable Dry Run Mode in the sidebar to execute."
+                )
+            else:
+                st.markdown(
+                    f'<div class="safety-banner">⚠️ Step 2: About to permanently delete '
+                    f'{len(export_df):,} {selected["object"]} records. '
+                    f'Archive saved to {export_path}.</div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    f"⚡  Step 2: Delete {len(export_df):,} records",
+                    key="archival_delete_btn",
+                ):
+                    sf = get_sf_connection()
+                    records = [{"Id": row["Id"]} for row in export_df.to_dict("records") if "Id" in row]
+                    with st.spinner(f"Deleting in batches of {batch_size}…"):
+                        progress = st.progress(0)
+                        success_total = 0
+                        fail_total = 0
+                        for i in range(0, len(records), batch_size):
+                            batch = records[i:i+batch_size]
+                            try:
+                                result = sf.bulk.__getattr__(selected["object"]).delete(batch)
+                                for r in result:
+                                    if r.get("success"):
+                                        success_total += 1
+                                    else:
+                                        fail_total += 1
+                            except Exception as exc:
+                                fail_total += len(batch)
+                                st.error(f"Batch error: {exc}")
+                            progress.progress(min(1.0, (i + batch_size) / len(records)))
+                    st.success(f"Deleted {success_total:,} records. {fail_total:,} failed.")
+                    st.session_state.pop("_archival_export_df", None)
+                    st.session_state.pop("_archival_export_path", None)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DIGEST & ALERTS CONFIG  (page = "digest_config")  — Brief 05
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DIGEST_SCHEDULE_FILE = "digest_schedule.json"
+_DIGEST_DEFAULTS = {
+    "frequency":     "Weekly",
+    "weekday":       "Monday",
+    "month_day":     1,
+    "hour":          8,
+    "minute":        0,
+    "lookback_days": 7,
+    "include_ai":    True,
+    "slack_channel": "",
+    "checks": {
+        "api_usage":            True,
+        "data_storage":         True,
+        "file_storage":         True,
+        "flow_errors":          True,
+        "stale_records":        True,
+        "duplicate_candidates": True,
+        "audit_trail":          True,
+        "license_utilisation":  True,
+    },
+    "thresholds": {
+        "api_usage_pct":        80,
+        "storage_pct":          80,
+        "flow_errors_per_day":  5,
+        "stale_record_count":   1000,
+    },
+}
+
+
+def _load_digest_config() -> dict:
+    # 1. Supabase
+    db_data = db_get_config("digest_schedule")
+    if isinstance(db_data, dict) and db_data:
+        return {**_DIGEST_DEFAULTS, **db_data}
+    # 2. Local file
+    try:
+        with open(_DIGEST_SCHEDULE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Merge with defaults so new keys always exist
+        merged = dict(_DIGEST_DEFAULTS)
+        merged.update(data)
+        merged["checks"]     = {**_DIGEST_DEFAULTS["checks"],     **data.get("checks", {})}
+        merged["thresholds"] = {**_DIGEST_DEFAULTS["thresholds"], **data.get("thresholds", {})}
+        return merged
+    except Exception:
+        return dict(_DIGEST_DEFAULTS)
+
+
+def _save_digest_config(cfg: dict):
+    user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    db_save_config("digest_schedule", cfg, user)
+    try:
+        with open(_DIGEST_SCHEDULE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception:
+        pass
+
+
+def render_digest_config_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("📧  Scheduled Digest & Alerting")
+    st.caption(
+        "Configure the automated org health digest. "
+        "Scheduling is handled externally by Windows Task Scheduler or cron — "
+        "this page manages what the digest includes and how it's delivered."
+    )
+
+    cfg = _load_digest_config()
+
+    digest_section = st.radio(
+        "Section",
+        ["⚙️  Configuration", "🚨  Alert Thresholds", "👁️  Preview & Test"],
+        key="digest_section",
+        label_visibility="collapsed",
+        horizontal=True,
+    )
+    st.markdown("---")
+
+    if digest_section == "⚙️  Configuration":
+        st.subheader("Delivery & Schedule")
+
+        slack_channel = st.text_input(
+            "Slack channel ID",
+            value=cfg.get("slack_channel", ""),
+            placeholder="C01234ABCDE",
+            key="dc_slack",
+            help="Slack channel ID (starts with C). The bot must be invited to this channel.",
+        )
+
+        slack_token = os.environ.get("SF_SLACK_BOT_TOKEN", "")
+        if not slack_token:
+            st.warning(
+                "⚠️ SF_SLACK_BOT_TOKEN is not set. "
+                "Add it to your .env file to enable Slack delivery."
+            )
+
+        col_freq, col_day = st.columns(2)
+        with col_freq:
+            frequency = st.selectbox(
+                "Frequency",
+                ["Daily", "Weekly", "Monthly"],
+                index=["Daily", "Weekly", "Monthly"].index(cfg.get("frequency", "Weekly")),
+                key="dc_freq",
+            )
+        with col_day:
+            if frequency == "Weekly":
+                weekday = st.selectbox(
+                    "Day of week",
+                    ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],
+                    index=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+                          .index(cfg.get("weekday", "Monday")),
+                    key="dc_weekday",
+                )
+            elif frequency == "Monthly":
+                weekday = None
+                month_day = st.number_input("Day of month", 1, 28, int(cfg.get("month_day", 1)), key="dc_mday")
+            else:
+                weekday = None
+
+        col_hr, col_min = st.columns(2)
+        with col_hr:
+            hour = st.number_input("Hour (0–23)", 0, 23, int(cfg.get("hour", 8)), key="dc_hour")
+        with col_min:
+            minute = st.number_input("Minute (0–59)", 0, 59, int(cfg.get("minute", 0)), key="dc_minute")
+
+        lookback = st.number_input(
+            "Lookback window (days)", 1, 30, int(cfg.get("lookback_days", 7)), key="dc_lookback"
+        )
+        include_ai = st.checkbox("Include AI summary", value=bool(cfg.get("include_ai", True)), key="dc_ai")
+
+        st.subheader("Health Checks")
+        checks = cfg.get("checks", {})
+        check_labels = {
+            "api_usage":            "API Usage",
+            "data_storage":         "Data Storage",
+            "file_storage":         "File Storage",
+            "flow_errors":          "Flow Errors",
+            "stale_records":        "Stale Records",
+            "duplicate_candidates": "New Duplicate Candidates",
+            "audit_trail":          "Setup Audit Trail Summary",
+            "license_utilisation":  "License Utilisation",
+        }
+        new_checks = {}
+        cols = st.columns(2)
+        for i, (key, label) in enumerate(check_labels.items()):
+            with cols[i % 2]:
+                new_checks[key] = st.toggle(label, value=checks.get(key, True), key=f"dc_chk_{key}")
+
+        if st.button("💾  Save Configuration", key="dc_save"):
+            cfg["slack_channel"]  = slack_channel
+            cfg["frequency"]      = frequency
+            cfg["hour"]           = int(hour)
+            cfg["minute"]         = int(minute)
+            cfg["lookback_days"]  = int(lookback)
+            cfg["include_ai"]     = include_ai
+            cfg["checks"]         = new_checks
+            if frequency == "Weekly":
+                cfg["weekday"] = weekday
+            elif frequency == "Monthly":
+                cfg["month_day"] = int(month_day)
+            _save_digest_config(cfg)
+            st.success("Configuration saved to digest_schedule.json")
+
+        with st.expander("📋  Setup instructions (Windows Task Scheduler / cron)", expanded=False):
+            st.markdown("""
+**Windows Task Scheduler:**
+```
+schtasks /create /tn "ADAM Digest" /tr "python digest_scheduler.py" /sc weekly /d MON /st 08:00
+```
+
+**Linux/macOS cron** (run at 8am every Monday):
+```
+0 8 * * 1 cd /path/to/axonify-adam && python digest_scheduler.py
+```
+The script reads `digest_schedule.json` for configuration. No arguments required.
+""")
+
+    elif digest_section == "🚨  Alert Thresholds":
+        st.subheader("Alert Thresholds")
+        st.caption(
+            "When a metric exceeds its threshold, it is highlighted as a red alert in the digest."
+        )
+        thresholds = cfg.get("thresholds", {})
+
+        api_thresh  = st.slider("API usage alert (%)",       50, 100, int(thresholds.get("api_usage_pct", 80)),        key="dt_api")
+        stor_thresh = st.slider("Storage alert (%)",          50, 100, int(thresholds.get("storage_pct", 80)),          key="dt_stor")
+        flow_thresh = st.number_input("Flow errors / day alert", 1, 1000, int(thresholds.get("flow_errors_per_day", 5)), key="dt_flow")
+        stale_thresh = st.number_input("Stale record count alert", 100, 100000, int(thresholds.get("stale_record_count", 1000)), step=100, key="dt_stale")
+
+        if st.button("💾  Save Thresholds", key="dt_save"):
+            cfg["thresholds"] = {
+                "api_usage_pct":        int(api_thresh),
+                "storage_pct":          int(stor_thresh),
+                "flow_errors_per_day":  int(flow_thresh),
+                "stale_record_count":   int(stale_thresh),
+            }
+            _save_digest_config(cfg)
+            st.success("Thresholds saved.")
+
+    elif digest_section == "👁️  Preview & Test":
+        st.subheader("Preview Digest")
+        st.caption("Generates a preview by re-using data already loaded in the Dashboard.")
+
+        if st.button("🔍  Generate Preview", key="dp_gen"):
+            limits = _fetch_org_limits()
+            flow_errors = _fetch_flow_errors_7d()
+            audit = _fetch_audit_trail_7d()
+
+            def _limit_pct(key):
+                e = limits.get(key, {})
+                mx = e.get("Max", 0)
+                if mx <= 0:
+                    return None
+                return round((mx - e.get("Remaining", 0)) / mx * 100, 1)
+
+            lines = ["## A.D.A.M. Org Health Digest\n"]
+            thresholds = cfg.get("thresholds", _DIGEST_DEFAULTS["thresholds"])
+
+            if cfg["checks"].get("api_usage") and limits:
+                pct = _limit_pct("DailyApiRequests")
+                if pct is not None:
+                    flag = " 🔴" if pct >= thresholds["api_usage_pct"] else ""
+                    lines.append(f"**API Usage:** {pct}%{flag}")
+
+            if cfg["checks"].get("data_storage") and limits:
+                pct = _limit_pct("DataStorageMB")
+                if pct is not None:
+                    flag = " 🔴" if pct >= thresholds["storage_pct"] else ""
+                    lines.append(f"**Data Storage:** {pct}%{flag}")
+
+            if cfg["checks"].get("flow_errors"):
+                err_count = len(flow_errors)
+                lookback = cfg.get("lookback_days", 7)
+                per_day = round(err_count / lookback, 1)
+                flag = " 🔴" if per_day >= thresholds["flow_errors_per_day"] else ""
+                lines.append(f"**Flow Errors (last {lookback}d):** {err_count}{flag}")
+
+            if cfg["checks"].get("audit_trail") and audit:
+                lines.append(f"**Recent Changes:** {len(audit)} entries in last 7 days")
+
+            preview_text = "\n\n".join(lines)
+            st.markdown(preview_text)
+            st.session_state["_dc_preview"] = preview_text
+
+        preview = st.session_state.get("_dc_preview")
+        if preview:
+            slack_token = os.environ.get("SF_SLACK_BOT_TOKEN", "")
+            channel = cfg.get("slack_channel", "")
+            if slack_token and channel:
+                if st.button("📤  Send Test to Slack", key="dp_slack"):
+                    try:
+                        import requests
+                        resp = requests.post(
+                            "https://slack.com/api/chat.postMessage",
+                            headers={"Authorization": f"Bearer {slack_token}"},
+                            json={"channel": channel, "text": preview},
+                        )
+                        if resp.json().get("ok"):
+                            st.success("Test digest sent to Slack!")
+                        else:
+                            st.error(f"Slack error: {resp.json().get('error')}")
+                    except Exception as exc:
+                        st.error(f"Failed to send: {exc}")
+            else:
+                st.info("Configure Slack channel and SF_SLACK_BOT_TOKEN to enable test delivery.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DEDUPLICATION  (page = "dedupe")
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_dedupe_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Deduplication page.  A horizontal radio selects between Account and
+    Contact deduplication.
+    """
+    st.header("Deduplication")
+
+    dedupe_object = st.radio(
+        "Object",
+        ["🏢  Accounts", "👥  Contacts"],
+        horizontal=False,
+        key="dedupe_object_selector",
+    )
+
+    if dedupe_object == "🏢  Accounts":
+        render_dedupe_tab(auto_backup=auto_backup, dry_run_mode=dry_run_mode)
+    else:
+        render_contact_dedupe_tab(auto_backup=auto_backup, dry_run_mode=dry_run_mode)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: CSV DATA LOADER  (page = "csv_loader")
+# ══════════════════════════════════════════════════════════════════════════════
+
+_LOADER_OPERATIONS = ["Delete", "Update", "Insert", "Upsert"]
+
+_LOADER_OP_NOTES = {
+    "Delete": "Removes records from Salesforce. CSV must contain an **Id** column.",
+    "Update": "Updates existing records. CSV must contain an **Id** column plus the fields to change.",
+    "Insert": "Creates new records. Do **not** include an Id column.",
+    "Upsert": "Insert or update based on an external ID field. Requires you to specify the external ID field below.",
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _loader_describe_object(object_name: str) -> list[dict]:
+    """
+    Returns a list of dicts with name, label, type, nillable, updateable, createable
+    for every field on the given object. Cached 5 min.
+    """
+    sf = get_sf_connection()
+    try:
+        desc = sf.restful(f"sobjects/{object_name}/describe")
+        return [
+            {
+                "name":       f["name"],
+                "label":      f["label"],
+                "type":       f["type"],
+                "nillable":   f.get("nillable", True),
+                "updateable": f.get("updateable", True),
+                "createable": f.get("createable", True),
+            }
+            for f in desc.get("fields", [])
+        ]
+    except Exception as e:
+        err = str(e)
+        if "NOT_FOUND" in err or "sObject type" in err.lower():
+            return []
+        raise
+
+
+def _loader_auto_map(csv_cols: list[str], sf_fields: list[dict]) -> dict[str, str]:
+    """
+    Returns {csv_col: sf_field_name} by case-insensitive exact match.
+    Columns with no match, or that look like flattened relationship fields
+    (contain '.'), default to '' (skip).
+    """
+    name_map = {f["name"].lower(): f["name"] for f in sf_fields}
+    result = {}
+    for col in csv_cols:
+        if "." in col:
+            result[col] = ""   # relationship fields can't be written
+            continue
+        result[col] = name_map.get(col.lower(), "")
+    return result
+
+
+def _loader_build_records(df: pd.DataFrame, mapping: dict[str, str]) -> tuple[list[dict], list[int]]:
+    """
+    Applies the column mapping to build the list of dicts for the Bulk API.
+    Rows that have no value for a mapped 'Id' column are excluded.
+    Returns (records, skipped_row_indices).
+    """
+    mapped_cols = {csv_col: sf_col for csv_col, sf_col in mapping.items() if sf_col}
+    skipped = []
+    records = []
+
+    for idx, row in df.iterrows():
+        rec = {}
+        for csv_col, sf_col in mapped_cols.items():
+            val = row.get(csv_col, "")
+            # Treat pandas NA/None/empty as null
+            if pd.isna(val) or str(val).strip() == "":
+                rec[sf_col] = None
+            else:
+                rec[sf_col] = str(val).strip()
+
+        # If Id is in the mapping and this row has no Id, skip it
+        has_id_mapping = "Id" in rec
+        if has_id_mapping and not rec.get("Id"):
+            skipped.append(idx)
+            continue
+
+        records.append(rec)
+
+    return records, skipped
+
+
+def _loader_write_log(
+    operation: str,
+    object_name: str,
+    source_filename: str,
+    records: list,
+    result: dict,
+    backup_path: str,
+    skipped_count: int = 0,
+    ext_id_field: str = "",
+) -> str:
+    """
+    Writes a structured audit log to sf_logs/ after a CSV Loader job.
+
+    Log files are named:  sf_logs/<Object>_CsvLoader<Operation>_<timestamp>.log
+    Returns the path to the log file.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp    = datetime.datetime.now()
+    ts_file      = timestamp.strftime(TIMESTAMP_FMT)
+    ts_readable  = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    filename     = f"{LOG_DIR}/{object_name}_CsvLoader{operation}_{ts_file}.log"
+
+    succeeded = result.get("success", 0)
+    failed    = result.get("failed", 0)
+    errors    = result.get("errors", [])
+
+    lines = [
+        "=" * 72,
+        f"SALESFORCE CSV DATA LOADER LOG — {ORG_NAME}",
+        "=" * 72,
+        f"Timestamp:        {ts_readable}",
+        f"Operation:        {operation}",
+        f"Object:           {object_name}",
+        f"Source file:      {source_filename}",
+    ]
+    if ext_id_field:
+        lines.append(f"External ID field: {ext_id_field}")
+    lines += [
+        "",
+        "RECORD COUNTS",
+        f"  Rows in CSV:               {len(records) + skipped_count:,}",
+        f"  Skipped (no Id):           {skipped_count:,}",
+        f"  Attempted ({operation}):       {len(records):,}",
+        f"  Succeeded:                 {succeeded:,}",
+        f"  Failed:                    {failed:,}",
+        "",
+        "BACKUP FILE",
+        f"  {backup_path if backup_path else 'Auto-backup was disabled — no backup created'}",
+        "",
+    ]
+
+    # Error detail (up to 50)
+    flat_errors = [e for e in errors if e]
+    if flat_errors:
+        lines.append(f"ERRORS  ({len(flat_errors)} records failed)")
+        for err in flat_errors[:50]:
+            if isinstance(err, list):
+                for sub in err:
+                    code = sub.get("statusCode", "")
+                    msg  = sub.get("message", str(sub))
+                    lines.append(f"  [{code}] {msg}")
+            else:
+                lines.append(f"  {err}")
+        if len(flat_errors) > 50:
+            lines.append(f"  ... and {len(flat_errors) - 50:,} more (see receipt CSV for full list)")
+        lines.append("")
+
+    lines += ["=" * 72, "END OF LOG", "=" * 72]
+
+    with open(filename, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+
+    return filename
+
+
+def _loader_build_receipt(records: list, result: dict, operation: str) -> pd.DataFrame:
+    """
+    Builds a per-record receipt DataFrame from Bulk API raw results.
+
+    Columns: SalesforceId | Status | ErrorCode | ErrorMessage | [original record fields]
+    """
+    raw = result.get("raw_results", [])
+    rows = []
+    for i, rec in enumerate(records):
+        raw_r      = raw[i] if i < len(raw) else {}
+        ok         = raw_r.get("success", False)
+        sf_id      = raw_r.get("id") or rec.get("Id", "")
+        err_list   = raw_r.get("errors") or []
+        err_code   = ""
+        err_msg    = ""
+        if err_list:
+            first    = err_list[0] if isinstance(err_list[0], dict) else {}
+            err_code = first.get("statusCode", str(err_list[0]))
+            err_msg  = first.get("message", "")
+        row = {
+            "SalesforceId":   sf_id,
+            "Status":         "Success" if ok else "Failed",
+            "ErrorCode":      err_code,
+            "ErrorMessage":   err_msg,
+        }
+        # append original record fields for context (skip Id duplication)
+        for k, v in rec.items():
+            if k != "Id":
+                row[k] = v
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def render_csv_loader_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("CSV Data Loader")
+    st.caption(
+        "Import a CSV to delete, update, or insert records in Salesforce — "
+        "with column mapping, validation preview, and the same dry-run / backup safety gates as the rest of A.D.A.M."
+    )
+
+    # ── Init session state ────────────────────────────────────────────────────
+    defaults = {
+        "_loader_df":          None,
+        "_loader_filename":    "",
+        "_loader_object":      "Contact",
+        "_loader_operation":   "Delete",
+        "_loader_mapping":     {},
+        "_loader_ext_id":      "Id",
+        "_loader_result":      None,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 1 — Upload & Configure
+    # ══════════════════════════════════════════════════════════════════════════
+    st.subheader("Step 1 — Upload & Configure")
+
+    uploaded = st.file_uploader(
+        "Upload a CSV file",
+        type=["csv"],
+        key="loader_upload",
+        help="Any CSV exported from A.D.A.M. or Salesforce. Must be UTF-8 or UTF-8-BOM encoded.",
+    )
+
+    col_obj, col_op = st.columns([1, 1])
+    with col_obj:
+        object_name = st.text_input(
+            "Salesforce object API name",
+            value=st.session_state["_loader_object"],
+            key="loader_object_input",
+            placeholder="e.g. Contact, Account, Lead",
+        ).strip()
+    with col_op:
+        operation = st.radio(
+            "Operation",
+            _LOADER_OPERATIONS,
+            index=_LOADER_OPERATIONS.index(st.session_state["_loader_operation"]),
+            horizontal=True,
+            key="loader_operation_radio",
+        )
+
+    st.caption(f"ℹ️ {_LOADER_OP_NOTES[operation]}")
+
+    ext_id_field = st.session_state["_loader_ext_id"]
+    if operation == "Upsert":
+        ext_id_field = st.text_input(
+            "External ID field API name",
+            value=st.session_state["_loader_ext_id"],
+            key="loader_ext_id_input",
+            placeholder="e.g. External_Id__c",
+        ).strip()
+
+    # Parse CSV when a file is uploaded
+    if uploaded is not None:
+        try:
+            df = pd.read_csv(uploaded, dtype=str, keep_default_na=False)
+            st.session_state["_loader_df"]       = df
+            st.session_state["_loader_filename"] = uploaded.name
+            st.session_state["_loader_object"]   = object_name
+            st.session_state["_loader_operation"] = operation
+            st.session_state["_loader_ext_id"]   = ext_id_field
+        except Exception as e:
+            st.error(f"Could not parse CSV: {e}")
+            return
+
+    df = st.session_state.get("_loader_df")
+    if df is None:
+        return
+
+    st.success(f"✅ **{st.session_state['_loader_filename']}** — {len(df):,} rows, {len(df.columns)} columns")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 2 — Column Mapping
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.subheader("Step 2 — Map Columns")
+
+    with st.spinner(f"Loading {object_name} field list…"):
+        sf_fields = _loader_describe_object(object_name)
+
+    if not sf_fields:
+        st.error(
+            f"Object `{object_name}` not found or not accessible. "
+            "Check the API name and your Salesforce connection."
+        )
+        return
+
+    sf_field_names  = ["— skip —"] + [f["name"] for f in sf_fields]
+    sf_field_labels = {f["name"]: f"{f['name']}  ({f['label']}  ·  {f['type']})" for f in sf_fields}
+
+    # Auto-map on first load or when object/operation changes
+    state_key = f"_loader_mapping_{object_name}_{operation}"
+    if state_key not in st.session_state:
+        auto = _loader_auto_map(list(df.columns), sf_fields)
+        st.session_state[state_key] = auto
+
+    # For Delete, only the Id column matters — collapse the mapper
+    if operation == "Delete":
+        st.info(
+            "Delete only requires the **Id** column. "
+            "All other columns are carried through to the preview and backup but not sent to Salesforce."
+        )
+        id_col_options = ["— skip —"] + list(df.columns)
+        id_default = "Id" if "Id" in df.columns else id_col_options[0]
+        id_col = st.selectbox(
+            "Which CSV column contains the Salesforce record Id?",
+            id_col_options,
+            index=id_col_options.index(id_default),
+            key="loader_id_col_select",
+        )
+        mapping = {id_col: "Id"} if id_col != "— skip —" else {}
+    else:
+        st.caption(
+            "A.D.A.M. auto-mapped columns by name. "
+            "Adjust any mismatches, and set relationship columns (e.g. Account.Name) to **— skip —**."
+        )
+        mapping = dict(st.session_state[state_key])
+
+        # Render mapping table: 3 columns per row for compactness
+        cols_per_row = 2
+        csv_cols = list(df.columns)
+        for i in range(0, len(csv_cols), cols_per_row):
+            row_cols = st.columns(cols_per_row)
+            for j, csv_col in enumerate(csv_cols[i:i + cols_per_row]):
+                current_sf = mapping.get(csv_col, "")
+                options    = sf_field_names
+                try:
+                    sel_idx = options.index(current_sf) if current_sf in options else 0
+                except ValueError:
+                    sel_idx = 0
+                chosen = row_cols[j].selectbox(
+                    f"`{csv_col}`",
+                    options,
+                    index=sel_idx,
+                    format_func=lambda x: "— skip —" if x == "— skip —" else sf_field_labels.get(x, x),
+                    key=f"loader_map_{csv_col}",
+                )
+                mapping[csv_col] = "" if chosen == "— skip —" else chosen
+
+        st.session_state[state_key] = mapping
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 3 — Validate & Preview
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.subheader("Step 3 — Validate & Preview")
+
+    records, skipped = _loader_build_records(df, mapping)
+
+    mapped_sf_cols = [sf for sf in mapping.values() if sf]
+
+    # Validation checks
+    issues = []
+    if operation in ("Delete", "Update", "Upsert") and "Id" not in mapped_sf_cols and operation != "Upsert":
+        issues.append("No **Id** column mapped — required for Delete and Update.")
+    if operation == "Upsert" and not ext_id_field:
+        issues.append("External ID field name is required for Upsert.")
+    if not mapped_sf_cols:
+        issues.append("No columns are mapped to Salesforce fields.")
+    if not records:
+        issues.append("No valid rows found after mapping and validation.")
+
+    if issues:
+        for issue in issues:
+            st.error(f"⚠️ {issue}")
+        return
+
+    # Summary metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Rows ready",   f"{len(records):,}")
+    c2.metric("Rows skipped (no Id)", f"{len(skipped):,}")
+    c3.metric("Columns mapped", f"{len(mapped_sf_cols)}")
+
+    if skipped:
+        st.warning(f"{len(skipped):,} rows were skipped because their Id column was empty.")
+
+    # Preview table — show mapped SF field names as column headers
+    inv_mapping = {sf: csv for csv, sf in mapping.items() if sf}
+    preview_df  = pd.DataFrame(records[:500])
+    st.dataframe(preview_df, hide_index=True, width="stretch")
+    if len(records) > 500:
+        st.caption(f"Preview shows first 500 of {len(records):,} rows.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 4 — Execute
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.subheader("Step 4 — Execute")
+
+    op_icon     = {"Delete": "🔴", "Update": "🟡", "Insert": "🟢", "Upsert": "🔵"}[operation]
+    backup_path = ""   # populated below if auto_backup is on
+
+    if dry_run_mode:
+        st.info(
+            f"**Dry Run is ON.** {op_icon} Review the preview above, then turn off Dry Run in the sidebar to execute."
+        )
+        return
+
+    # Backup before any write
+    if auto_backup:
+        backup_path = backup_records(df, f"loader_{operation.lower()}", object_name)
+        st.caption(f"Backup saved: `{backup_path}`")
+
+    # Confirm button
+    confirm = st.button(
+        f"{op_icon}  Execute {operation} — {len(records):,} {object_name} records",
+        type="primary",
+        key="loader_execute_btn",
+    )
+
+    if not confirm:
+        return
+
+    with st.spinner(f"Running {operation} via Salesforce Bulk API…"):
+        sf = get_sf_connection()
+        try:
+            if operation == "Delete":
+                ids = [r["Id"] for r in records]
+                result = execute_delete(sf, object_name, ids)
+            elif operation == "Insert":
+                result = _bulk_execute(sf, object_name, records, "insert")
+            elif operation == "Update":
+                result = execute_update(sf, object_name, records)
+            elif operation == "Upsert":
+                result = _bulk_execute(sf, object_name, records, "upsert", external_id_field=ext_id_field)
+            else:
+                result = {"success": 0, "failed": 0, "errors": ["Unknown operation"]}
+        except Exception as e:
+            st.error(f"Bulk API error: {e}")
+            return
+
+    st.session_state["_loader_result"] = result
+
+    # ── Write audit log ──────────────────────────────────────────────────────
+    log_path = _loader_write_log(
+        operation       = operation,
+        object_name     = object_name,
+        source_filename = st.session_state.get("_loader_filename", ""),
+        records         = records,
+        result          = result,
+        backup_path     = backup_path if auto_backup else "",
+        skipped_count   = len(skipped),
+        ext_id_field    = ext_id_field if operation == "Upsert" else "",
+    )
+
+    # ── Build receipt CSV ─────────────────────────────────────────────────────
+    receipt_df    = _loader_build_receipt(records, result, operation)
+    ts_now        = datetime.datetime.now().strftime(TIMESTAMP_FMT)
+    receipt_fname = f"{object_name}_CsvLoader{operation}_{ts_now}_receipt.csv"
+    receipt_path  = os.path.join(BACKUP_DIR, receipt_fname)
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    receipt_df.to_csv(receipt_path, index=False)
+
+    # ── Results summary ───────────────────────────────────────────────────────
+    s, f = result["success"], result["failed"]
+    if f == 0:
+        st.success(f"✅ {operation} complete — {s:,} records succeeded, 0 failures.")
+    else:
+        st.warning(f"⚠️ {s:,} succeeded, {f:,} failed.")
+        errs = [e for e in result.get("errors", []) if e]
+        if errs:
+            with st.expander(f"❌ Errors ({len(errs)})"):
+                for err in errs[:50]:
+                    st.write(err)
+            if len(errs) > 50:
+                st.caption(f"Showing first 50 of {len(errs)} errors.")
+
+    # ── Download buttons ──────────────────────────────────────────────────────
+    st.markdown("**Job files**")
+    dl_col1, dl_col2 = st.columns(2)
+
+    with dl_col1:
+        st.download_button(
+            label     = "⬇️  Download receipt CSV",
+            data      = receipt_df.to_csv(index=False).encode("utf-8"),
+            file_name = receipt_fname,
+            mime      = "text/csv",
+            key       = "loader_receipt_dl",
+            help      = f"Per-record result: SalesforceId, Status, ErrorCode, ErrorMessage. Also saved to `{receipt_path}`",
+        )
+
+    with dl_col2:
+        try:
+            with open(log_path, "r", encoding="utf-8") as _lf:
+                log_bytes = _lf.read().encode("utf-8")
+            st.download_button(
+                label     = "⬇️  Download audit log",
+                data      = log_bytes,
+                file_name = os.path.basename(log_path),
+                mime      = "text/plain",
+                key       = "loader_log_dl",
+                help      = f"Full audit log saved to `{log_path}`",
+            )
+        except Exception:
+            st.caption(f"Audit log: `{log_path}`")
+
+    st.caption(f"Receipt: `{receipt_path}`  ·  Log: `{log_path}`")
+
+    # ── Reset ─────────────────────────────────────────────────────────────────
+    if st.button("↩  Load another file", key="loader_reset"):
+        for k in list(st.session_state.keys()):
+            if k.startswith("_loader"):
+                del st.session_state[k]
+        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: CONTACT PURGE  (page = "contact_purge")
+# ══════════════════════════════════════════════════════════════════════════════
+
+import re as _re
+import io
+import zipfile
+
+_PURGE_RULES_PATH         = os.path.join(os.path.dirname(__file__), "purge_rules.json")
+_PURGE_RULES_DEFAULT_PATH = os.path.join(os.path.dirname(__file__), "purge_rules_default.json")
+_PURGE_RULES_BAK_PATH     = os.path.join(os.path.dirname(__file__), "purge_rules.json.bak")
+
+_BIZIBLE_TOUCHPOINT_OBJECT = "bizible2__Bizible_Touchpoint__c"
+_BIZIBLE_CONTACT_FIELD     = "bizible2__Contact__c"
+_BIZIBLE_DATE_FIELD        = "bizible2__Touchpoint_Date__c"
+
+_CUSTOM_FIELD_JOB_LEVEL      = "Job_Level__c"
+_CUSTOM_FIELD_RESPONSIBILITY = "Responsibility_Automation__c"
+
+_PURGE_RULES_SCHEMA_DOC = """
+Schema for purge_rules.json:
+
+protected_personas:
+  title_keywords           list[str]  Partial-match against Title (case-insensitive)
+  job_level_values         list[str]  Exact match against Job_Level__c (case-insensitive)
+  responsibility_keywords  list[str]  Substring match against Responsibility_Automation__c
+  activity_lookback_months int        Contacts with Task/Event within this window are protected (min 12)
+  bizible_lookback_months  int        Contacts with Bizible touchpoint within this window are protected (min 12)
+
+dirty_data_rules:
+  junk_name_keywords  list[str]  Name keywords that signal junk records
+  short_name_max_chars int       Names at or below this length are flagged (default 2)
+  flag_numeric_names  bool       Flag contacts whose First/Last name is entirely digits
+  flag_all_caps_names bool       Flag two-word all-caps full names
+  flag_missing_last_name bool    Flag contacts with no Last Name
+  flag_no_contact_info bool      Flag contacts with no email and no phone of any kind
+"""
+
+_BUCKET_DESCRIPTIONS = {
+    "01_numeric_names":          "First or Last name is entirely numbers (e.g. '64935', '1')",
+    "02_junk_keyword_names":     "Name contains a known junk keyword (test, sample, dummy, etc.)",
+    "03_short_names":            "First or Last name is 1–2 characters only",
+    "04_missing_last_name":      "Last Name field is blank / null",
+    "05_all_caps_names":         "Full name is ALL CAPS (two-word, letters only)",
+    "06_no_email_no_phone":      "No Email, no Phone, and no Mobile Phone",
+    "07_orphaned_no_account":    "No Account AND no email/phone (completely floating records)",
+    "08_uncontactable_no_title": "No email/phone AND no Title or Job Level populated",
+}
+
+_STALE_BAND_LABELS = {
+    "ACTIVE":     "Active (< 24 months) — shown for context, NOT a purge candidate",
+    "STALE_2YR":  "Stale 2–3 years — no signal in 24–36 months",
+    "STALE_3YR":  "Stale 3–4 years — no signal in 36–48 months",
+    "STALE_4YR+": "Stale 4+ years — no signal in 48+ months",
+    "NEVER":      "Never had any activity — no Task, Event, or Bizible ever",
+}
+
+
+# ── Rules I/O ──────────────────────────────────────────────────────────────────
+
+def _load_purge_rules() -> dict:
+    """
+    Loads purge_rules.json. Falls back to purge_rules_default.json if missing
+    or malformed. Validates required keys and out-of-range values.
+    """
+    _REQUIRED_PERSONA_KEYS = {
+        "title_keywords", "job_level_values", "responsibility_keywords",
+        "activity_lookback_months", "bizible_lookback_months",
+    }
+    _REQUIRED_DIRTY_KEYS = {
+        "junk_name_keywords", "short_name_max_chars",
+        "flag_numeric_names", "flag_all_caps_names",
+        "flag_missing_last_name", "flag_no_contact_info",
+    }
+
+    def _validate(rules: dict) -> list[str]:
+        errors = []
+        p = rules.get("protected_personas", {})
+        d = rules.get("dirty_data_rules", {})
+        for k in _REQUIRED_PERSONA_KEYS:
+            if k not in p:
+                errors.append(f"Missing protected_personas.{k}")
+        for k in _REQUIRED_DIRTY_KEYS:
+            if k not in d:
+                errors.append(f"Missing dirty_data_rules.{k}")
+        for key in ("activity_lookback_months", "bizible_lookback_months"):
+            v = p.get(key)
+            if isinstance(v, int) and v < 12:
+                errors.append(f"protected_personas.{key} must be >= 12 (got {v})")
+        if not p.get("title_keywords"):
+            errors.append("protected_personas.title_keywords must not be empty")
+        return errors
+
+    def _try_load(path: str) -> tuple[dict | None, str | None]:
+        try:
+            with open(path, encoding="utf-8") as f:
+                rules = json.load(f)
+            errs = _validate(rules)
+            if errs:
+                return None, "; ".join(errs)
+            return rules, None
+        except FileNotFoundError:
+            return None, f"File not found: {path}"
+        except json.JSONDecodeError as e:
+            return None, f"JSON parse error in {os.path.basename(path)}: {e}"
+
+    # 0. Supabase app_config (primary)
+    db_data = db_get_config("purge_rules")
+    if isinstance(db_data, dict):
+        errs = _validate(db_data)
+        if not errs:
+            return db_data
+
+    rules, err = _try_load(_PURGE_RULES_PATH)
+    if rules:
+        return rules
+
+    # Warn and fall back to defaults
+    st.warning(
+        f"⚠️ purge_rules.json could not be loaded ({err}). "
+        "Falling back to purge_rules_default.json."
+    )
+    rules, err2 = _try_load(_PURGE_RULES_DEFAULT_PATH)
+    if rules:
+        return rules
+
+    st.error(f"purge_rules_default.json also failed to load: {err2}. Using hardcoded defaults.")
+    # Hardcoded minimal defaults as last resort
+    return {
+        "protected_personas": {
+            "title_keywords": ["vp ", "director", "c-level", "coo"],
+            "job_level_values": ["c-level", "vp", "director", "manager"],
+            "responsibility_keywords": ["human resources", "learning & development"],
+            "activity_lookback_months": 24,
+            "bizible_lookback_months": 24,
+        },
+        "dirty_data_rules": {
+            "junk_name_keywords": ["test", "sample", "demo", "fake", "dummy"],
+            "short_name_max_chars": 2,
+            "flag_numeric_names": True,
+            "flag_all_caps_names": True,
+            "flag_missing_last_name": True,
+            "flag_no_contact_info": True,
+        },
+    }
+
+
+def _save_purge_rules(rules: dict) -> None:
+    """Persist purge rules to Supabase app_config (primary) and the local JSON file (fallback)."""
+    user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    db_save_config("purge_rules", rules, user)
+    # Also write local file as fallback
+    try:
+        import shutil
+        if os.path.exists(_PURGE_RULES_PATH):
+            shutil.copy2(_PURGE_RULES_PATH, _PURGE_RULES_BAK_PATH)
+        with open(_PURGE_RULES_PATH, "w", encoding="utf-8") as f:
+            json.dump(rules, f, indent=2)
+    except Exception:
+        pass
+
+
+# ── Classification helpers (read from rules dict, not hardcoded) ──────────────
+
+def _purge_is_protected_persona(row: pd.Series, rules: dict) -> bool:
+    p             = rules["protected_personas"]
+    title         = str(row.get("Title", "")).lower()
+    job_level     = str(row.get(_CUSTOM_FIELD_JOB_LEVEL, "")).lower().strip()
+    resp          = str(row.get(_CUSTOM_FIELD_RESPONSIBILITY, "")).lower()
+    for kw in p["title_keywords"]:
+        if kw.lower() in title:
+            return True
+    if job_level in {v.lower() for v in p["job_level_values"]}:
+        return True
+    for kw in p["responsibility_keywords"]:
+        if kw.lower() in resp:
+            return True
+    return False
+
+
+def _purge_cutoff_date(months: int) -> str:
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=months * 30)
+    return cutoff.strftime("%Y-%m-%d")
+
+
+def _purge_cutoff_datetime(months: int) -> str:
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=months * 30)
+    return cutoff.strftime("%Y-%m-%dT00:00:00Z")
+
+
+# ── Required fields (always fetched regardless of user selection) ──────────────
+
+_PURGE_DIRTY_REQUIRED = [
+    "Id", "FirstName", "LastName", "Name", "Email", "Phone", "MobilePhone",
+    "Title", "Department", "AccountId", "OwnerId",
+    "CreatedDate", "LastModifiedDate", "LastActivityDate",
+    _CUSTOM_FIELD_JOB_LEVEL, _CUSTOM_FIELD_RESPONSIBILITY,
+]
+
+_PURGE_STALE_REQUIRED = [
+    "Id", "FirstName", "LastName", "Name", "Title", "Department",
+    "AccountId", "OwnerId", "CreatedDate", "LastActivityDate",
+    _CUSTOM_FIELD_JOB_LEVEL, _CUSTOM_FIELD_RESPONSIBILITY,
+]
+
+_PURGE_DEFAULT_RELATED = ["Account.Name", "Owner.Name"]
+
+# Predefined relationship fields available in the picker
+_PURGE_RELATED_FIELD_OPTIONS = [
+    "Account.Name",
+    "Account.Industry",
+    "Account.Type",
+    "Account.BillingState",
+    "Account.BillingCountry",
+    "Account.AnnualRevenue",
+    "Account.NumberOfEmployees",
+    "Owner.Name",
+    "Owner.Email",
+    "ReportsTo.Name",
+]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _purge_describe_contact_fields() -> list:
+    """Returns [{name, label, type}] for all queryable Contact fields, sorted by label."""
+    sf = get_sf_connection()
+    desc = sf.Contact.describe()
+    skip_types = {"address", "location", "base64", "encryptedstring"}
+    out = []
+    for f in desc.get("fields", []):
+        if f.get("type") in skip_types:
+            continue
+        name = f.get("name", "")
+        if not name or name.endswith("__r"):
+            continue
+        out.append({"name": name, "label": f.get("label", name), "type": f.get("type", "")})
+    return sorted(out, key=lambda x: x["label"])
+
+
+def _purge_flatten_related(df: pd.DataFrame, related_fields: list) -> pd.DataFrame:
+    """
+    Flattens relationship columns (e.g. Account.Industry) from nested SF dicts.
+    Groups by parent relationship object, extracts each requested sub-field,
+    then drops the raw nested column.
+    """
+    rel_groups: dict = {}
+    for rf in related_fields:
+        parts = rf.split(".", 1)
+        if len(parts) == 2:
+            rel_obj, field = parts
+            rel_groups.setdefault(rel_obj, []).append((field, rf))
+
+    for rel_obj, pairs in rel_groups.items():
+        if rel_obj in df.columns:
+            for field, flat_name in pairs:
+                df[flat_name] = df[rel_obj].apply(
+                    lambda x, _f=field: x.get(_f, "") if isinstance(x, dict) else ""
+                )
+            df.drop(columns=[rel_obj], inplace=True)
+    return df
+
+
+def _purge_fetch_contacts_dirty(
+    sf: Salesforce,
+    extra_direct: list = None,
+    extra_related: list = None,
+) -> pd.DataFrame:
+    """
+    Fetches contacts for dirty-data classification.
+    extra_direct:  additional Contact field API names beyond the required set.
+    extra_related: relationship fields to include (e.g. ['Account.Industry']).
+                   Defaults to ['Account.Name', 'Owner.Name'].
+    """
+    extra_direct  = extra_direct  or []
+    extra_related = extra_related if extra_related is not None else list(_PURGE_DEFAULT_RELATED)
+
+    req_set     = set(_PURGE_DIRTY_REQUIRED)
+    direct_cols = _PURGE_DIRTY_REQUIRED + [f for f in extra_direct if f not in req_set]
+    related_cols = list(dict.fromkeys(extra_related))  # dedupe, preserve order
+
+    select_clause = ", ".join(direct_cols + related_cols)
+    soql = (
+        f"SELECT {select_clause} FROM Contact "
+        f"WHERE IsDeleted = false ORDER BY LastName, FirstName"
+    )
+    try:
+        result = sf.query_all(soql)
+    except Exception as e:
+        if "INVALID_FIELD" in str(e):
+            st.error(
+                f"Invalid field in Contact query: {e}\n\n"
+                f"Check that custom fields `{_CUSTOM_FIELD_JOB_LEVEL}` and "
+                f"`{_CUSTOM_FIELD_RESPONSIBILITY}` exist in your org."
+            )
+            return pd.DataFrame()
+        raise
+    records = result.get("records", [])
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records).drop(columns=["attributes"], errors="ignore")
+    df = _purge_flatten_related(df, related_cols)
+    return df.fillna("")
+
+
+def _purge_fetch_contacts_stale(
+    sf: Salesforce,
+    extra_direct: list = None,
+    extra_related: list = None,
+) -> pd.DataFrame:
+    """
+    Fetches contacts for staleness classification.
+    extra_direct:  additional Contact field API names beyond the required set.
+    extra_related: relationship fields to include. Defaults to ['Account.Name', 'Owner.Name'].
+    """
+    extra_direct  = extra_direct  or []
+    extra_related = extra_related if extra_related is not None else list(_PURGE_DEFAULT_RELATED)
+
+    req_set     = set(_PURGE_STALE_REQUIRED)
+    direct_cols = _PURGE_STALE_REQUIRED + [f for f in extra_direct if f not in req_set]
+    related_cols = list(dict.fromkeys(extra_related))
+
+    select_clause = ", ".join(direct_cols + related_cols)
+    soql = (
+        f"SELECT {select_clause} FROM Contact "
+        f"WHERE IsDeleted = false ORDER BY LastName, FirstName"
+    )
+    try:
+        result = sf.query_all(soql)
+    except Exception as e:
+        if "INVALID_FIELD" in str(e):
+            st.error(f"Invalid field in Contact query: {e}")
+            return pd.DataFrame()
+        raise
+    records = result.get("records", [])
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records).drop(columns=["attributes"], errors="ignore")
+    df = _purge_flatten_related(df, related_cols)
+    return df.fillna("")
+
+
+def _purge_fetch_active_contact_ids(sf: Salesforce, lookback_months: int) -> set:
+    cutoff = _purge_cutoff_date(lookback_months)
+    protected = set()
+    for obj in ("Task", "Event"):
+        soql = (
+            f"SELECT WhoId FROM {obj} WHERE ActivityDate >= {cutoff} "
+            f"AND WhoId != null AND IsDeleted = false"
+        )
+        try:
+            result = sf.query_all(soql)
+            for rec in result.get("records", []):
+                who_id = rec.get("WhoId", "")
+                if who_id and who_id.startswith("003"):
+                    protected.add(who_id)
+        except Exception as e:
+            st.warning(f"Could not query {obj}: {e}")
+    return protected
+
+
+def _purge_fetch_bizible_ids(sf: Salesforce, lookback_months: int) -> set:
+    cutoff = _purge_cutoff_datetime(lookback_months)
+    protected = set()
+    soql = (
+        f"SELECT {_BIZIBLE_CONTACT_FIELD} FROM {_BIZIBLE_TOUCHPOINT_OBJECT} "
+        f"WHERE {_BIZIBLE_DATE_FIELD} >= {cutoff} "
+        f"AND {_BIZIBLE_CONTACT_FIELD} != null AND IsDeleted = false"
+    )
+    try:
+        result = sf.query_all(soql)
+        for rec in result.get("records", []):
+            cid = rec.get(_BIZIBLE_CONTACT_FIELD, "")
+            if cid:
+                protected.add(cid)
+    except Exception as e:
+        err = str(e)
+        if "INVALID_TYPE" in err or "sObject type" in err.lower() or "does not exist" in err.lower():
+            st.info("ℹ️ Bizible not installed — Bizible protection signal skipped.")
+        else:
+            st.warning(f"Bizible query failed: {e}")
+    return protected
+
+
+def _purge_fetch_bizible_dates(sf: Salesforce) -> dict:
+    """Returns {contact_id: latest_touchpoint_datetime} for stale scan.
+
+    Avoids GROUP BY aggregate queries entirely — Salesforce forbids queryMore()
+    on aggregate results, which simple_salesforce triggers automatically.
+    Instead, fetches individual touchpoint rows filtered to the last 60 months
+    (covers all staleness bands: STALE_2YR/3YR/4YR+ top out at 48 months) and
+    aggregates in Python. Contacts whose latest touchpoint is older than 60
+    months will have no entry in the map; they'll be classified on
+    LastActivityDate alone and land in STALE_4YR+ or NEVER either way.
+    """
+    cutoff = _purge_cutoff_datetime(60)  # 5-year window covers all stale bands
+    soql = (
+        f"SELECT {_BIZIBLE_CONTACT_FIELD}, {_BIZIBLE_DATE_FIELD} "
+        f"FROM {_BIZIBLE_TOUCHPOINT_OBJECT} "
+        f"WHERE {_BIZIBLE_CONTACT_FIELD} != null "
+        f"AND {_BIZIBLE_DATE_FIELD} >= {cutoff} "
+        f"AND IsDeleted = false"
+    )
+    result_map = {}
+    try:
+        result = sf.query_all(soql)
+        for rec in result.get("records", []):
+            cid = rec.get(_BIZIBLE_CONTACT_FIELD, "")
+            raw = rec.get(_BIZIBLE_DATE_FIELD, "") or ""
+            if cid and raw:
+                try:
+                    dt = datetime.datetime.fromisoformat(
+                        str(raw).replace("+0000", "+00:00").replace("Z", "+00:00")
+                    )
+                    if cid not in result_map or dt > result_map[cid]:
+                        result_map[cid] = dt
+                except Exception:
+                    pass
+    except Exception as e:
+        err = str(e)
+        if "INVALID_TYPE" in err or "sObject type" in err.lower() or "does not exist" in err.lower():
+            st.info("ℹ️ Bizible not installed — touchpoint dates skipped.")
+        else:
+            st.warning(f"Bizible query failed: {e}")
+    return result_map
+
+
+def _purge_classify_dirty(
+    df: pd.DataFrame,
+    active_ids: set,
+    bizible_ids: set,
+    rules: dict,
+) -> tuple[dict, dict]:
+    """
+    Returns (buckets, summary_counts).
+    buckets: {bucket_name: DataFrame}
+    summary_counts: {protected_persona, protected_activity, protected_bizible, unique_flagged}
+    """
+    d = rules["dirty_data_rules"]
+    junk_keywords    = [kw.lower() for kw in d["junk_name_keywords"]]
+    short_max        = d["short_name_max_chars"]
+    flag_numeric     = d["flag_numeric_names"]
+    flag_caps        = d["flag_all_caps_names"]
+    flag_no_last     = d["flag_missing_last_name"]
+    flag_no_contact  = d["flag_no_contact_info"]
+
+    _pat_numeric = _re.compile(r"^\d+$")
+    _pat_short   = _re.compile(rf"^.{{1,{short_max}}}$")
+
+    def _is_numeric(v):
+        return bool(_pat_numeric.match(v.strip())) if v.strip() else False
+
+    def _is_short(v):
+        return bool(_pat_short.match(v.strip())) if v.strip() else False
+
+    def _has_junk(v):
+        lower = v.lower().strip()
+        return any(kw in lower for kw in junk_keywords)
+
+    def _is_all_caps(v):
+        v = v.strip()
+        return (len(v) > 3 and " " in v and v == v.upper() and v.replace(" ", "").isalpha())
+
+    def _is_uncontactable(row):
+        return (
+            not str(row.get("Email", "")).strip()
+            and not str(row.get("Phone", "")).strip()
+            and not str(row.get("MobilePhone", "")).strip()
+        )
+
+    buckets: dict[str, list] = {k: [] for k in _BUCKET_DESCRIPTIONS}
+    protected_persona_count  = 0
+    protected_activity_count = 0
+    protected_bizible_count  = 0
+    flagged_ids = set()
+
+    for _, row in df.iterrows():
+        if _purge_is_protected_persona(row, rules):
+            protected_persona_count += 1
+            continue
+        cid = str(row.get("Id", ""))
+        if cid in active_ids:
+            protected_activity_count += 1
+            continue
+        if cid in bizible_ids:
+            protected_bizible_count += 1
+            continue
+
+        first = str(row.get("FirstName", "")).strip()
+        last  = str(row.get("LastName",  "")).strip()
+        name  = str(row.get("Name",      "")).strip()
+        flags = []
+
+        if flag_numeric and (_is_numeric(first) or _is_numeric(last)):
+            flags.append("NUMERIC_NAME")
+            buckets["01_numeric_names"].append(row)
+
+        if _has_junk(first) or _has_junk(last):
+            flags.append("JUNK_KEYWORD")
+            buckets["02_junk_keyword_names"].append(row)
+
+        if _is_short(first) or _is_short(last):
+            flags.append("SHORT_NAME")
+            buckets["03_short_names"].append(row)
+
+        if flag_no_last and not last:
+            flags.append("NO_LAST_NAME")
+            buckets["04_missing_last_name"].append(row)
+
+        if flag_caps and _is_all_caps(name):
+            flags.append("ALL_CAPS")
+            buckets["05_all_caps_names"].append(row)
+
+        if flag_no_contact and _is_uncontactable(row):
+            flags.append("UNCONTACTABLE")
+            buckets["06_no_email_no_phone"].append(row)
+            if not str(row.get("AccountId", "")).strip():
+                flags.append("ORPHANED")
+                buckets["07_orphaned_no_account"].append(row)
+
+        if (
+            flag_no_contact
+            and _is_uncontactable(row)
+            and not str(row.get("Title", "")).strip()
+            and not str(row.get(_CUSTOM_FIELD_JOB_LEVEL, "")).strip()
+        ):
+            buckets["08_uncontactable_no_title"].append(row)
+
+        if flags:
+            flagged_ids.add(cid)
+
+    result_buckets = {}
+    _display_cols = [
+        "Id", "FirstName", "LastName", "Name", "Title",
+        _CUSTOM_FIELD_JOB_LEVEL, _CUSTOM_FIELD_RESPONSIBILITY,
+        "Email", "Phone", "MobilePhone", "Account.Name", "Department",
+        "Owner.Name", "CreatedDate", "LastActivityDate",
+    ]
+    for bname, rows in buckets.items():
+        if not rows:
+            continue
+        bdf = pd.DataFrame(rows)
+        cols = [c for c in _display_cols if c in bdf.columns]
+        result_buckets[bname] = bdf[cols].copy()
+
+    summary = {
+        "protected_persona":  protected_persona_count,
+        "protected_activity": protected_activity_count,
+        "protected_bizible":  protected_bizible_count,
+        "unique_flagged":     len(flagged_ids),
+        "total_scanned":      len(df),
+    }
+    return result_buckets, summary
+
+
+def _purge_parse_sf_date(value: str):
+    if not value or not str(value).strip():
+        return None
+    v = str(value).strip()
+    try:
+        if "T" in v:
+            v = v.replace("+0000", "+00:00").replace("Z", "+00:00")
+            return datetime.datetime.fromisoformat(v)
+        return datetime.datetime.fromisoformat(v).replace(tzinfo=datetime.timezone.utc)
+    except Exception:
+        return None
+
+
+def _purge_classify_stale(df: pd.DataFrame, bizible_dates: dict, rules: dict, min_age_months: int = 12) -> pd.DataFrame:
+    """
+    Assigns each contact to an inactivity band.
+    Adds columns: last_signal_date, last_signal_source, inactivity_band, excluded_reason.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    min_age_cutoff = now - datetime.timedelta(days=min_age_months * 30)
+
+    band_defs = [
+        ("ACTIVE",     0,   24),
+        ("STALE_2YR",  24,  36),
+        ("STALE_3YR",  36,  48),
+        ("STALE_4YR+", 48, None),
+    ]
+
+    rows = []
+    for _, row in df.iterrows():
+        cid = str(row.get("Id", ""))
+        created_dt = _purge_parse_sf_date(str(row.get("CreatedDate", "")))
+
+        if _purge_is_protected_persona(row, rules):
+            rows.append({**row, "last_signal_date": "", "last_signal_source": "",
+                         "inactivity_band": "EXCLUDED", "excluded_reason": "protected_persona"})
+            continue
+
+        if created_dt and created_dt > min_age_cutoff:
+            rows.append({**row, "last_signal_date": "", "last_signal_source": "",
+                         "inactivity_band": "EXCLUDED", "excluded_reason": "record_too_new"})
+            continue
+
+        activity_dt = _purge_parse_sf_date(str(row.get("LastActivityDate", "")))
+        bizible_dt  = bizible_dates.get(cid)
+
+        if activity_dt and bizible_dt:
+            last_signal = activity_dt if activity_dt >= bizible_dt else bizible_dt
+            source = "activity" if activity_dt >= bizible_dt else "bizible"
+        elif activity_dt:
+            last_signal, source = activity_dt, "activity"
+        elif bizible_dt:
+            last_signal, source = bizible_dt, "bizible"
+        else:
+            last_signal, source = None, "none"
+
+        if last_signal is None:
+            band = "NEVER"
+        else:
+            age_months = (now - last_signal).days / 30.0
+            band = "ACTIVE"
+            for band_name, lower, upper in band_defs:
+                if upper is None:
+                    if age_months >= lower:
+                        band = band_name
+                        break
+                elif lower <= age_months < upper:
+                    band = band_name
+                    break
+
+        last_signal_str = last_signal.strftime("%Y-%m-%d") if last_signal else ""
+        rows.append({**row, "last_signal_date": last_signal_str,
+                     "last_signal_source": source, "inactivity_band": band, "excluded_reason": ""})
+
+    return pd.DataFrame(rows)
+
+
+# ── Rules diff helper ──────────────────────────────────────────────────────────
+
+def _diff_rules_plain_english(old: dict, new: dict) -> list[str]:
+    """Returns a list of human-readable change descriptions."""
+    changes = []
+    op = old.get("protected_personas", {})
+    np_ = new.get("protected_personas", {})
+    od = old.get("dirty_data_rules", {})
+    nd = new.get("dirty_data_rules", {})
+
+    list_keys_persona = ["title_keywords", "job_level_values", "responsibility_keywords"]
+    for k in list_keys_persona:
+        old_set = set(v.lower() for v in op.get(k, []))
+        new_set = set(v.lower() for v in np_.get(k, []))
+        added   = new_set - old_set
+        removed = old_set - new_set
+        label   = k.replace("_", " ")
+        if added:
+            changes.append(f"Adding to {label}: {', '.join(sorted(added))}")
+        if removed:
+            changes.append(f"Removing from {label}: {', '.join(sorted(removed))}")
+
+    for k in ("activity_lookback_months", "bizible_lookback_months"):
+        ov, nv = op.get(k), np_.get(k)
+        if ov != nv:
+            changes.append(f"Changing {k.replace('_', ' ')} from {ov} to {nv}")
+
+    list_keys_dirty = ["junk_name_keywords"]
+    for k in list_keys_dirty:
+        old_set = set(v.lower() for v in od.get(k, []))
+        new_set = set(v.lower() for v in nd.get(k, []))
+        added   = new_set - old_set
+        removed = old_set - new_set
+        label   = k.replace("_", " ")
+        if added:
+            changes.append(f"Adding to {label}: {', '.join(sorted(added))}")
+        if removed:
+            changes.append(f"Removing from {label}: {', '.join(sorted(removed))}")
+
+    bool_keys = ["flag_numeric_names", "flag_all_caps_names", "flag_missing_last_name", "flag_no_contact_info"]
+    for k in bool_keys:
+        ov, nv = od.get(k), nd.get(k)
+        if ov != nv:
+            state = "ON" if nv else "OFF"
+            changes.append(f"Setting {k.replace('_', ' ')} to {state}")
+
+    if od.get("short_name_max_chars") != nd.get("short_name_max_chars"):
+        changes.append(
+            f"Changing short name threshold from {od.get('short_name_max_chars')} "
+            f"to {nd.get('short_name_max_chars')} characters"
+        )
+
+    return changes if changes else ["No changes detected."]
+
+
+def _rules_readable_summary(rules: dict) -> str:
+    p = rules.get("protected_personas", {})
+    d = rules.get("dirty_data_rules", {})
+    lines = [
+        "**Protected personas — any one of these protects a contact:**",
+        f"- Title keywords: {', '.join(p.get('title_keywords', [])[:8])}{'…' if len(p.get('title_keywords',[])) > 8 else ''}",
+        f"- Job level values: {', '.join(p.get('job_level_values', []))}",
+        f"- Responsibility keywords: {', '.join(p.get('responsibility_keywords', []))}",
+        f"- Activity lookback: {p.get('activity_lookback_months')} months",
+        f"- Bizible lookback: {p.get('bizible_lookback_months')} months",
+        "",
+        "**Dirty data rules:**",
+        f"- Junk name keywords ({len(d.get('junk_name_keywords',[]))} total): "
+        f"{', '.join(d.get('junk_name_keywords', [])[:6])}{'…' if len(d.get('junk_name_keywords',[])) > 6 else ''}",
+        f"- Short name threshold: ≤ {d.get('short_name_max_chars')} characters",
+        f"- Flag numeric names: {'Yes' if d.get('flag_numeric_names') else 'No'}",
+        f"- Flag all-caps names: {'Yes' if d.get('flag_all_caps_names') else 'No'}",
+        f"- Flag missing last name: {'Yes' if d.get('flag_missing_last_name') else 'No'}",
+        f"- Flag no contact info: {'Yes' if d.get('flag_no_contact_info') else 'No'}",
+    ]
+    return "\n".join(lines)
+
+
+# ── AI rules editor helper ─────────────────────────────────────────────────────
+
+def _purge_ai_update_rules(instruction: str, current_rules: dict) -> tuple[dict | None, str | None]:
+    """
+    Sends the instruction + current rules to Claude API.
+    Returns (new_rules_dict, error_message). One of these will be None.
+    """
+    system_prompt = f"""You are a Salesforce data governance assistant. Your only job is to modify a JSON rules file based on plain-English instructions.
+
+Current rules:
+{json.dumps(current_rules, indent=2)}
+
+{_PURGE_RULES_SCHEMA_DOC}
+
+Output format: Return ONLY valid JSON. No explanation. No markdown. No preamble. If you cannot safely make the requested change, return the original JSON unchanged and include a top-level "error" key explaining why.
+
+Safety constraints:
+- activity_lookback_months and bizible_lookback_months must not be set below 12.
+- title_keywords must never be empty.
+- Do not remove all entries from any protection list.
+- Do not add any keys not defined in the schema."""
+
+    try:
+        client = get_anthropic_client()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": instruction}],
+        )
+        raw = response.content[0].text.strip()
+        # Strip markdown fences if Claude adds them despite instructions
+        if raw.startswith("```"):
+            raw = _re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = _re.sub(r"\n?```$", "", raw)
+        new_rules = json.loads(raw)
+        if "error" in new_rules and new_rules["error"]:
+            return None, str(new_rules["error"])
+        return new_rules, None
+    except json.JSONDecodeError as e:
+        return None, f"Claude returned malformed JSON: {e}. Raw response shown below."
+    except Exception as e:
+        return None, f"API error: {e}"
+
+
+# ── CSV download helpers ───────────────────────────────────────────────────────
+
+def _make_zip_bytes(buckets: dict) -> bytes:
+    buf = io.BytesIO()
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, df in buckets.items():
+            csv_bytes = df.to_csv(index=False).encode("utf-8")
+            zf.writestr(f"{name}_{date_str}.csv", csv_bytes)
+    return buf.getvalue()
+
+
+# ── Field picker (controls which fields are fetched from Salesforce) ──────────
+
+def _purge_field_picker_ui(
+    state_key: str,
+    required_fields: list,
+    default_extra_direct: list,
+    default_related: list,
+) -> tuple:
+    """
+    Renders an ⚙️ Extra Fields expander with two multiselects:
+      1. Direct Contact fields  — any queryable field from the Contact object
+      2. Related fields         — predefined set of Account.*, Owner.*, ReportsTo.* fields
+
+    Returns (extra_direct: list, selected_related: list).
+    Required fields are always fetched; this returns only the *extras*.
+    """
+    direct_key  = f"{state_key}_direct"
+    related_key = f"{state_key}_related"
+
+    sf_fields     = _purge_describe_contact_fields()
+    req_set       = set(required_fields)
+    optional      = [f for f in sf_fields if f["name"] not in req_set]
+    opt_names     = [f["name"] for f in optional]
+    opt_labels    = {
+        f["name"]: f"{f['label']}  ({f['name']} · {f['type']})"
+        for f in optional
+    }
+
+    saved_direct  = [f for f in st.session_state.get(direct_key,  default_extra_direct) if f in opt_names]
+    saved_related = [f for f in st.session_state.get(related_key, default_related)       if f in _PURGE_RELATED_FIELD_OPTIONS]
+
+    with st.expander("⚙️  Extra Fields", expanded=False):
+        st.caption(
+            "Add fields from the Contact record (or related objects) to include in the query. "
+            "Core classification fields are always fetched. **Re-run the scan after changing.**"
+        )
+
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            st.markdown("**Contact fields**")
+            chosen_direct = st.multiselect(
+                "Contact fields",
+                options=opt_names,
+                default=saved_direct,
+                format_func=lambda x: opt_labels.get(x, x),
+                key=f"{direct_key}_ms",
+                label_visibility="collapsed",
+                placeholder="Search and add Contact fields…",
+            )
+
+        with col_b:
+            st.markdown("**Related fields**")
+            chosen_related = st.multiselect(
+                "Related fields",
+                options=_PURGE_RELATED_FIELD_OPTIONS,
+                default=saved_related,
+                key=f"{related_key}_ms",
+                label_visibility="collapsed",
+                placeholder="Account.Industry, Owner.Email…",
+            )
+
+        if st.button("↩  Reset to defaults", key=f"{state_key}_field_reset"):
+            for k in (direct_key, related_key, f"{direct_key}_ms", f"{related_key}_ms"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
+    st.session_state[direct_key]  = chosen_direct
+    st.session_state[related_key] = chosen_related
+    return chosen_direct, chosen_related
+
+
+# ── Shared column picker ───────────────────────────────────────────────────────
+
+def _col_picker(df: pd.DataFrame, default_cols: list, state_key: str) -> list:
+    """
+    Renders a compact ⚙️ Columns expander with a multiselect.
+    Persists the selection in session state across reruns.
+    Returns the list of chosen columns (always non-empty; falls back to defaults).
+    """
+    all_cols       = list(df.columns)
+    valid_defaults = [c for c in default_cols if c in all_cols]
+
+    # Seed on first render, then keep saved selection aligned with current df
+    saved = [c for c in st.session_state.get(state_key, valid_defaults) if c in all_cols]
+    if not saved:
+        saved = valid_defaults
+
+    with st.expander("⚙️  Columns", expanded=False):
+        chosen = st.multiselect(
+            "Choose columns",
+            options=all_cols,
+            default=saved,
+            key=f"{state_key}_ms",
+            label_visibility="collapsed",
+            help="Select which columns to show in the table below. The CSV download will match your selection.",
+        )
+        if st.button("↩  Reset to defaults", key=f"{state_key}_reset", help="Restore the default column set"):
+            st.session_state.pop(state_key, None)
+            st.session_state.pop(f"{state_key}_ms", None)
+            st.rerun()
+
+    result = chosen if chosen else valid_defaults
+    st.session_state[state_key] = result
+    return result
+
+
+# ── Tab 1: Dirty Data Scan ─────────────────────────────────────────────────────
+
+def _render_dirty_data_tab(rules: dict, dry_run_mode: bool, auto_backup: bool):
+    st.subheader("Dirty Data Scan")
+    st.caption(
+        "Flags contacts with junk names, missing fields, or no contact information. "
+        "Protected personas, recently active contacts, and Bizible contacts are excluded."
+    )
+
+    extra_direct_d, extra_related_d = _purge_field_picker_ui(
+        "_purge_dirty_fields",
+        _PURGE_DIRTY_REQUIRED,
+        default_extra_direct=[],
+        default_related=list(_PURGE_DEFAULT_RELATED),
+    )
+
+    # Warn if fields changed since last scan
+    _dirty_field_sig = str(sorted(extra_direct_d) + sorted(extra_related_d))
+    if (
+        st.session_state.get("_purge_dirty_buckets") is not None
+        and st.session_state.get("_purge_dirty_field_sig") != _dirty_field_sig
+    ):
+        st.warning("⚠️  Field selection has changed — re-run the scan to fetch the updated columns.")
+
+    if st.button("▶  Run Dirty Data Scan", type="primary", key="purge_dirty_run"):
+        sf = get_sf_connection()
+        with st.spinner("Fetching contacts…"):
+            df = _purge_fetch_contacts_dirty(sf, extra_direct=extra_direct_d, extra_related=extra_related_d)
+        if df.empty:
+            st.warning("No contacts returned.")
+            return
+
+        p = rules["protected_personas"]
+        with st.spinner(f"Fetching activity lookback ({p['activity_lookback_months']} months)…"):
+            active_ids = _purge_fetch_active_contact_ids(sf, p["activity_lookback_months"])
+        with st.spinner(f"Fetching Bizible lookback ({p['bizible_lookback_months']} months)…"):
+            bizible_ids = _purge_fetch_bizible_ids(sf, p["bizible_lookback_months"])
+
+        with st.spinner("Classifying contacts…"):
+            buckets, summary = _purge_classify_dirty(df, active_ids, bizible_ids, rules)
+
+        st.session_state["_purge_dirty_buckets"]   = buckets
+        st.session_state["_purge_dirty_summary"]   = summary
+        st.session_state["_purge_dirty_df_count"]  = len(df)
+        st.session_state["_purge_dirty_field_sig"] = _dirty_field_sig
+
+    buckets = st.session_state.get("_purge_dirty_buckets")
+    summary = st.session_state.get("_purge_dirty_summary")
+
+    if buckets is None:
+        return
+
+    # Summary bar
+    total   = summary["total_scanned"]
+    flagged = summary["unique_flagged"]
+    prot    = summary["protected_persona"] + summary["protected_activity"] + summary["protected_bizible"]
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Scanned",          f"{total:,}")
+    col2.metric("Protected",        f"{prot:,}")
+    col3.metric("— Persona",        f"{summary['protected_persona']:,}")
+    col4.metric("— Activity",       f"{summary['protected_activity']:,}")
+    col5.metric("— Bizible",        f"{summary['protected_bizible']:,}")
+    st.metric("Unique Contacts Flagged", f"{flagged:,}")
+
+    if not buckets:
+        st.success("No dirty data contacts found outside all exclusion criteria.")
+        return
+
+    st.markdown("---")
+
+    # ── Column picker (shared across all buckets) ──────────────────────────────
+    _all_bucket_cols = list(pd.concat(list(buckets.values()), ignore_index=True).columns)
+    _dirty_default_cols = [
+        "Id", "FirstName", "LastName", "Name", "Title",
+        _CUSTOM_FIELD_JOB_LEVEL, _CUSTOM_FIELD_RESPONSIBILITY,
+        "Email", "Phone", "MobilePhone", "Account.Name", "Department",
+        "Owner.Name", "CreatedDate", "LastActivityDate",
+    ]
+    _dirty_show_cols = _col_picker(
+        pd.DataFrame(columns=_all_bucket_cols),
+        _dirty_default_cols,
+        "_purge_dirty_col_pick",
+    )
+
+    # Download all
+    date_str  = datetime.datetime.now().strftime("%Y-%m-%d")
+    all_df    = pd.concat(list(buckets.values()), ignore_index=True)
+    _dl_cols  = [c for c in _dirty_show_cols if c in all_df.columns]
+    zip_bytes = _make_zip_bytes({k: v[[c for c in _dl_cols if c in v.columns]] for k, v in buckets.items()})
+
+    with render_dry_run_panel(all_df, "Export", "Contact") if not dry_run_mode else _null_ctx():
+        pass
+
+    if auto_backup:
+        backup_records(all_df, "purge_dirty_export", "Contact")
+
+    st.download_button(
+        "⬇  Download all buckets (ZIP)",
+        data=zip_bytes,
+        file_name=f"contact_dirty_data_{date_str}.zip",
+        mime="application/zip",
+        key="purge_dirty_download_all",
+    )
+
+    # Per-bucket expanders
+    for bname, desc in _BUCKET_DESCRIPTIONS.items():
+        bdf = buckets.get(bname)
+        count = len(bdf) if bdf is not None else 0
+        with st.expander(f"**{bname}** — {count:,} contacts — {desc}", expanded=False):
+            if bdf is None or bdf.empty:
+                st.caption("No contacts in this bucket.")
+            else:
+                _show = [c for c in _dirty_show_cols if c in bdf.columns]
+                st.dataframe(bdf[_show], hide_index=True, width="stretch")
+                csv_bytes = bdf[_show].to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    f"⬇  Download {bname}.csv",
+                    data=csv_bytes,
+                    file_name=f"{bname}_{date_str}.csv",
+                    mime="text/csv",
+                    key=f"purge_dl_{bname}",
+                )
+
+
+# ── Tab 2: Stale Contact Scan ──────────────────────────────────────────────────
+
+def _render_stale_tab(rules: dict, dry_run_mode: bool, auto_backup: bool):
+    st.subheader("Stale Contact Scan")
+    st.caption(
+        "Contacts with no engagement signal (Task, Event, or Bizible touchpoint) for an extended period."
+    )
+
+    p = rules["protected_personas"]
+    min_age = st.number_input(
+        "Minimum record age (months) before flagging as stale",
+        min_value=1, max_value=60, value=12,
+        key="purge_stale_min_age",
+        help="Contacts created more recently than this are excluded — they may simply not have been engaged yet.",
+    )
+
+    threshold_choice = st.radio(
+        "Show contacts stale for at least:",
+        ["24 months", "36 months", "48 months", "Show all bands"],
+        horizontal=True,
+        key="purge_stale_threshold",
+    )
+
+    extra_direct_s, extra_related_s = _purge_field_picker_ui(
+        "_purge_stale_fields",
+        _PURGE_STALE_REQUIRED,
+        default_extra_direct=[],
+        default_related=list(_PURGE_DEFAULT_RELATED),
+    )
+
+    # Warn if fields changed since last scan
+    _stale_field_sig = str(sorted(extra_direct_s) + sorted(extra_related_s))
+    if (
+        st.session_state.get("_purge_stale_classified") is not None
+        and st.session_state.get("_purge_stale_field_sig") != _stale_field_sig
+    ):
+        st.warning("⚠️  Field selection has changed — re-run the scan to fetch the updated columns.")
+
+    if st.button("▶  Run Stale Contact Scan", type="primary", key="purge_stale_run"):
+        sf = get_sf_connection()
+        with st.spinner("Fetching contacts…"):
+            df = _purge_fetch_contacts_stale(sf, extra_direct=extra_direct_s, extra_related=extra_related_s)
+        if df.empty:
+            st.warning("No contacts returned.")
+            return
+
+        with st.spinner("Fetching Bizible dates (aggregate query)…"):
+            bizible_dates = _purge_fetch_bizible_dates(sf)
+
+        with st.spinner("Classifying contacts into inactivity bands…"):
+            classified = _purge_classify_stale(df, bizible_dates, rules, min_age_months=int(min_age))
+
+        st.session_state["_purge_stale_classified"] = classified
+        st.session_state["_purge_stale_field_sig"]  = _stale_field_sig
+
+    classified = st.session_state.get("_purge_stale_classified")
+    if classified is None:
+        return
+
+    # Apply threshold filter to display (no re-fetch)
+    threshold_map = {"24 months": 24, "36 months": 36, "48 months": 48}
+    evaluated = classified[~classified["excluded_reason"].isin(["protected_persona", "record_too_new"])]
+
+    if threshold_choice == "Show all bands":
+        stale_bands = ["ACTIVE", "STALE_2YR", "STALE_3YR", "STALE_4YR+", "NEVER"]
+    else:
+        months_thresh = threshold_map[threshold_choice]
+        if months_thresh == 24:
+            stale_bands = ["STALE_2YR", "STALE_3YR", "STALE_4YR+", "NEVER"]
+        elif months_thresh == 36:
+            stale_bands = ["STALE_3YR", "STALE_4YR+", "NEVER"]
+        else:
+            stale_bands = ["STALE_4YR+", "NEVER"]
+
+    display_df = evaluated[evaluated["inactivity_band"].isin(stale_bands)]
+
+    # Summary count table
+    total_evaluated = len(evaluated)
+    summary_rows = []
+    for band, label in _STALE_BAND_LABELS.items():
+        count = len(evaluated[evaluated["inactivity_band"] == band])
+        pct   = (count / total_evaluated * 100) if total_evaluated > 0 else 0
+        summary_rows.append({"Band": band, "Count": count, "% of Evaluated": f"{pct:.1f}%", "Description": label})
+    st.dataframe(pd.DataFrame(summary_rows), hide_index=True, width="stretch")
+
+    # Visual bar chart
+    chart_data = pd.DataFrame(summary_rows).set_index("Band")["Count"]
+    st.bar_chart(chart_data)
+
+    # Detail dataframe
+    st.markdown(f"**Showing {len(display_df):,} contacts matching selected threshold.**")
+
+    _stale_default_cols = [
+        "Id", "FirstName", "LastName", "Name", "Title",
+        _CUSTOM_FIELD_JOB_LEVEL, _CUSTOM_FIELD_RESPONSIBILITY,
+        "Account.Name", "Department", "Owner.Name",
+        "CreatedDate", "LastActivityDate",
+        "last_signal_date", "last_signal_source", "inactivity_band",
+    ]
+    show_cols = _col_picker(display_df, _stale_default_cols, "_purge_stale_col_pick")
+
+    st.dataframe(display_df[show_cols], hide_index=True, width="stretch")
+
+    if not display_df.empty:
+        if auto_backup:
+            backup_records(display_df[show_cols], "purge_stale_export", "Contact")
+        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        csv_bytes = display_df[show_cols].to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇  Download stale contacts CSV",
+            data=csv_bytes,
+            file_name=f"contact_stale_{threshold_choice.replace(' ', '_')}_{date_str}.csv",
+            mime="text/csv",
+            key="purge_stale_download",
+        )
+
+
+# ── Tab 3: AI Rules Editor ─────────────────────────────────────────────────────
+
+def _render_rules_editor_tab():
+    st.subheader("Rules Editor (AI-Assisted)")
+    st.caption(
+        "Describe a rule change in plain English. A.D.A.M. will preview the proposed change "
+        "before writing it to purge_rules.json."
+    )
+
+    # Init session state
+    if "_purge_chat_history" not in st.session_state:
+        st.session_state["_purge_chat_history"] = []
+    if "_purge_proposed_rules" not in st.session_state:
+        st.session_state["_purge_proposed_rules"] = None
+    if "_purge_proposed_diff" not in st.session_state:
+        st.session_state["_purge_proposed_diff"] = None
+    if "_purge_ai_error" not in st.session_state:
+        st.session_state["_purge_ai_error"] = None
+
+    current_rules = _load_purge_rules()
+
+    # Current rules summary
+    with st.expander("📋  Current rules summary", expanded=False):
+        st.markdown(_rules_readable_summary(current_rules))
+
+    st.markdown("---")
+
+    # Input
+    instruction = st.text_input(
+        "Describe the rule change you want to make",
+        placeholder="e.g. Also protect anyone with 'enablement' in their title",
+        key="purge_rule_instruction",
+    )
+
+    if st.button("🤖  Preview change", key="purge_rule_preview") and instruction.strip():
+        with st.spinner("Asking Claude to update rules…"):
+            new_rules, err = _purge_ai_update_rules(instruction.strip(), current_rules)
+
+        if err:
+            st.session_state["_purge_ai_error"] = err
+            st.session_state["_purge_proposed_rules"] = None
+            if "malformed JSON" in str(err):
+                st.error(err)
+        else:
+            diff = _diff_rules_plain_english(current_rules, new_rules)
+            st.session_state["_purge_proposed_rules"] = new_rules
+            st.session_state["_purge_proposed_diff"]  = diff
+            st.session_state["_purge_ai_error"]       = None
+
+        # Append to conversation history (keep last 5)
+        history = st.session_state["_purge_chat_history"]
+        history.append({
+            "instruction": instruction.strip(),
+            "diff":        st.session_state["_purge_proposed_diff"],
+            "error":       st.session_state["_purge_ai_error"],
+        })
+        st.session_state["_purge_chat_history"] = history[-5:]
+
+    # Proposed diff + apply/revert
+    proposed = st.session_state.get("_purge_proposed_rules")
+    if proposed:
+        diff = st.session_state.get("_purge_proposed_diff", [])
+        st.markdown("**Proposed changes:**")
+        for line in diff:
+            st.markdown(f"- {line}")
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("✅  Apply changes", type="primary", key="purge_rule_apply"):
+                _save_purge_rules(proposed)
+                st.success("purge_rules.json updated. A backup was saved to purge_rules.json.bak.")
+                st.session_state["_purge_proposed_rules"] = None
+                st.session_state["_purge_proposed_diff"]  = None
+                st.rerun()
+        with col2:
+            if st.button("↩  Revert to last saved", key="purge_rule_revert"):
+                if os.path.exists(_PURGE_RULES_BAK_PATH):
+                    import shutil
+                    shutil.copy2(_PURGE_RULES_BAK_PATH, _PURGE_RULES_PATH)
+                    st.success("Reverted to previous purge_rules.json.")
+                else:
+                    st.warning("No backup file found (.bak). Nothing reverted.")
+                st.session_state["_purge_proposed_rules"] = None
+                st.session_state["_purge_proposed_diff"]  = None
+                st.rerun()
+
+    # Conversation history
+    history = st.session_state.get("_purge_chat_history", [])
+    if history:
+        with st.expander("💬  Conversation history (last 5)", expanded=False):
+            for i, entry in enumerate(reversed(history), 1):
+                st.markdown(f"**{i}. You:** {entry['instruction']}")
+                if entry.get("error"):
+                    st.markdown(f"   ❌ Error: {entry['error']}")
+                elif entry.get("diff"):
+                    for d in entry["diff"]:
+                        st.markdown(f"   → {d}")
+
+
+# ── Null context manager (used to optionally skip dry-run panel) ───────────────
+
+from contextlib import contextmanager
+
+@contextmanager
+def _null_ctx():
+    yield
+
+
+# ── Page entry point ───────────────────────────────────────────────────────────
+
+def render_contact_purge_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("Contact Purge")
+
+    rules = _load_purge_rules()
+
+    tab1, tab2, tab3 = st.tabs([
+        "🗑️  Dirty Data Scan",
+        "📅  Stale Contact Scan",
+        "🤖  Rules Editor (AI)",
+    ])
+
+    with tab1:
+        _render_dirty_data_tab(rules, dry_run_mode, auto_backup)
+
+    with tab2:
+        _render_stale_tab(rules, dry_run_mode, auto_backup)
+
+    with tab3:
+        _render_rules_editor_tab()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: HISTORY & LOGS  (page = "history")
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_history_page():
+    """
+    History & Logs page.
+    Section 1 — Query History: all queries run this session as a table;
+                each row has a Load button that reloads the SOQL and navigates
+                to the Query Builder.
+    Section 2 — Audit Logs: CSV files written to sf_backups/ by auto-backup.
+    """
+    import pandas as _pd
+
+    st.header("History & Logs")
+
+    # ── Query History ──────────────────────────────────────────────────────────────────────────
+    st.subheader("Query History")
+
+    if not st.session_state.query_history:
+        st.info("No queries run yet this session.")
+    else:
+        hist_df = _pd.DataFrame(st.session_state.query_history)
+        st.dataframe(hist_df[["timestamp", "object", "rows", "soql"]], width="stretch", hide_index=True)
+
+        st.caption("Click Load to copy a query into the Raw SOQL editor.")
+        for _i, _h in enumerate(st.session_state.query_history):
+            _label = f"{_h['timestamp']}  {_h['object']} ({_h['rows']:,})"
+            _col1, _col2 = st.columns([5, 1])
+            with _col1:
+                st.caption(_label)
+            with _col2:
+                if st.button("Load", key=f"hist_load_{_i}"):
+                    st.session_state.last_soql   = _h["soql"]
+                    st.session_state.last_object = _h["object"]
+                    st.session_state["query_mode"] = "📝  Raw SOQL"
+                    nav_to("query")
+
+    st.markdown("---")
+
+    # ── Audit Logs ──────────────────────────────────────────────────────────────────────────────
+    st.subheader("Audit Logs")
+
+    if not os.path.isdir(BACKUP_DIR):
+        st.info(f"No audit logs yet. Backup files will appear in `{BACKUP_DIR}/` after the first update or delete.")
+    else:
+        try:
+            _files = sorted(
+                [f for f in os.listdir(BACKUP_DIR) if f.endswith(".csv") or f.endswith(".log")],
+                reverse=True,
+            )
+            if not _files:
+                st.info(f"No CSV files in `{BACKUP_DIR}/` yet.")
+            else:
+                st.caption(f"{len(_files)} file(s) in `{BACKUP_DIR}/`")
+                for _fname in _files[:50]:
+                    _fpath = os.path.join(BACKUP_DIR, _fname)
+                    try:
+                        _size = os.path.getsize(_fpath)
+                        _size_str = f"{_size / 1024:.1f} KB" if _size >= 1024 else f"{_size} B"
+                    except Exception:
+                        _size_str = "?"
+                    st.text(f"📄  {_fname}  ({_size_str})")
+        except Exception as e:
+            st.error(f"Could not list backup files: {e}")
+
+
+def main():
+    # ── Session state defaults ────────────────────────────────────────────────────────────────────────
+    defaults = {
+        "sf":                 None,
+        "anthropic_client":   None,
+        "query_results":      None,
+        "last_soql":          "",
+        "last_object":        "",
+        "dry_run_pending":    None,
+        "query_history":      [],
+        "ai_generated_soql":   "",
+        "ai_steps":            [],
+        "ai_explanation":      "",
+        "ai_safety_notes":     [],
+        "ai_gen_count":        0,
+        "ai_python_strategy":  None,
+        "ai_detected_object":  "Account",
+        "excluded_ids":       set(),
+        "page":               "dashboard",
+        # Dedupe tab state
+        "dedupe_candidates":  None,
+        "dedupe_review_idx":  0,
+        "dedupe_dismissed":   set(),
+        "dedupe_merged":      set(),
+        "ai_update_plan":     None,
+        # Contact deduplication state
+        "contact_dedupe_candidates":  None,
+        "contact_dedupe_review_idx":  0,
+        "contact_dedupe_dismissed":   set(),
+        "contact_dedupe_merged":      set(),
+        "contact_dedupe_case_ids":    None,
+        # Reassignment Wizard state
+        "rz_step":             1,
+        "rz_territory":        "",
+        "rz_from_user_id":     "",
+        "rz_to_user_id":       "",
+        "rz_accounts_df":      None,
+        "rz_excluded_ids":     set(),
+        "rz_migrate_contacts": True,
+        "rz_migrate_opps":     True,
+        "rz_result":           None,
+    }
+    _valid_action_types = {
+        "🤖  AI Update Assistant",
+        "✏️  Update a field value",
+        "🗑️  Delete these records",
+    }
+    if st.session_state.get("action_type_v2") not in _valid_action_types:
+        st.session_state["action_type_v2"] = "🤖  AI Update Assistant"
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+    # ── Header ────────────────────────────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div class="app-header">
+      <h1>⚡ A.D.A.M.</h1>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v6.0</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Sidebar ────────────────────────────────────────────────────────────────────────────────
+    with st.sidebar:
+        dry_run_mode, auto_backup = render_sidebar_nav()
+
+    # ── Page routing ───────────────────────────────────────────────────══════════════════════════
+    page = st.session_state.page
+    if page == "dashboard":
+        render_dashboard_page(dry_run_mode, auto_backup)
+    elif page == "query":
+        render_query_page(dry_run_mode, auto_backup)
+    elif page == "results":
+        render_results_page(dry_run_mode, auto_backup)
+    elif page == "csv_loader":
+        render_csv_loader_page(dry_run_mode, auto_backup)
+    elif page == "force_update":
+        render_force_update_page(dry_run_mode, auto_backup)
+    elif page == "dedupe":
+        render_dedupe_page(dry_run_mode, auto_backup)
+    elif page == "contact_purge":
+        render_contact_purge_page(dry_run_mode, auto_backup)
+    elif page == "website_cleanup":
+        render_website_cleanup_page(dry_run_mode, auto_backup)
+    elif page == "archival":
+        render_archival_page(dry_run_mode, auto_backup)
+    elif page == "territory":
+        render_territory_tab()
+    elif page == "permissions":
+        render_permissions_page(dry_run_mode, auto_backup)
+    elif page == "automation_inventory":
+        render_automation_inventory_page(dry_run_mode, auto_backup)
+    elif page == "schema_explorer":
+        render_schema_explorer_page(dry_run_mode, auto_backup)
+    elif page == "report_scanner":
+        render_report_scanner_page(dry_run_mode, auto_backup)
+    elif page == "ownership_transfer":
+        render_ownership_transfer_page(dry_run_mode, auto_backup)
+    elif page == "history":
+        render_history_page()
+    elif page == "change_log":
+        render_change_log_page(dry_run_mode, auto_backup)
+    elif page == "shortcuts":
+        render_shortcuts_page(dry_run_mode, auto_backup)
+    elif page == "digest_config":
+        render_digest_config_page(dry_run_mode, auto_backup)
+    else:
+        render_dashboard_page(dry_run_mode, auto_backup)
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# USER HUB
+# Look up any active user to see their full access picture:
+#   - Profile, role, last login
+#   - All assigned permission sets (shadow/profile-owned sets excluded)
+#   - Access Troubleshooter: pick an object and see exactly what CRUD access
+#     the user has, and which permission set or profile grants each permission
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_all_active_users() -> list[dict]:
+    """Fetch all active users for the lookup dropdown. Cached 5 min."""
+    sf = get_sf_connection()
+    result = sf.query(
+        "SELECT Id, Name, Email, Profile.Name, UserRole.Name, LastLoginDate "
+        "FROM User WHERE IsActive = true ORDER BY Name LIMIT 1000"
+    )
+    return result.get("records", [])
+
+
+def render_user_hub():
+    """
+    Renders the User Hub tab.
+
+    Section 1 — User Overview: profile, role, last login, and explicitly
+    assigned permission sets. Shadow/profile-owned sets are filtered OUT via
+    PermissionSet.IsOwnedByProfile = false.
+
+    Section 2 — Access Troubleshooter: pick any object and see the user's CRUD
+    access, each row labelled by which permission set or profile grants it.
+    """
+    st.subheader("User Hub")
+    st.caption(
+        "Look up any active user to see their full access picture — "
+        "profile, permission sets, and object-level permissions."
+    )
+
+    # ── User picker ───────────────────────────────────────────────────────────
+    users = get_all_active_users()
+    if not users:
+        st.warning("No active users found — check your Salesforce connection.")
+        return
+
+    clean_options = {}
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        label = f"{u.get('Name', '')} ({u.get('Email', '')})"
+        clean_options[label] = {k: v for k, v in u.items() if k != "attributes"}
+
+    selected_label = st.selectbox(
+        "Select a user",
+        options=["— pick a user —"] + list(clean_options.keys()),
+        key="user_hub_picker",
+    )
+
+    if selected_label == "— pick a user —":
+        st.info("Select a user above to load their access details.")
+        return
+
+    user       = clean_options[selected_label]
+    user_id    = user.get("Id", "")
+    profile_d  = user.get("Profile", {})
+    profile    = profile_d.get("Name", "Unknown") if isinstance(profile_d, dict) else "Unknown"
+    role_d     = user.get("UserRole", {})
+    role       = role_d.get("Name", "No role assigned") if isinstance(role_d, dict) else "No role assigned"
+    last_login = user.get("LastLoginDate", None)
+    last_login_str = last_login[:10] if last_login else "Never"
+
+    # ── Overview card ─────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### \U0001f464 User Overview")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Profile",    profile)
+    col2.metric("Role",       role)
+    col3.metric("Last Login", last_login_str)
+
+    # ── Access Troubleshooter ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### \U0001f50d Access Troubleshooter")
+    st.caption(
+        "Choose a Salesforce object to see exactly what Create / Read / Edit / Delete / "
+        "View All / Modify All access this user has, and which permission set or "
+        "profile grants each permission."
+    )
+
+    TROUBLESHOOT_OBJECTS = [
+        "Account", "Contact", "Lead", "Opportunity", "Case",
+        "Campaign", "CampaignMember", "Contract", "Quote",
+        "OpportunityLineItem", "Task", "Event", "User",
+    ]
+
+    selected_object = st.selectbox(
+        "Object to check",
+        options=["— select an object —"] + TROUBLESHOOT_OBJECTS,
+        key="user_hub_object_picker",
+    )
+
+    if selected_object != "— select an object —":
+        if st.button("\U0001f50d  Check Access", type="primary", key="user_hub_check_btn"):
+            with st.spinner(f"Checking {selected_object} permissions\u2026"):
+                try:
+                    sf = get_sf_connection()
+
+                    # Step 1: Get ALL PermissionSet IDs for this user — including the
+                    # profile-owned shadow set, because ObjectPermissions are stored
+                    # against it. We only hide it from the PS list above, not here.
+                    psa_all = sf.query(
+                        f"SELECT PermissionSetId, PermissionSet.Name, "
+                        f"PermissionSet.IsOwnedByProfile "
+                        f"FROM PermissionSetAssignment "
+                        f"WHERE AssigneeId = '{user_id}'"
+                    )
+                    psa_all_records = psa_all.get("records", [])
+
+                    if not psa_all_records:
+                        st.warning("No permission set assignments found for this user.")
+                    else:
+                        # Build map: PermissionSetId -> display name
+                        ps_id_to_name = {}
+                        ps_ids = []
+                        for r in psa_all_records:
+                            ps = r.get("PermissionSet", {}) if isinstance(r.get("PermissionSet"), dict) else {}
+                            ps_id = r.get("PermissionSetId", "")
+                            is_profile_owned = ps.get("IsOwnedByProfile", False)
+                            # Label the profile shadow set clearly so the source is obvious
+                            display_name = f"Profile: {profile}" if is_profile_owned else ps.get("Name", ps_id)
+                            ps_id_to_name[ps_id] = display_name
+                            ps_ids.append(ps_id)
+
+                        # Step 2: Query ObjectPermissions across all the user's permission sets
+                        id_list = "', '".join(ps_ids)
+                        obj_perms = sf.query(
+                            f"SELECT ParentId, "
+                            f"PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, "
+                            f"PermissionsViewAllRecords, PermissionsModifyAllRecords "
+                            f"FROM ObjectPermissions "
+                            f"WHERE SObjectType = '{selected_object}' "
+                            f"AND ParentId IN ('{id_list}')"
+                        )
+                        obj_records = obj_perms.get("records", [])
+
+                        if not obj_records:
+                            st.warning(
+                                f"No object permissions found for **{selected_object}** across "
+                                f"this user's permission sets. The user likely has no access to this object."
+                            )
+                        else:
+                            # Step 3: Build results table
+                            PERM_COLS = [
+                                ("PermissionsRead",             "Read"),
+                                ("PermissionsCreate",           "Create"),
+                                ("PermissionsEdit",             "Edit"),
+                                ("PermissionsDelete",           "Delete"),
+                                ("PermissionsViewAllRecords",   "View All"),
+                                ("PermissionsModifyAllRecords", "Modify All"),
+                            ]
+
+                            rows = []
+                            for r in obj_records:
+                                parent_id   = r.get("ParentId", "")
+                                source_name = ps_id_to_name.get(parent_id, parent_id)
+                                row = {"Granted By": source_name}
+                                for api_name, label in PERM_COLS:
+                                    row[label] = "\u2705" if r.get(api_name, False) else "\u2014"
+                                rows.append(row)
+
+                            # Profile row first, then alphabetical
+                            rows.sort(key=lambda x: (0 if x["Granted By"].startswith("Profile:") else 1, x["Granted By"]))
+
+                            st.markdown(f"**{selected_object} permissions for {user.get('Name', '')}:**")
+                            st.dataframe(rows, width='stretch', hide_index=True)
+
+                            # Step 4: Effective access summary
+                            effective = {label: False for _, label in PERM_COLS}
+                            for row in rows:
+                                for _, label in PERM_COLS:
+                                    if row.get(label) == "\u2705":
+                                        effective[label] = True
+
+                            granted = [lbl for lbl in effective if effective[lbl]]
+                            denied  = [lbl for lbl in effective if not effective[lbl]]
+
+                            if granted:
+                                st.success(f"**Effective access:** {', '.join(granted)}")
+                            if denied:
+                                st.caption(f"No access granted to: {', '.join(denied)}")
+
+                except Exception as e:
+                    st.error(f"Error checking permissions: {e}")
+
+    # ── Permission Sets ───────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### \U0001f510 Assigned Permission Sets")
+    st.caption(
+        "Explicitly assigned permission sets only. The system-generated shadow "
+        "permission set tied to the user's profile is hidden."
+    )
+
+    with st.spinner("Loading permission sets\u2026"):
+        try:
+            sf = get_sf_connection()
+            # PermissionSet.IsOwnedByProfile = false filters out the shadow
+            # permission set Salesforce auto-generates for every profile.
+            psa_result = sf.query(
+                f"SELECT PermissionSet.Name, PermissionSet.Label, "
+                f"PermissionSet.Description "
+                f"FROM PermissionSetAssignment "
+                f"WHERE AssigneeId = '{user_id}' "
+                f"AND PermissionSet.IsOwnedByProfile = false "
+                f"ORDER BY PermissionSet.Name"
+            )
+            psa_records = psa_result.get("records", [])
+        except Exception as e:
+            st.error(f"Could not load permission sets: {e}")
+            psa_records = []
+
+    if psa_records:
+        rows = []
+        for r in psa_records:
+            ps = r.get("PermissionSet", {}) if isinstance(r.get("PermissionSet"), dict) else {}
+            rows.append({
+                "Permission Set Name": ps.get("Name", ""),
+                "Label":              ps.get("Label", ""),
+                "Description":        ps.get("Description", "") or "",
+            })
+        st.dataframe(rows, width='stretch', hide_index=True)
+        st.caption(f"{len(rows)} permission set(s) explicitly assigned.")
+    else:
+        st.info("No additional permission sets assigned \u2014 access is governed by profile only.")
+
+
+if __name__ == "__main__":
+    main()

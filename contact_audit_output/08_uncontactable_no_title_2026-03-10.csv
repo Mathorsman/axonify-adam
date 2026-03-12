@@ -1,0 +1,7 @@
+Id,FirstName,LastName,Name,Title,Job_Level__c,Responsibility_Automation__c,Email,Phone,MobilePhone,Account.Name,Department,Owner.Name,CreatedDate,LastActivityDate,dirty_flags
+0030L00001va0jeQAA,Ashburton,-,Ashburton -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:02:13.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M8mIzAAJ,DirectAxis,-,DirectAxis -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-06-04T07:09:03.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jAQAQ,FNB,-,FNB -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T07:59:42.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0xbQAA,Other,-,Other -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T09:39:27.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jyQAA,RMB,-,RMB -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:03:56.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jPQAQ,Wesbank,-,Wesbank -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:01:20.000+0000,,SHORT_NAME | UNCONTACTABLE

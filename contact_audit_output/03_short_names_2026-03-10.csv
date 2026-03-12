@@ -1,0 +1,874 @@
+Id,FirstName,LastName,Name,Title,Job_Level__c,Responsibility_Automation__c,Email,Phone,MobilePhone,Account.Name,Department,Owner.Name,CreatedDate,LastActivityDate,dirty_flags
+0030L00001my3WtQAI,,-,-,,Needs Assignment,Other,,,,Wolters Kluwer Financial Services Solutions - Sales,,Adam George,2017-02-13T18:35:13.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRR6DAAX,-,-,- -,,Needs Assignment,Other,,,,New Zealand Blood Service,,Axonify,2019-06-27T17:42:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VdAXSAA3,-,-,- -,,Needs Assignment,Other,,303-307-2100,,Comex Group,,Adam George,2019-08-23T20:58:18.000+0000,,SHORT_NAME
+0030h00002VdAW5AAN,-,-,- -,,Needs Assignment,Other,,,,Abbvie - Mexico,,Adam George,2019-08-23T20:48:06.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRAAAA5,-,-,- -,,Needs Assignment,Other,,,,Sephora Southeast Asia,,Axonify,2019-06-27T17:56:18.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRR13AAH,-,-,- -,,Needs Assignment,Other,,,,AstraZeneca SouthEast Asia,,Grant McNulty,2019-06-27T17:24:55.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002Vb5PkAAJ,-,-,- -,,Needs Assignment,Other,,,,ShopRite (South Africa),,Grant McNulty,2019-07-26T16:56:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRB3AAP,-,-,- -,,Needs Assignment,Other,,,,Specsavers International Healthcare Limited,,Grant McNulty,2019-06-27T17:58:21.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRBSAA5,-,-,- -,,Needs Assignment,Other,,,,TIMG,,Grant McNulty,2019-06-27T18:01:21.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRDoWAAX,-,-,- -,,Needs Assignment,Other,,,,Whites,,Axonify,2019-06-24T15:45:51.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRHVAA5,-,-,- -,,Needs Assignment,Other,,,,PwC Southeast Asia,,Axonify,2019-06-27T18:28:53.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VcBGZAA3,-,-,- -,,Needs Assignment,Other,,,,Benetton,,Axonify,2019-08-09T18:27:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRR3sAAH,-,-,- -,,Needs Assignment,Other,,,,Hirepool,,Axonify,2019-06-27T17:35:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002OTl6hAAD,Aldermore,-,Aldermore -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-09-04T06:27:23.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jeQAA,Ashburton,-,Ashburton -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:02:13.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vaYjIQAU,Asia,-,Asia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-03-22T09:58:48.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M9zvlAAB,Australia,-,Australia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-06-20T17:24:56.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87EOAAZ,Bradlows (Furniture),-,Bradlows (Furniture) -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:16:35.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001s4QVeQAM,Brazil,-,Brazil -,,Needs Assignment,Other,,,,Mundipharma International Limited,,Axonify,2017-09-05T18:09:57.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DxlAAF,Building Insurance,-,Building Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:48:16.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmMQAW,C-suite,-,C-suite -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:12:36.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOYhQAO,Call Centers,-,Call Centers -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:38:42.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCsIQAW,Cardiovascular Metabolic,-,Cardiovascular Metabolic -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:22:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001wdpjzQAA,Central & Eastern Europe Business Unit,-,Central & Eastern Europe Business Unit -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-04-05T13:12:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NorQEAAZ,Commercial Managers,-,Commercial Managers -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-31T14:58:23.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002M8HPXAA3,Comms,-,Comms -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-05-31T14:05:15.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w4rCMQAY,Connections / Welcome Stages,-,Connections / Welcome Stages -,,Needs Assignment,Other,,,,BT - Consumer,,Grant McNulty,2018-03-26T13:39:08.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZGu8QAG,Corporate,-,Corporate -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:46:14.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCohQAG,Countries,-,Countries -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:17:27.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M8mIzAAJ,DirectAxis,-,DirectAxis -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-06-04T07:09:03.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZHAZQA4,DirectAxis Personal Loans,-,DirectAxis Personal Loans -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:50:16.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001s4QdyQAE,Egypt & Near East Libya,-,Egypt & Near East Libya -,,Needs Assignment,Other,,,,Mundipharma International Limited,,Axonify,2017-09-05T18:19:21.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZHB3QAO,Eldermore,-,Eldermore -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:50:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w0Ju2QAE,FCC,-,FCC -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-09T15:41:04.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001uzJpWQAU,First Rand Group,-,First Rand Group -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-01-17T16:24:01.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jAQAQ,FNB,-,FNB -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T07:59:42.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSrQAO,FNB Business (Enterprise),-,FNB Business (Enterprise) -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:24:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOTGQA4,FNB Center of Excellence,-,FNB Center of Excellence -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:25:10.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSIQA4,FNB Consumer,-,FNB Consumer -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:23:30.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOY8QAO,FNB Int'l,-,FNB Int'l -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:35:34.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSSQA4,FNB Premium (High Net Worth & SME),-,FNB Premium (High Net Worth & SME) -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:23:59.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSwQAO,FNB Support,-,FNB Support -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:24:45.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M9zwjAAB,France,-,France -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-06-20T17:29:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87DkAAJ,Francis,-,Francis -,Buyer,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:10:07.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DyAAAV,Funeral Insurance,-,Funeral Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:49:27.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCowQAG,Germany,-,Germany -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:17:58.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCrIQAW,Global Center of Excellence (Skills),-,Global Center of Excellence (Skills) -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:20:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmbQAG,Global Medical Affairs (Disease State),-,Global Medical Affairs (Disease State) -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:13:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001n0e3wQAA,"Governance, Risk & Compliance",-,"Governance, Risk & Compliance -",,Needs Assignment,Other,,,,Wolters Kluwer Financial Services Solutions - Sales,,Adam George,2017-03-15T14:39:59.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vZTJwQAO,Group Treasury,-,Group Treasury -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:21:04.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vxvjlQAA,Grover,-,Grover -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-02-21T15:48:11.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwNqAAJ,Gulf,-,Gulf -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:12:41.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vaKoeQAE,Health Insurance,-,Health Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-03-21T07:42:40.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DxWAAV,Health Insurance,-,Health Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:48:05.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DwOAAV,HR Advisors,-,HR Advisors -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:44:11.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vyA6zQAE,Human Capital Systems,-,Human Capital Systems -,,Needs Assignment,Other,,,,Standard Bank Offshore Group Ltd,,Axonify,2018-02-22T21:11:44.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001n0wmpQAA,Icahn Group,-,Icahn Group -,,Needs Assignment,Other,,,,The Pep Boys,,Adam George,2017-03-17T13:50:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vyvchQAA,Illyanna,-,Illyanna -,EMEA - Education Lead,Manager/Team Lead,Other,,,,Bobbi Brown Cosmetics - Retail,,Axonify,2018-02-28T21:24:33.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vZTIyQAO,Internal Audit,-,Internal Audit -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:20:17.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vZOTfQAO,IT,-,IT -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:26:49.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vzpvAQAQ,Jamie,-,Jamie -,Finance Guy (need his approval),Needs Assignment,Finance,,,,BT - Consumer,,Grant McNulty,2018-03-06T21:56:07.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCpLQAW,Japan,-,Japan -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:18:16.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOv2QAG,JD Group,-,JD Group -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-03-14T10:39:39.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87E4AAJ,JD Group Execs,-,JD Group Execs -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:14:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001s3vbLQAQ,Korea,-,Korea -,,Needs Assignment,Other,,,,Mundipharma International Limited,,Axonify,2017-08-31T19:43:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001n0e3hQAA,Legal & Regulatory,-,Legal & Regulatory -,,Needs Assignment,Other,,,,Wolters Kluwer Financial Services Solutions - Sales,,Adam George,2017-03-15T14:39:22.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7Dy0AAF,Life Insurance,-,Life Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:49:05.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w4rDoQAI,Loyalty,-,Loyalty -,,Needs Assignment,Other,,,,BT - Consumer,,Grant McNulty,2018-03-26T13:40:30.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwNIAAZ,Malaysia,-,Malaysia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:08:36.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmvQAG,Manufacturing,-,Manufacturing -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:13:52.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002QXVHCAA5,Manulife Canada,-,Manulife Canada -,,Needs Assignment,Other,,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2019-01-14T19:17:54.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vyvTKQAY,Marta,-,Marta -,GM - EMEA,Needs Assignment,Other,,,,Bobbi Brown Cosmetics - Retail,,Axonify,2018-02-28T21:12:35.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002OWf9wAAD,Martinique,-,Martinique -,FNB Skills Dev't,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-10-09T15:02:58.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPD8MQAW,Middle East,-,Middle East -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:45:40.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZGszQAG,Motor Division,-,Motor Division -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:45:23.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCxXQAW,Oncology,-,Oncology -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:30:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCsSQAW,Oncology (Cancer),-,Oncology (Cancer) -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:22:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0xbQAA,Other,-,Other -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T09:39:27.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002QXVIPAA5,Other Exec Team Members,-,Other Exec Team Members -,,Needs Assignment,Other,,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2019-01-14T19:23:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87D1AAJ,Pepcor,-,Pepcor -,Parent Company,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:00:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002XH7xHAAT,Placeholder,-,Placeholder -,,Needs Assignment,Other,,,,Mexico Ministry of Education,,Axonify,2019-09-11T18:26:26.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002XI5UHAA1,Placeholder,-,Placeholder -,,Needs Assignment,Other,,,,Maximus Gulf - Saudi Arabia,,Jen Tolbert,2019-09-25T19:01:05.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002NncWPAAZ,Poland,-,Poland -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-10T20:49:40.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOYcQAO,PoP (Branches),-,PoP (Branches) -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:38:24.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002KkhiFAAR,PoP Regional Heads,-,PoP Regional Heads -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-04-08T21:27:55.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002M9zudAAB,Procurement,-,Procurement -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-06-20T17:20:16.000+0000,,SHORT_NAME | UNCONTACTABLE
+0038a00002w86GIAAY,Purple,-,Purple -,Software Engineer,Needs Assignment,Other,mixamo2155@satedly.com,,,Siemens Healthineers,,Grant McNulty,2022-08-04T14:50:17.000+0000,,SHORT_NAME
+0030h00002M7DyKAAV,Real Estate,-,Real Estate -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:49:37.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCryQAG,Respiratory,-,Respiratory -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:22:05.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DzIAAV,Rest of ASR,-,Rest of ASR -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:51:35.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZTJmQAO,Risk,-,Risk -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:20:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jyQAA,RMB,-,RMB -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:03:56.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87ETAAZ,Rochester (Furniture),-,Rochester (Furniture) -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:17:01.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NncVHAAZ,Romania,-,Romania -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-10T20:46:52.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87EEAAZ,Russells (Furniture),-,Russells (Furniture) -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:15:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCp6QAG,Russia,-,Russia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:18:07.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NncV2AAJ,Russia,-,Russia -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-10T20:46:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmgQAG,Sales,-,Sales -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:13:32.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7Dz3AAF,Services,-,Services -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:51:19.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87EYAAZ,Sleepmasters,-,Sleepmasters -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:17:28.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwN7AAJ,SSA,-,SSA -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:06:23.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwMxAAJ,SSA,-,SSA -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:04:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZTIPQA4,Tax,-,Tax -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:19:52.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vxvkKQAQ,Terry,-,Terry -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-02-21T15:49:17.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001wdpiwQAA,The Coca-Cola Company,-,The Coca-Cola Company -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-04-05T13:12:11.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DxqAAF,Transport / Freight Insurance,-,Transport / Freight Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:48:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCorQAG,UK,-,UK -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:17:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPZsCQAW,USA,-,USA -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-15T14:27:32.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w4rDeQAI,Value,-,Value -,,Needs Assignment,Other,,,,BT - Consumer,,Grant McNulty,2018-03-26T13:40:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87DaAAJ,Wayne,-,Wayne -,Buyer,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:08:42.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jPQAQ,Wesbank,-,Wesbank -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:01:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0038a00003G5CVxAAN,Gursumiran,.,Gursumiran .,hr business partner,Needs Assignment,Other,gursumiran@fisglobal.com,,,"Fidelity National Financial, Inc.",,Jen Tolbert,2023-05-16T20:22:24.000+0000,,SHORT_NAME
+003Mm00000MyKDhIAN,1,1,1 1,1,Needs Assignment,Other,inquisition-noreply@google.com,6501234567,,Google Inc,,Amanda Monk,2025-04-24T14:26:02.000+0000,,NUMERIC_NAME | SHORT_NAME
+0030h00002l4ikKAAQ,18717949617,1,18717949617 1,,Needs Assignment,Other,gongxueming1226@junxigmail.com,,,gmail,,Axonify,2021-07-06T01:30:54.000+0000,2021-07-05,NUMERIC_NAME | SHORT_NAME
+0038a00003G5AxGAAV,Christos,7,Christos 7,hr partner,Needs Assignment,Other,ctsiapas@amazon.com,,,Nordstrom Inc,,Joe McCulla,2023-05-16T20:14:00.000+0000,,NUMERIC_NAME | SHORT_NAME
+0030h00002QW6KZAA1,Adekunle,A,Adekunle A,GM CUnited Statestomer Systems,Needs Assignment,Other,adekunle.a@mohawkcareers.com,,,"Mohawk Industries, Inc.",,Jen Tolbert,2018-12-18T22:45:14.000+0000,,SHORT_NAME
+003Mm00000MDuuDIAT,Alaina,A,Alaina A,Digital Communications Specialist,Specialist,Other,aal@basspro.com,,,Bass Pro Shops,,Adam George,2025-04-01T18:55:03.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00003ImzJFAAZ,Ingrid,A,Ingrid A,Employee Relations Manager,Manager/Team Lead,Other,ia@chewy.com,,,"Chewy, Inc.",,Jen Tolbert,2023-06-30T14:06:37.000+0000,2023-07-05,SHORT_NAME
+003Mm00000SRyCtIAL,Leandro,A,Leandro A,Engenheiro de Minas Sênior,Needs Assignment,Other,leandro@vale.com,,,Vale,,Axonify,2025-09-16T13:20:51.000+0000,,SHORT_NAME
+0030h00002NpFUBAA3,Sujith,A,Sujith A,,Needs Assignment,Other,sujith.a@bt.com,,,BT Group Plc,,Beth Houpis,2018-08-07T20:12:50.000+0000,,SHORT_NAME
+0030h00002POdtLAAT,Alex,A.,Alex A.,Web Editor,Needs Assignment,Other,alexandru1.andrei@ryerson.ca,416-979-5000 x2679,,Ryerson University,,Axonify,2018-11-20T04:01:45.000+0000,2018-11-18,SHORT_NAME
+003Mm000005b8a1IAA,Joanne,A.,Joanne A.,People Systems Team leader,Manager/Team Lead,Other,joannepugh@murphygroup.co.uk,+971 4 298 6536,,J. Murphy & Sons Limited,,Grant McNulty,2023-10-23T09:45:01.000+0000,2023-11-09,SHORT_NAME
+0030h00002YSQfqAAH,Lauren,A.,Lauren A.,"Manager, Loss Prevention",Manager/Team Lead,Other,lauren.antenucci@puma.com,(978) 698-1173 (Direct),,"Puma North America, Inc.",,Axonify,2019-12-09T21:23:21.000+0000,2023-01-11,SHORT_NAME
+0030h00002M6rdNAAR,UD,AGBAS,UD AGBAS,CI Specialist,Specialist,Other,udochukwu.agbasonu@halliburton.com,+1 281-871-5785,,Halliburton Company,,Jen Tolbert,2018-04-24T14:35:08.000+0000,2019-01-17,SHORT_NAME | ALL_CAPS
+0038a00003G5Am1AAF,M,Akhtar,M Akhtar,hr business partner,Needs Assignment,Other,akhtarm@amazon.com,,+1 416 898 7295,Nordstrom Inc,,Joe McCulla,2023-05-16T20:13:16.000+0000,,SHORT_NAME
+003Mm000008EWzVIAW,Abdulraman,Al,Abdulraman Al,Senior Manager,Manager/Team Lead,Other,abmalmarri@dubaihealth.ae,+971559400444,,Dubai Health,,Axonify,2024-01-16T06:41:48.000+0000,2024-01-17,SHORT_NAME
+0030h00002RTrydAAD,Ed,Albertson,Ed Albertson,Sales Partner,Needs Assignment,Sales,ealbertson@carew.com,(740) 323-1687,(740) 973-4849,Carew International,,Susan McGovern,2019-03-08T15:54:31.000+0000,2020-03-24,SHORT_NAME
+0030h00002XKO6MAAX,Ed,Alcorta,Ed Alcorta,Senior Business Development Manager,Manager/Team Lead,Sales,eduardo.alcorta@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:18:13.000+0000,,SHORT_NAME
+003Mm00000L1bONIAZ,Ar,Ali,Ar Ali,Manufacturing Excellence Manager & Technology Focal Point,Manager/Team Lead,Technical,ar.mohamadali@shell.com,44 20 7934 1234,,Shell Plc,,Grant McNulty,2025-03-01T09:41:43.000+0000,,SHORT_NAME
+0030h00002XKRzvAAH,Adams,An,Adams An,"Manager, Business Development",Manager/Team Lead,Sales,adams.an@rohde-schwarz.com,(410) 910-7800,,Rohde & Schwarz,,Axonify,2019-10-29T17:48:37.000+0000,,SHORT_NAME
+003Mm00000SizZYIAZ,Alan,An,Alan An,Group Product Manager,Manager/Team Lead,Other,an.alan@heb.com,,,HEB,,Jen Tolbert,2025-09-22T16:52:06.000+0000,,SHORT_NAME
+003Mm00000U3wiwIAB,jessica,an,jessica an,,Needs Assignment,Other,jessicaantiabong@kpmg.com,,,KPMG China,,Axonify,2025-10-25T20:24:24.000+0000,,SHORT_NAME
+003E000000nCsARIA0,Yi-Sen,An,Yi-Sen An,Sr. Manager - IT,Manager/Team Lead,Technical,ysan@gapac.com,(404) 652-8897,,Georgia-Pacific Llc,,Adam George,2013-11-18T15:12:42.000+0000,2017-05-18,SHORT_NAME
+0038a00003G56PrAAJ,Ma,Ancheta Herrera,Ma Ancheta Herrera,hr manager - hr business partner,Manager/Team Lead,Other,mherrera@concentrix.com,,,Sutherland Global Services,,Axonify,2023-05-16T19:49:31.000+0000,,SHORT_NAME
+0038a00003G55aeAAB,Tr,Anh,Tr Anh,hr business partner,Needs Assignment,Other,tr.a@amway.com,,,"Amway (China) Co., Ltd.",,Adam George,2023-05-16T19:44:19.000+0000,,SHORT_NAME
+003E000001MuUF4IAN,Jo,Ann Madison,Jo Ann Madison,,Needs Assignment,Other,csm1-0407@retail.winn-dixie.com,,,"Bi-Lo, LLC",,Liz Davis,2015-08-06T15:02:03.000+0000,,SHORT_NAME
+0030L00001uYb69QAC,Ed,Annarumo,Ed Annarumo,"Supervisor, Call Center",Manager/Team Lead,Customer Service,ed.annarumo@infocision.com,+1 330 729 2950 ext. 2928,,InfoCision,Customer Service,Adam George,2017-12-20T16:48:26.000+0000,2018-05-17,JUNK_KEYWORD | SHORT_NAME
+003Mm00000OzoBoIAJ,Dac,Ap,Dac Ap,,Needs Assignment,Other,dac.ap@meo.pt,,,MEO,,Grant McNulty,2025-06-24T14:53:50.000+0000,,SHORT_NAME
+0030L00001vxcmRQAQ,J,Appodaca,J Appodaca,Store Manager,Manager/Team Lead,Other,jappodaca@colehaan.com,,,Cole Haan LLC,,Axonify,2018-02-19T16:54:04.000+0000,2018-07-16,SHORT_NAME
+0030h00002M90ImAAJ,Al,Aranda,Al Aranda,"Mgr, otd",Needs Assignment,Other,aaranda@wbhq.com,2104566570,,Whataburger Restaurants LP,,Jen Tolbert,2018-06-06T14:44:30.000+0000,2018-08-31,SHORT_NAME
+0038a00002sr99YAAQ,Safeer,AS,Safeer AS,Sr. Information Technology Engineer,Needs Assignment,Technical,safeerabdul@live.com,1 416 299 8469,,Confidential,,Axonify,2022-05-17T15:26:55.000+0000,2022-05-20,SHORT_NAME
+003Mm000008XGauIAG,JD,Ashley,JD Ashley,,Needs Assignment,Other,jimmy.ashley@kanelogistics.com,1 888 356 5263,,"Kane Warehousing, Inc.",,Axonify,2024-01-25T21:03:46.000+0000,2021-09-23,SHORT_NAME
+0030h00002dTT0ZAAW,Becky,Au,Becky Au,Enablement Specialist,Specialist,Other,becky.au@rci.rogers.com,(416) 935-3448,,Rogers Communications Inc - Holding Account,,Ryan Flaherty,2020-10-16T15:42:55.000+0000,2021-10-27,SHORT_NAME
+0030h00002M8zp2AAB,B,AXonify,B AXonify,OD,Needs Assignment,Other,bbiondo@mitre.org,410-222-2222,,The MITRE Corporation,,Jen Tolbert,2018-06-06T14:24:12.000+0000,,SHORT_NAME
+0030h00002QW5s9AAD,Aaron,B,Aaron B,IT Retail Services Systems Integration Manager,Manager/Team Lead,Technical,ab@kwiktrip.com,,,Kwik Trip,,Adam George,2018-12-18T21:34:41.000+0000,2022-08-23,SHORT_NAME
+0038a00003G5BIdAAN,Kanyaka,B,Kanyaka B,hr associate partner,Other,Other,kanyakab@amazon.com,,,Nordstrom Inc,,Joe McCulla,2023-05-16T20:15:59.000+0000,,SHORT_NAME
+003Mm00000JNM5YIAX,M,B,M B,Market Research Analytics Specialist,Specialist,Other,marisa.burgios@aldi.us,,,Aldi USA,,Adam George,2025-01-08T13:53:48.000+0000,2020-10-08,SHORT_NAME
+0030h00002f1oXLAAY,Mark,B,Mark B,Associate,Other,Other,mark_begej@mckinsey.com,6462365762,,McKinsey & Company,,Emily Smith,2020-10-23T13:47:03.000+0000,2020-10-21,SHORT_NAME
+003Mm00000BBMjdIAH,Max,B,Max B,Senior Manager - People Analytics & Technologies,Manager/Team Lead,Other,max.bakkaloglu@arcteryx.com,,,Arc'teryx Equipment,,Kelly Wasden,2024-03-11T15:24:13.000+0000,2024-03-19,SHORT_NAME
+0038a00003G5ENHAA3,Julie,Ba,Julie Ba,regional hr partner,Needs Assignment,Other,julie.rimmer@walgreensbootsalliance.com,,,Boots UK,,Grant McNulty,2023-05-16T20:32:11.000+0000,,SHORT_NAME
+0030h00002PPDN5AAP,va,ba,va ba,bm,Needs Assignment,Other,bart@oracle.com,,,Oracle Corporation,,Kelly Wasden,2018-11-29T04:01:58.000+0000,2018-08-16,SHORT_NAME
+0030h00002VbvtpAAB,Yvonne,Ba,Yvonne Ba,"Senior Manager, Contact Center Product Marketing",Manager/Team Lead,Marketing,yvonne.ba@genesys.com,(650) 466-1126,,Genesys,,Kelly Wasden,2019-08-06T13:43:40.000+0000,2019-08-06,SHORT_NAME
+003Mm00000Lvh4CIAR,Su,Bachinger,Su Bachinger,Field Marketing Manager,Manager/Team Lead,Marketing,su.bachinger@idq.com,(952) 830-0200,,International Dairy Queen Inc,,Joe McCulla,2025-03-25T17:44:43.000+0000,,SHORT_NAME
+0030h00002QVUwdAAH,Ky,Bae,Ky Bae,FENDI Business Manager,Manager/Team Lead,Other,kbae@barneys.com,,,"Barneys New York, Inc.",,Axonify,2018-12-12T14:35:37.000+0000,,SHORT_NAME
+0030h00002jr0giAAA,li,bai,li bai,,Needs Assignment,Other,yapo@dairy-farm.com.hk,,,Dairy Farm,,Douglas Leonard,2021-05-03T10:00:29.000+0000,2021-02-22,SHORT_NAME
+0030L00001vPEW1QAO,y,bailey,y bailey,manager,Manager/Team Lead,Other,yolanda.h.bailey@boeing.com,480 891 2677,,Boeing Irving Company,,Adam George,2018-02-13T20:30:29.000+0000,,SHORT_NAME
+0030h00002M8zDSAAZ,KV,Balaji,KV Balaji,GM,Needs Assignment,Other,balaji.kv@teamhgs.com,9600044522,,Hinduja Global Solutions,,Axonify,2018-06-06T14:10:56.000+0000,,SHORT_NAME
+0030h00002QW9QtAAL,TJ,Banick,TJ Banick,Project Portfolio Manager,Manager/Team Lead,Other,tj.banick@columbia.com,+1 212 503 5479,,Columbia Sportswear Company,,Kelly Wasden,2018-12-19T14:41:44.000+0000,,SHORT_NAME
+0030L00001w4VLhQAM,V.,Benfell,V. Benfell,MGA,Needs Assignment,Other,stan@beaconsuccess.com,,,Beacon Financial Inc.,,Kelly Wasden,2018-03-22T17:26:05.000+0000,2018-03-06,SHORT_NAME
+0038a00003LctJeAAJ,B,Ber,B Ber,School Nurse,Needs Assignment,Other,bberset@bishopoconnell.org,1 703 237 1443,,"Djo Global, Inc.",,Kelly Wasden,2023-08-04T14:28:52.000+0000,,SHORT_NAME
+0030h00002YSFDXAA5,W,Bergsma,W Bergsma,Team Lead,Manager/Team Lead,Other,wbergsma@recipeunlimited.com,,,Recipe Unlimited Corporation,,Amanda Monk,2019-12-06T19:47:10.000+0000,2019-11-05,SHORT_NAME
+0038a00003G5gMLAAZ,vc,bgcxv,vc bgcxv,fgfhgh,Needs Assignment,Other,bosab35607@in2reach.com,2025550158,,bvfhjggfh,,Axonify,2023-05-24T05:55:44.000+0000,,SHORT_NAME
+003Mm000008XFVBIA4,Al,Bhakta,Al Bhakta,Principal,Needs Assignment,Other,al@cmg.team,_+1 972-996-4032,,Cmg,,Adam George,2024-01-25T21:18:33.000+0000,,SHORT_NAME
+0030h00002gGz4UAAS,Du,Bin,Du Bin,Medical Device Admin APAC,Administrator,Other,bdu1@its.jnj.com,,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-11-15T18:32:25.000+0000,,SHORT_NAME
+0038a00002oUIp2AAG,jo,blow,jo blow,,Needs Assignment,Other,jo@work.com,1 646 389 3922,,work.inc,,Axonify,2022-01-18T18:03:22.000+0000,2022-01-18,SHORT_NAME
+003Mm00000Sj4ttIAB,Jt,Blubaugh,Jt Blubaugh,,Needs Assignment,Other,jtblubaugh@coresight.com,,,Coresight Research,,Axonify,2025-09-22T16:34:53.000+0000,,SHORT_NAME
+0030h00002M8u9eAAB,Al,Bobor,Al Bobor,Warehouse Manager,Manager/Team Lead,Other,al.bobor@vanguardlogistics.com,562-432-4430,,"Vanguard Logistics Services (Usa), Inc.",,Kelly Wasden,2018-06-06T00:15:21.000+0000,,SHORT_NAME
+0030h00002XKTHlAAP,TJ,Bonner,TJ Bonner,Regional Sales Manager (Intermediary Distribution),Manager/Team Lead,Sales,tj_bonner@troweprice.com,(410) 345-7804,,T. Rowe Price,,Axonify,2019-10-29T18:54:06.000+0000,,SHORT_NAME
+0030h00002XKNsdAAH,Mo,Boone,Mo Boone,"Account Manager, Lighting",Manager/Team Lead,Sales,mo.boone@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:11:07.000+0000,,SHORT_NAME
+0030L00001vPH3GQAW,Jo,Bowron,Jo Bowron,Onboarding Consultant,Consultant,Other,jo@functionpoint.com,604-731-2522,,Function Point,,Kelly Wasden,2018-02-13T21:03:12.000+0000,,SHORT_NAME
+0030h00002QVRFdAAP,M,Brian Jackson,M Brian Jackson,Department Manager,Manager/Team Lead,Other,m.jackson@hm.com,,,Hollister Co.,,Adam George,2018-12-11T18:38:52.000+0000,,SHORT_NAME
+003Mm00000UqYvbIAF,Aj,Brow,Aj Brow,,Needs Assignment,Other,aj.brow@whitelodging.com,8155667268,,White Lodging,,Adam George,2025-11-11T22:38:36.000+0000,,SHORT_NAME
+0030h00002POdt5AAD,D,Brown,D Brown,Professor,Needs Assignment,Other,gary.brown@eku.edu,,,Eastern Kentucky University,,Adam George,2018-11-20T04:01:37.000+0000,,SHORT_NAME
+0030h00002iJjRCAA0,Ed,Brown,Ed Brown,Electronic Technician,Needs Assignment,Other,eb2671@att.com,,,AT&T,,Brian Smith,2021-03-19T17:19:46.000+0000,,SHORT_NAME
+003Mm000008PqYJIA0,eb,buck,eb buck,Recieving Clerk,Needs Assignment,Other,eb.buck@a-dec.com,1 503 538 7478,,"A-Dec, Inc.",,Kelly Wasden,2024-01-22T14:36:11.000+0000,2024-01-22,SHORT_NAME
+0038a00002w6LxEAAU,D,Bullock,D Bullock,Senior Manager People,Manager/Team Lead,Other,dbullock@warbyparker.com,,,Warby Parker,HR,Axonify,2022-06-23T19:07:32.000+0000,2023-08-31,SHORT_NAME
+0038a00002r69mLAAQ,Aj,Burton,Aj Burton,"Senior Counsel for Technology and Communications Policy, Office of U.S. Senator Brian Schatz",Needs Assignment,Technical,aj.burton@goarmy.com,,,United States Senate,,Axonify,2022-04-01T18:39:45.000+0000,,SHORT_NAME
+003Mm00000JNUdyIAH,JP,B駭ay,JP B駭ay,,Needs Assignment,Other,jbenay@amica.com,800-652-6422,,Amica Mutual Insurance Company,,Axonify,2025-01-08T14:30:13.000+0000,,SHORT_NAME
+0030h00002RTBxFAAX,Darell,C,Darell C,Regional Loss Prevention Manager,Manager/Team Lead,Other,darell.c@autozone.com,+1-901-495-6500,,AutoZone,,Jen Tolbert,2019-02-25T19:17:31.000+0000,,SHORT_NAME
+003Mm00000MZjQdIAL,Kristopher,C,Kristopher C,Sales Capability Advisor,Needs Assignment,Sales,kristopher.chiappalone@cdw.com,,,CDW Corporation,,Adam George,2025-04-11T18:14:01.000+0000,,SHORT_NAME
+0030h00002T9HoaAAF,Mandy,Ca,Mandy Ca,"Manager, Finance & Operations",Manager/Team Lead,Finance,mandy.tran@brookfield.com,,,Brookfield Asset Management,,Axonify,2019-04-23T20:17:19.000+0000,,SHORT_NAME
+0030h00002m2JXgAAM,Ed,Campbell,Ed Campbell,Division Manager- Call Center,Manager/Team Lead,Customer Service,ecampbell@lsaweb.com,,,Language Services Associates,,Adam George,2021-09-02T10:56:19.000+0000,,SHORT_NAME
+0030h00002M8yBzAAJ,J,Campbell,J Campbell,Consultant,Consultant,Other,jcampbell@csod.com,8008008000,,Cornerstone OnDemand,,Kelly Wasden,2018-06-06T13:48:31.000+0000,,SHORT_NAME
+0030h00002NpFvSAAV,JJ,Cantillon,JJ Cantillon,,Needs Assignment,Other,jj.cantillon@evocca.edu.au,,,,,Mike Griebenow,2018-08-07T20:22:27.000+0000,,SHORT_NAME
+0030h00002T9I08AAF,Jo,Carlo,Jo Carlo,"Manager, Customer Care",Manager/Team Lead,Other,jo.decarlo@centurylink.com,,,"Centurylink, Inc.",,Jen Tolbert,2019-04-23T20:18:36.000+0000,,SHORT_NAME
+0038a00002w9JGLAA2,A.,Carrier,A. Carrier,Cinematographer,Needs Assignment,Other,acarrier@papersource.com,(312) 906-9678,,Paper Source,,Adam George,2022-10-02T23:42:26.000+0000,,SHORT_NAME
+0038a00002w9IhLAAU,Ed,Cauchi,Ed Cauchi,"Manager, Internal Communications",Manager/Team Lead,Other,ed_cauchi@woodbridgegroup.com,_+54 230 449-6154,,"Woodbridge Company Limited, The",,Axonify,2022-10-02T23:34:52.000+0000,,SHORT_NAME
+0030h00002OUv4KAAT,Carrie,CC,Carrie CC,fffffff,Needs Assignment,Other,cardote@rogers.com,+1-519-585-1200,,"Axonify, Inc.",,Matthew Horsman,2018-03-15T17:55:50.000+0000,2018-09-05,SHORT_NAME
+0030h00002POO4UAAX,jyothsna,cg,jyothsna cg,Sr Associate,Other,Other,jyothsna.rao@emids.com,7760596873,,emids,,Jen Tolbert,2018-11-16T04:03:18.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030L00001vPEb6QAG,Rico,CG,Rico CG,Team leader,Manager/Team Lead,Other,sowmyacg@yahoo.com,+919008611008,,Dell Inc.,,Jen Tolbert,2018-02-13T20:31:59.000+0000,,SHORT_NAME
+003Mm00000FFPWwIAP,Bharath,Ch,Bharath Ch,Senior workday integration devoloper,Needs Assignment,Other,bharath.ch@huntington.com,,,Huntington Bank,,Adam George,2024-08-08T18:47:11.000+0000,,SHORT_NAME
+0030h00002iMDx3AAG,TT,Cheah,TT Cheah,,Needs Assignment,Other,tcheah@its.jnj.com,,,J&J - Johnson & Johnson (Hierarchy Parent for MSA),,Ryan Flaherty,2021-04-26T03:22:08.000+0000,2021-04-25,SHORT_NAME
+0030h00002iMQGtAAO,Li,Chen,Li Chen,,Needs Assignment,Other,li.chen@citizensbank.com,1 401 456 7000,,Citizens Bank,,Liz Davis,2021-04-28T13:47:53.000+0000,2021-05-07,SHORT_NAME
+0030L00001lsjyfQAA,Ji,Choi,Ji Choi,Consultant,Consultant,Other,choi2.ji@bcg.com,415-964-9487,,The Boston Consulting Group,,Axonify,2016-12-14T19:45:45.000+0000,2016-12-14,SHORT_NAME
+0038a00003G5D9WAAV,Jo,Christie,Jo Christie,hr business partner,Needs Assignment,Other,jchristie@vodafone.com,,+64 29 773 3256,Vodafone Czech Republic,,Grant McNulty,2023-05-16T20:25:54.000+0000,,SHORT_NAME
+0030h00002f0CDyAAM,J,Cicero,J Cicero,Sales Development Representative IV (EMEA),Other,Sales,j.cicero@opensesame.com,+1 503 850 9382,,OpenSesame,,Kelly Wasden,2020-09-22T14:15:28.000+0000,2020-10-27,SHORT_NAME
+0030h00002XKOmZAAX,Ed,Clapper,Ed Clapper,Sales Manager,Manager/Team Lead,Sales,ed_clapper@carmax.com,(804) 747-0422,,Carmax,,Jen Tolbert,2019-10-29T14:43:59.000+0000,,SHORT_NAME
+0030L00001uahdjQAA,Al,Clinton,Al Clinton,Diversity & Inclusion Champion,Needs Assignment,Other,clintona@cintas.com,(856) 861-4862,,Cintas Corporation,,Adam George,2018-01-02T15:31:04.000+0000,,SHORT_NAME
+0030h00002l77OkAAI,Jo,Coble,Jo Coble,,Needs Assignment,Other,j.coble@kroger.com,1 513 762 4000,,The Kroger Co.,,Amanda Monk,2021-08-06T15:18:10.000+0000,2021-08-06,SHORT_NAME
+0030h00002QYbNVAA1,S,Colby,S Colby,Sr. Leadership Development Consultant,Manager/Team Lead,Other,scolby@phs.org,5059238401,,Presbyterian Healthcare Services,,Kelly Wasden,2019-02-05T08:05:07.000+0000,,SHORT_NAME
+0030h00002c3wblAAA,Ed,Collins,Ed Collins,,Needs Assignment,Other,ecollins@ratner.com,(703) 269-5177,,"Ratner Companies, L.C.",,Jen Tolbert,2020-05-06T20:19:10.000+0000,,SHORT_NAME
+003E000001dJgB1IAK,D,Cooper,D Cooper,digital press supervisor,Manager/Team Lead,Other,dcooper@amazon.com,\+1 972-417-3959,,"Woot, Inc.",,Jen Tolbert,2016-06-17T15:36:47.000+0000,,SHORT_NAME
+0030h00002T9JihAAF,Ed,Coughlin,Ed Coughlin,"Manager, Telemarketing Customer Service",Manager/Team Lead,Marketing,ecoughlin@mathesongas.com,+1 215 648 4080,,"Matheson Tri-Gas, Inc.",,Axonify,2019-04-23T20:28:50.000+0000,,SHORT_NAME
+0038a00003G55YlAAJ,Brooke,CP,Brooke CP,hr consultant/business partner,Consultant,Other,bcp@verizonwireless.com,,+1 615 574 3396,Charter Communications,,Axonify,2023-05-16T19:44:19.000+0000,,SHORT_NAME
+0030h00002XIO50AAH,J,Cruickshank,J Cruickshank,Manager Of Human Resource,Manager/Team Lead,Other,jcruickshank@talisman-energy.com,44 1224352500,,Talisman Sinopec Energy Uk Ltd.,,Grant McNulty,2019-09-30T14:46:52.000+0000,,SHORT_NAME
+003Mm000008XPFxIAO,Northgate,CS,Northgate CS,EMM,Needs Assignment,Other,northgate-cs@axonify.com,,,"Axonify, Inc.",,Matthew Horsman,2024-01-25T20:54:23.000+0000,,SHORT_NAME
+0038a00003G5DNxAAN,Ha,Cuc,Ha Cuc,hr business partner,Needs Assignment,Other,hr.h@unilever.com,,,Alberto-Culver Company,,Grant McNulty,2023-05-16T20:26:52.000+0000,,SHORT_NAME
+0030h00002XKS24AAH,Yu,Cui,Yu Cui,Key Account Manager,Manager/Team Lead,Sales,yu.cui@rohde-schwarz.com,(410) 910-7800,,Rohde & Schwarz,,Axonify,2019-10-29T17:49:27.000+0000,,SHORT_NAME
+0038a00003G5FkhAAF,S,Cury,S Cury,hr business partner at circle k,Needs Assignment,Other,scury@circlek.com,,,Circle K,,Joe McCulla,2023-05-16T20:40:11.000+0000,,SHORT_NAME
+0038a00003PHX0IAAX,Ng,Cynthia,Ng Cynthia,Senior Industry Transformation Advisior,Needs Assignment,Other,cynthia.ng@sra.org.sg,,,Singapore Retailers Association,,Axonify,2023-10-03T13:18:53.000+0000,,SHORT_NAME
+0030h00002M8xKLAAZ,Judy,Cz,Judy Cz,,Needs Assignment,Other,judy.czarneck@fmr.com,1,,Fidelity Investments,,Axonify,2018-06-06T13:30:07.000+0000,,SHORT_NAME
+003Mm000008XZQcIAO,D,D,D D,D,Needs Assignment,Other,dan@almacontent.com,1 800 392 1611,,D,,Axonify,2024-01-25T21:38:58.000+0000,,SHORT_NAME
+003E000001AhhlDIAR,Earl,D,Earl D,,Needs Assignment,Other,earld@emiratesnbd.com,,,Emirates NBD,,Douglas Leonard,2015-01-29T21:53:39.000+0000,,SHORT_NAME
+003Mm00000WTWCIIA5,Katherine,D,Katherine D,,Needs Assignment,Other,,,,"Fabletics, Llc",,Kelly Wasden,2025-12-17T19:39:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002PLuzbAAD,Kristen,D,Kristen D,Senior Manager,Manager/Team Lead,Other,kristend@siemens.com,,,Siemens Healthineers,,Axonify,2018-10-16T01:29:08.000+0000,,SHORT_NAME
+003E000001Zz2eGIAR,M,D,M D,T & D specialist,Specialist,Other,mattaline.daniels@state.mn.us,651 201-7646,,State of Minnesota,,Adam George,2016-04-29T13:57:33.000+0000,2019-05-08,SHORT_NAME
+003Mm00000QsLeoIAF,Marty,D,Marty D,Manager - Business Solutions Architecture,Manager/Team Lead,Other,mademro@hormel.com,,+1-507-434-2056,Hormel Foods Corporation,,Adam George,2025-08-07T17:38:15.000+0000,,SHORT_NAME
+0030h00002M81ywAAB,Marc,D.,Marc D.,"Cx Governance And Strategy, Lenovo.Com",Needs Assignment,Other,mdesormeau@lenovo.com,+1 919 697 4141,,Lenovo,,Ryan Flaherty,2018-05-28T16:30:31.000+0000,,SHORT_NAME
+0038a00002w9ItcAAE,Najah,D.,Najah D.,Administrative Assistant,Administrator,Other,nd@netflix.com,(408) 540-3700,,"Netflix, Inc.",,Kelly Wasden,2022-10-02T23:37:35.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030L00001vPF4vQAG,Susan,D.,Susan D.,Manager,Manager/Team Lead,Other,susan.dimuzio@irs.gov,859-647-3407,,Irs,,Jen Tolbert,2018-02-13T20:43:52.000+0000,2018-08-20,SHORT_NAME
+0038a00003G55jhAAB,Daisy,Da,Daisy Da,hr business partner,Needs Assignment,Other,daisy.da@marsh.com,,,Marsh & McLennan Companies,,Axonify,2023-05-16T19:45:18.000+0000,,SHORT_NAME
+0038a00002w6UvMAAU,aj,dale,aj dale,Team Lead of Telphony & Reporting,Manager/Team Lead,Other,ajedale@gmail.com,,,Sonnet Insurance Company,,Axonify,2022-06-28T14:16:56.000+0000,,SHORT_NAME
+0038a00002w9GjFAAU,Ed,Dalessandro,Ed Dalessandro,,Needs Assignment,Other,ed.dalessandro@capitalone.com,1-312-782-5800,,Jones Lang LaSalle Incorporated,,Beth Houpis,2022-10-02T23:06:51.000+0000,,SHORT_NAME
+0038a00003LdjWHAAZ,Ea,Daneman,Ea Daneman,Transformation Lead,Manager/Team Lead,Other,ead@lego.com,,,The LEGO Group,,Grant McNulty,2023-09-20T13:36:45.000+0000,2023-10-31,SHORT_NAME
+0030h00002XKQg1AAH,Wu,Daniel,Wu Daniel,Licensed Sales Representative,Other,Sales,daniel.wu@libertymutual.com,(617) 357-9500,,Liberty Mutual Insurance,,Axonify,2019-10-29T16:50:48.000+0000,,SHORT_NAME
+0038a00003G566fAAB,Jo,Darvell,Jo Darvell,hr business partner (support centre),Other,Customer Service,jo.darvell@wickes.co.uk,,,Wickes,,Grant McNulty,2023-05-16T19:47:38.000+0000,2024-02-29,SHORT_NAME
+0030h00002XKO8HAAX,Mj,Davies,Mj Davies,Specialty Sales Representative,Other,Sales,mj.davies@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:19:03.000+0000,,SHORT_NAME
+0030h00002M8rAuAAJ,Ed,Davis,Ed Davis,Sr. Risk control consultant,Needs Assignment,Other,edward.davis@wellsfargo.com,4049233557,,Wells Fargo Advisors,,Beth Houpis,2018-06-05T19:53:19.000+0000,,SHORT_NAME
+0030h00002M8w4kAAB,sd,dd,sd dd,adf,Needs Assignment,Other,dfa@fr.com,4165555555,,Fish & Richardson PC,,Adam George,2018-06-06T11:20:12.000+0000,,SHORT_NAME
+003Mm00000Tz8CuIAJ,Amanda,De,Amanda De,,Needs Assignment,Other,amandade@pvh.com,+1 212 381 3500,,PVH Corp.,,Axonify,2025-10-23T20:26:05.000+0000,,SHORT_NAME
+0038a00002w9IFRAA2,Amanda,De,Amanda De,Registered Nurse,Needs Assignment,Other,amanda_deman@carepartnerstexas.org,(713) 682-5995,,CarePartners,,Jen Tolbert,2022-10-02T23:28:48.000+0000,,SHORT_NAME
+003E000001gopChIAI,J,Decarlo,J Decarlo,,Needs Assignment,Other,decarloj@agi.ca,,,Grainger,,Adam George,2016-07-26T15:06:04.000+0000,,SHORT_NAME
+003E000001gopEYIAY,S,Delios,S Delios,,Needs Assignment,Other,delioss@agi.ca,,,Grainger,,Adam George,2016-07-26T15:07:35.000+0000,,SHORT_NAME
+003Mm000008XQ3zIAG,On,Demand,On Demand,,Needs Assignment,Other,testondemand@axonify.com,1 519 585 1200,,"Axonify, Inc.",,Matthew Horsman,2024-01-25T21:22:06.000+0000,,SHORT_NAME
+0030h00002M8rM7AAJ,i,df,i df,ggg,Needs Assignment,Other,iryna.shevchuk@delta.com,4049341270,,Delta Airlines,,Jen Tolbert,2018-06-05T19:57:13.000+0000,,SHORT_NAME
+0030h00002M6ry1AAB,Su,Diana,Su Diana,Sr Manager,Manager/Team Lead,Other,sdiana@foresters.com,,,Foresters Financial Services,,Axonify,2018-04-24T14:51:29.000+0000,2020-03-20,JUNK_KEYWORD | SHORT_NAME
+0030L00001uaueEQAQ,Ed,DiBrango,Ed DiBrango,Senior Territory Sales Manager,Manager/Team Lead,Sales,edibrango@hubbell.com,(571) 606-8855,(571) 606-8855,Hubbell Incorporated,,Axonify,2018-01-03T17:42:41.000+0000,,SHORT_NAME
+0030h00002QWGADAA5,Al,Dicarlo,Al Dicarlo,Senior Development Manager,Manager/Team Lead,Other,al.dicarlo@reebok.com,+1 781 401 7993,,"Reebok International, Ltd.",,Axonify,2018-12-20T21:48:18.000+0000,,SHORT_NAME
+0030h00002RVQK9AAP,AJ,Dickman,AJ Dickman,General accounting Supervisor,Manager/Team Lead,Finance,alamb@its.jnj.com,(800) 255-2500,,J&J - Ethicon US,,Ryan Flaherty,2019-04-03T18:54:11.000+0000,,SHORT_NAME
+0038a00002w9QYtAAM,PJ,Digit,PJ Digit,Designer,Needs Assignment,Other,gidgetdigit@gmail.com,,,Presidential Services Ltd,,Grant McNulty,2022-10-07T12:44:26.000+0000,,SHORT_NAME
+0030h00002XKPpnAAH,RJ,Dill,RJ Dill,Intermediary Sales Executive (Great Lakes & New England Regions),Other,Sales,rj_dill@troweprice.com,(410) 345-2000,,T. Rowe Price,,Axonify,2019-10-29T15:58:18.000+0000,,SHORT_NAME
+003E000001iK66oIAC,G,Dilullo,G Dilullo,"Gestionnaire Principale, Technologie de l'Information",Needs Assignment,Other,gdilullo@bellsolutionstech.ca,(514) 549-0576,,Bell Canada (Retail),,Liz Davis,2016-08-31T14:14:18.000+0000,,SHORT_NAME
+0030h00002dRXwZAAW,JP,Ding,JP Ding,Sales Learning Consultant,Consultant,Sales,jeanpaul.ding@adp.com,+86 21 6086 1666,,Automatic Data Processing,,Axonify,2020-08-04T15:21:46.000+0000,,SHORT_NAME
+003Mm00000JNILMIA5,Jo,Diss,Jo Diss,,Needs Assignment,Other,joanna.diss@bt.com,0207 356 5000,,BT Group Plc,,Beth Houpis,2025-01-08T13:51:45.000+0000,,SHORT_NAME
+0038a00002n4oe6AAA,C,Dixon,C Dixon,,Needs Assignment,Other,cdixon@berkeleybowl.com,1 510 843 6929,,"Berkeley Bowl Produce, Inc.",,Kelly Wasden,2021-11-03T15:50:23.000+0000,2021-11-13,SHORT_NAME
+003E000001gopARIAY,Y,Dixons,Y Dixons,,Needs Assignment,Other,dixonsy@agi.ca,,,Grainger,,Adam George,2016-07-26T15:04:02.000+0000,,SHORT_NAME
+0030h00002T9KCPAA3,Ed,Drennan,Ed Drennan,"Manager, National Retail Accounts",Manager/Team Lead,Other,edrennan@pacseafood.com,+1 503 905 4521,,Pacific Seafood,,Kelly Wasden,2019-04-23T20:31:36.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00003PHWw6AAH,CJ,Drikakis,CJ Drikakis,SR Sales Development Manager,Manager/Team Lead,Sales,cj.drikakis@vocovo.com,44 1386 725100,,VOCOVO,,Grant McNulty,2023-10-03T13:17:41.000+0000,,SHORT_NAME
+0038a000037HtaiAAC,Hao,Du,Hao Du,IT Analyst,Analyst,Technical,hao.du@kering.com,,,Kering,,Grant McNulty,2022-12-19T14:40:05.000+0000,,SHORT_NAME
+0030h00002iUvbXAAS,Joyce,Du,Joyce Du,Senior Product Manager,Manager/Team Lead,Other,joyce@getsynapse.com,,,Synapse,,Axonify,2021-08-17T15:50:39.000+0000,,SHORT_NAME
+0038a00003G55YhAAJ,Meredith,Du,Meredith Du,hr business partner,Needs Assignment,Other,meredith.du@verizonwireless.com,,+1 916 753 3334,Charter Communications,,Axonify,2023-05-16T19:44:19.000+0000,,SHORT_NAME
+003E000001hJY28IAG,Ed,Dubiel,Ed Dubiel,Sales Facilitator,Needs Assignment,Sales,ed.dubiel@charter.com,330-630-7917,,Charter Communications,,Axonify,2016-08-10T14:17:10.000+0000,2020-06-25,SHORT_NAME
+0030h00002OUzenAAD,Vy,Duong,Vy Duong,Sales Manager,Manager/Team Lead,Sales,vduong@omnitracs.com,6475307037,,"Omnitracs, LLC",,Jen Tolbert,2018-09-19T13:38:17.000+0000,2018-09-19,SHORT_NAME
+0030h00002TAXMiAAP,TG,Duran,TG Duran,Risk Management Services,Needs Assignment,Other,tduran@icwgroup.com,8584364828,,ICW Group Insurance,,Kelly Wasden,2019-05-15T20:05:25.000+0000,2019-06-03,SHORT_NAME
+0038a00002w9GDPAA2,Ivona,E,Ivona E,Retail Store Manager,Manager/Team Lead,Other,iwonae1995@gmail.com,14372205845,,Walmart U.S.,,Liz Davis,2022-10-02T22:59:07.000+0000,,JUNK_KEYWORD | SHORT_NAME
+003Mm00000Lxi5mIAB,Catherine,Ed,Catherine Ed,"Senior Manager, Marketing",Manager/Team Lead,Marketing,catherine.ed@bestwestern.com,(602) 957-4200,,"Best Western International, Inc.",,Kelly Wasden,2025-03-26T14:11:01.000+0000,,SHORT_NAME
+0030h00002jurMIAAY,Ed,Edsminger,Ed Edsminger,"Manager, LMS, Special Projects",Manager/Team Lead,Other,eensminger@msdist.com,(309) 830-9696,,"Mid-States Distributing, LLC",,Jen Tolbert,2021-06-28T16:05:49.000+0000,2021-08-19,SHORT_NAME
+0030L00001vPHDcQAO,J.,Ehrlich,J. Ehrlich,Program Designer,Needs Assignment,Other,ami_ehrlich@hotmail.com,4158470453,,Philz Coffee,,Kelly Wasden,2018-02-13T21:07:03.000+0000,2022-04-29,SHORT_NAME
+0030h00002XIPBiAAP,Rebecka,Ek,Rebecka Ek,Hr Manager,Manager/Team Lead,Other,rebecka.ek@recticel.com,46 37184500,,Recticel,,Grant McNulty,2019-09-30T15:45:46.000+0000,,SHORT_NAME
+0038a00003G56PRAAZ,A.,Ekka,A. Ekka,hr business partner,Needs Assignment,Other,aekka@concentrix.com,,+91 88024 95766,Sutherland Global Services,,Axonify,2023-05-16T19:49:31.000+0000,,SHORT_NAME
+0030h00002QW9tvAAD,Hasan,El,Hasan El,Hr officer,Needs Assignment,Other,hsn.el.haj1@hrs.com,70793349,,HRS Group,,Axonify,2018-12-19T15:58:17.000+0000,2018-12-20,SHORT_NAME
+003E000000nEA3YIAW,TJ,Erdos,TJ Erdos,Healthcare Account Executive,Other,Sales,t.erdos@abbott.com,+1 224-667-6100,,Abbott,,Adam George,2013-11-21T21:44:33.000+0000,,SHORT_NAME
+0038a00003In1VRAAZ,Jo,Erickson,Jo Erickson,"Senior Manager, Marketing Communications",Manager/Team Lead,Marketing,jo.erickson@trailerparkgroup.com,,,Trailer Park,,Kelly Wasden,2023-07-05T16:10:52.000+0000,,SHORT_NAME
+0030h00002MADeqAAH,Mike,Es,Mike Es,"Manager, Employee Relations",Manager/Team Lead,Other,mike.vanes@bcferries.com,(250) 655-6130,,British Columbia Ferry Services Inc,,Kelly Wasden,2018-06-27T15:51:23.000+0000,,SHORT_NAME
+0038a00003Ccz5lAAB,test,es,test es,tes,Needs Assignment,Other,test23@homedepot.com,5194048907,,"The Home Depot, Inc.",,Jen Tolbert,2023-03-21T20:29:58.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030h00002M8sLFAAZ,Bo,Espino,Bo Espino,Asset Protection Analyst,Analyst,Other,bo.espino@smartandfinal.com,818-772-2021,,Smart & Final Inc.,,Kelly Wasden,2018-06-05T20:15:44.000+0000,2018-07-09,SHORT_NAME
+0030h00002VbYUKAA3,"P,",Eu,"P, Eu",Exec V,Needs Assignment,Other,,,,AstraZeneca - CVRM (formerly CVMD),,Grant McNulty,2019-07-31T19:00:45.000+0000,,SHORT_NAME | UNCONTACTABLE
+0038a00003G56RQAAZ,Jo,Evans,Jo Evans,hr business partner,Needs Assignment,Other,jo.evans@muellergroup.com,,,Müller UK & Ireland Group,,Grant McNulty,2023-05-16T19:49:31.000+0000,,SHORT_NAME
+0038a00003G5BJiAAN,Abner,F,Abner F,hr business partner,Needs Assignment,Other,abnerf@amazon.com,,,Nordstrom Inc,,Joe McCulla,2023-05-16T20:15:59.000+0000,,SHORT_NAME
+0030h00002Noe5SAAR,c,f,c f,bcm,Needs Assignment,Other,carl.fenn@anz.com,649,,Australia And New Zealand Banking Group Limited,,Axonify,2018-07-26T14:26:42.000+0000,,SHORT_NAME
+0030h00002XJdgeAAD,Stephen,FD,Stephen FD,UK Business Continuity Manager,Manager/Team Lead,Other,stephen.berryfdcbcimcmimbcimsyilcgi@ee.co.uk,,,BT Group Plc,,Beth Houpis,2019-10-18T11:27:12.000+0000,,SHORT_NAME
+0030h00002QY0AyAAL,C,Fischer,C Fischer,Program Manager,Manager/Team Lead,Other,christina.fischer@hp.com,+31652494038,,Hewlett-Packard (HP) Inc.,,Kelly Wasden,2019-01-24T04:01:54.000+0000,,SHORT_NAME
+003Mm00000JNI1dIAH,MJ,Fisher,MJ Fisher,Corporate Brand And Reputation Manager,Manager/Team Lead,Other,maryjames.fisher@blood.ca,,,Canadian Blood Services,,Axonify,2025-01-08T14:30:01.000+0000,,SHORT_NAME
+0038a00002w9QXlAAM,Ed,Fitzpatrick,Ed Fitzpatrick,N/A,Needs Assignment,Other,weathered713@gmail.com,,,Presidential Services Ltd,,Grant McNulty,2022-10-07T12:43:09.000+0000,,SHORT_NAME
+0030h00002M8wzlAAB,T,Fl,T Fl,x,Needs Assignment,Other,tana.flanagan.cpka@statefarm.com,,,State Farm,,Adam George,2018-06-06T13:23:14.000+0000,2018-08-31,SHORT_NAME
+0030h00002PPXpqAAH,Ty,Flanagan Cfi,Ty Flanagan Cfi,Regional Loss Prevention Manager,Manager/Team Lead,Other,tcfi@dollargeneral.com,+1 205 678 4196,,Dollar General,,Brian Smith,2018-12-03T19:50:43.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00003CcNB9AAN,Jo,Flood,Jo Flood,Internal Communications Manager,Manager/Team Lead,Other,jflood@baxterstorey.com,,,BaxterStorey,,Grant McNulty,2023-02-21T18:03:24.000+0000,,SHORT_NAME
+0030L00001vPH7yQAG,CJ,Flynn,CJ Flynn,Graphics Comm Specialist,Specialist,Other,cflynn@adamsstreetpartners.com,3124761507,,Adams Street Partners,,Adam George,2018-02-13T21:04:53.000+0000,,SHORT_NAME
+0030L00001vPJxlQAG,Ed,Flynn,Ed Flynn,Account Executive,Other,Sales,ed.flynn@mhiglobal.com,(404) 307-5660,,MHI Global,,Kelly Wasden,2018-02-13T23:25:32.000+0000,,SHORT_NAME
+0038a00002w9GVfAAM,Ed,Forler,Ed Forler,Rod,Needs Assignment,Other,ed.forler@daveandbusters.com,(214) 684-5034,,Dave & Busters,,Jen Tolbert,2022-10-02T23:03:26.000+0000,,SHORT_NAME
+0030h00002hCrhjAAC,Al,Frank,Al Frank,,Needs Assignment,Other,al.frank@learningmasters.com,6123823172,,"Learning Masters, Inc.",,Adam George,2021-02-16T15:10:21.000+0000,2021-02-16,SHORT_NAME
+0030h00002T9KpRAAV,Ty,Frewer,Ty Frewer,"Manager, Sales Distribution (East)",Manager/Team Lead,Sales,ty.frewer@sjrb.ca,,,Shaw Communications Inc.,,Ryan Flaherty,2019-04-23T20:35:12.000+0000,,SHORT_NAME
+0030L00001qF3jcQAC,Ty,Frost,Ty Frost,Senior Consultant,Consultant,Other,tfrost@westmonroepartners.com,8473473495,,West Monroe,,Adam George,2017-06-13T20:49:01.000+0000,2017-06-14,SHORT_NAME
+0030h00002dTJNLAA4,Betty,Fu,Betty Fu,Project Manager,Manager/Team Lead,Other,betty.fu@usbank.com,612-219-8913,,US Bank,,Adam George,2020-10-14T16:00:44.000+0000,2020-12-04,SHORT_NAME
+003Mm00000JNOSVIA5,Christina,Fu,Christina Fu,,Needs Assignment,Other,christina.fu@merck.com,,,Merck & Co.,,Liz Davis,2025-01-08T13:43:54.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00002w9JlGAAU,Linda,Fu,Linda Fu,"Manager, Growth & Strategy",Manager/Team Lead,Other,linda.fu@loblaw.ca,6476740814,,Loblaw Companies Limited,,Ryan Flaherty,2022-10-02T23:48:54.000+0000,,SHORT_NAME
+0030h00002XKOXZAA5,Ludwig,Fu,Ludwig Fu,Plant Manager,Manager/Team Lead,Other,ludwig.fu@checkpt.com,(856) 848-1800,,Checkpoint Systems,,Axonify,2019-10-29T14:34:50.000+0000,,SHORT_NAME
+0030h00002M8rQIAAZ,Sandra,Fu,Sandra Fu,"Senior Manager, Performance Analytics & Stress Testing, Corporate Treasury",Manager/Team Lead,Other,sandra.fu@bmo.com,,,BMO Financial Group,,Ryan Flaherty,2018-06-05T19:58:40.000+0000,,SHORT_NAME
+0030L00001vPIqMQAW,ARchan,G,ARchan G,CDD,Needs Assignment,Other,archana.govindaraju@bcdtravel.com,000000000,,BCD Travel,,Jen Tolbert,2018-02-13T22:41:55.000+0000,,SHORT_NAME
+0038a00002w8Cc0AAE,Prema,G,Prema G,,Needs Assignment,Other,prema.ganumukkala@gianteagle.com,1 800 553 2324,,"Giant Eagle, Inc.",,Liz Davis,2022-08-10T14:18:32.000+0000,2023-08-02,SHORT_NAME
+0030L00001vPK7MQAW,roopa,g,roopa g,Mgr,Needs Assignment,Other,roopa.gajwani@mastek.com,9322277465,,Mastek Ltd.,,Axonify,2018-02-13T23:32:56.000+0000,,SHORT_NAME
+0030h00002juviwAAA,Warren,G,Warren G,,Needs Assignment,Other,warren.grdon@rci.rogers.com,1 416 935 7777,,Rogers - Consumer Care,,Ryan Flaherty,2021-06-29T11:37:52.000+0000,2021-06-29,SHORT_NAME
+0030h00002NpFFIAA3,Bastiaanse,G.,Bastiaanse G.,IAM - IT Beheerder Security,Needs Assignment,Technical,guido.bastiaanse@asr.nl,,,ASR Nederland,,Beth Houpis,2018-08-07T20:07:56.000+0000,,SHORT_NAME
+003Mm00000JNHkQIAX,Deepak,G.,Deepak G.,,Needs Assignment,Other,deepak-g@vfc.com,,,V.F. Corporation,,Adam George,2025-01-08T13:39:17.000+0000,,SHORT_NAME
+0038a00002w9LNeAAM,Harshraj,G.,Harshraj G.,Multi-Branded QSR Operator in the West Coast,Needs Assignment,Other,harshraj@ghaimanagement.com,(408) 262-5642,,Ghai Management Services,,Kelly Wasden,2022-10-03T00:08:48.000+0000,,SHORT_NAME
+0030L00001vN22eQAC,TJ,Gallagher,TJ Gallagher,Account Manager,Manager/Team Lead,Sales,tj.gallagher@carahsoft.com,0,,Carahsoft Technology Corp.,,Jen Tolbert,2018-01-29T19:33:56.000+0000,,SHORT_NAME
+0038a00003G5C3oAAF,CJ,Gatto,CJ Gatto,"hr business partner, corporate investment bank",Needs Assignment,Other,cj.gatto@jpmorgan.com,,+1 203 253 8565,"BlackRock, Inc.",,Axonify,2023-05-16T20:20:10.000+0000,,SHORT_NAME
+0030h00002M8x2xAAB,JD,Gaumond,JD Gaumond,Strategy Advisor,Needs Assignment,Other,jdgaumond@sympatico.ca,(450) 465-0539,,TallOrder Consulting Inc,,Axonify,2018-06-06T13:27:49.000+0000,,SHORT_NAME
+0030h00002KklxfAAB,Ty,Gayeski,Ty Gayeski,Plant Manager,Manager/Team Lead,Other,tygayeski@eaton.com,,,Eaton Corporation,,Adam George,2018-04-10T20:43:16.000+0000,,SHORT_NAME
+0030h00002M6rUWAAZ,E.,Genus,E. Genus,Program Leader,Manager/Team Lead,Other,engenus@us.ibm.com,,,IBM,,Axonify,2018-04-24T14:27:00.000+0000,,SHORT_NAME
+003E000001Q5dIxIAJ,Cj,Giles,Cj Giles,Recruiting Relationship Manager,Manager/Team Lead,Other,cj.giles@gartner.com,+1.239.561.4755,,Gartner,,Axonify,2015-10-05T19:58:49.000+0000,,SHORT_NAME
+0030h00002jqxJZAAY,D,Gilpin,D Gilpin,Partner,Needs Assignment,Other,dgilpin@deloitte.ca,(519) 650-7720,,Deloitte& Touche LLP Canada,,Axonify,2021-05-01T15:01:17.000+0000,2024-01-25,SHORT_NAME
+0038a00003G4kiDAAR,RJ,Gilson,RJ Gilson,Assc PrinciPal,Needs Assignment,Other,rgilson@theocc.com,3123221181,,The Options Clearing Corporation,,Adam George,2023-04-20T14:10:25.000+0000,,SHORT_NAME
+0030h00002T90nlAAB,Meetha,Gk,Meetha Gk,Business Consultant,Consultant,Other,meetha.g-k@dxc.com,9935345636,,DXC Technology,,Jen Tolbert,2019-04-18T12:07:49.000+0000,2019-05-09,SHORT_NAME
+0030h00002n26zoAAA,Ed,Gleeson,Ed Gleeson,,Needs Assignment,Other,ed.gleeson@hsbc.ca,1 604 685 1000,,HSBC Bank USA,,Grant McNulty,2021-10-09T18:55:39.000+0000,2021-10-09,SHORT_NAME
+0038a00003CcqjoAAB,al,golsorkhi,al golsorkhi,csr,Needs Assignment,Other,ahmad.golsorkhi@rbc.com,1 905 949 3663,,RBC,,Ryan Flaherty,2023-03-14T00:06:00.000+0000,2023-12-15,SHORT_NAME
+0030h00002iJjhCAAS,Ed,Gonzalez,Ed Gonzalez,Federal Government Mobility Service Manager,Manager/Team Lead,Other,eg8107@att.com,,,AT&T,,Brian Smith,2021-03-19T17:24:00.000+0000,,SHORT_NAME
+0030h00002T9KpJAAV,Jp,Gougeon,Jp Gougeon,"Account Manager, Retail",Manager/Team Lead,Sales,jp.gougeon@sjrb.ca,,,Shaw Communications Inc.,,Ryan Flaherty,2019-04-23T20:35:12.000+0000,,SHORT_NAME
+0038a00002srZuBAAU,PS,Govind,PS Govind,"Sr. Manager, Enterprise Architecture",Manager/Team Lead,Other,psgovind@weismarkets.com,5709883780,,Weis Markets Inc,,Adam George,2022-05-31T18:50:28.000+0000,2022-12-12,SHORT_NAME
+0038a00003G58NXAAZ,Jo,Gray,Jo Gray,hr business partner,Needs Assignment,Other,jo.gray@equifax.com,,,Equifax,,Jen Tolbert,2023-05-16T20:00:55.000+0000,,SHORT_NAME
+003Mm00000Lxld9IAB,C,Greene,C Greene,Senior Instructional Technologist,Needs Assignment,Other,cgreene@jhu.edu,1 410 955 3543,,Johns Hopkins Medical Services,,Axonify,2025-03-26T13:56:55.000+0000,,SHORT_NAME
+0030h00002QWKfYAAX,Ed,Greene,Ed Greene,,Needs Assignment,Other,greene_e@matalan.co.uk,07473323312,,Matalan PLC,,Grant McNulty,2018-12-21T15:05:08.000+0000,2019-08-09,SHORT_NAME
+0030h00002f0CBDAA2,JJ,Grob,JJ Grob,Sales Development Representative II,Other,Sales,jj.grob@opensesame.com,+1 503 673 6891,,OpenSesame,,Kelly Wasden,2020-09-22T14:20:06.000+0000,,SHORT_NAME
+0030h00002XKOILAA5,Bill,Gu,Bill Gu,"Sales Manager, Region",Manager/Team Lead,Sales,bill.gu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:24:22.000+0000,,SHORT_NAME
+0030h00002XKQcpAAH,Diana,Gu,Diana Gu,Sales Representative,Other,Sales,diana.gu@libertymutual.com,(617) 357-9500,,Liberty Mutual Insurance,,Axonify,2019-10-29T16:48:47.000+0000,,JUNK_KEYWORD | SHORT_NAME
+003Mm00000JNM60IAH,Edward,Gu,Edward Gu,Customer Service Representative Auditor Specialist,Specialist,Other,edward.gu@kaufland.com,+49-7132-9400,,Kaufland,,Grant McNulty,2025-01-08T14:08:38.000+0000,,SHORT_NAME
+0030h00002gGz3oAAC,Sting,Gu,Sting Gu,Medical Device Admin APAC,Administrator,Other,xgu15@its.jnj.com,,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-11-15T18:32:25.000+0000,2023-08-29,SHORT_NAME
+0030h00002TChK7AAL,Xieting,Gu,Xieting Gu,,Needs Assignment,Other,,,,J&J - Ethicon China,,Ryan Flaherty,2019-04-10T17:56:36.000+0000,,SHORT_NAME | UNCONTACTABLE
+0038a00003LdkDaAAJ,Ta,Guidry,Ta Guidry,,Needs Assignment,Other,tguidry4@hotmail.com,1 804 732 7912,,VSP Vision Care,,Brian Smith,2023-09-20T19:53:06.000+0000,2021-05-09,SHORT_NAME
+003Mm00000Z1WzUIAV,Olga,H,Olga H,Business Development Manager,Manager/Team Lead,Sales,olga.hernesniemi@kesko.fi,+358 41 5101928,+358 41 5101928,Kesko Corporation,,Grant McNulty,2026-02-18T11:06:06.000+0000,,SHORT_NAME
+003Mm00000MZtcrIAD,Melissa,H.,Melissa H.,"Senior Manager, Content & Analytics",Manager/Team Lead,Other,melissah@loblaw.ca,,,Loblaw Companies Limited,,Ryan Flaherty,2025-04-11T18:55:39.000+0000,,SHORT_NAME
+0030L00001uasACQAY,Daniel,Ha,Daniel Ha,Senior Recruiter,Other,Other,daniel_ha@freddiemac.com,(703) 442-2972,,Freddie Mac,,Jen Tolbert,2018-01-03T14:14:27.000+0000,,SHORT_NAME
+0030h00002NpFGQAA3,Savan,Ha,Savan Ha,,Needs Assignment,Other,savan.ha@bt.com,,,BT Group Plc,,Beth Houpis,2018-08-07T20:08:20.000+0000,,SHORT_NAME
+0030h00002M8u4ZAAR,Al,Halstead,Al Halstead,"Dean, College Of Career Dvlp And Lrng Mgmt",Needs Assignment,Other,halsteadc@sec.gov,(202) 551-3179,,Securities and Exchange Commission,,Axonify,2018-06-05T23:56:19.000+0000,,SHORT_NAME
+0030h00002XKUAGAA5,Ki,Han,Ki Han,Compliance & Ethics Specialist,Specialist,Other,ki_t_han@fanniemae.com,(202) 752-8286,,Fannie Mae,,Axonify,2019-10-29T19:43:28.000+0000,,SHORT_NAME
+0030h00002XKOpHAAX,Aj,Harb,Aj Harb,Sales Manager,Manager/Team Lead,Sales,aj_harb@carmax.com,(804) 747-0422,,Carmax,,Jen Tolbert,2019-10-29T14:49:35.000+0000,,SHORT_NAME
+0038a00003G598rAAB,De,Harris,De Harris,area hr business partner,Needs Assignment,Other,demondraeharris.mondraeharris@lowes.com,,+1 252 814 3131,Lowe's,,Ryan Flaherty,2023-05-16T20:04:38.000+0000,,SHORT_NAME
+0030h00002XKNoQAAX,Ty,Harris,Ty Harris,Sales Manager,Manager/Team Lead,Sales,ty.harris@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:08:39.000+0000,,SHORT_NAME
+0030h00002M8tHpAAJ,T.,Hart,T. Hart,,Needs Assignment,Other,scott.hart@axa-advisors.com,,,AXA Equitable Life Insurance Company,,Axonify,2018-06-05T22:24:23.000+0000,,SHORT_NAME
+0030L00001vN11JQAS,B.,Hartman,B. Hartman,General Counsel,Other,Other,judd.hartman@ppdi.com,0,,PPD,,Jen Tolbert,2018-01-29T19:31:39.000+0000,,SHORT_NAME
+0030h00002M8viQAAR,D,Haskins,D Haskins,Ed Advisor,Needs Assignment,Other,dhaskins@edc.ca,9999999999,,Export Development Canada,,Axonify,2018-06-06T08:01:38.000+0000,,SHORT_NAME
+0030h00002hBl07AAC,Bj,Haverkorn,Bj Haverkorn,researcher,Needs Assignment,Other,bjhaverkorn@gmail.com,9318133093,,IHL Consulting Group,,Jen Tolbert,2021-02-01T23:21:38.000+0000,,SHORT_NAME
+0030h00002M90C0AAJ,Chloe,He,Chloe He,Sales Support,Other,Sales,chloe.he@checkpt.com,,,Checkpoint Systems,,Axonify,2018-06-06T14:40:01.000+0000,,SHORT_NAME
+0038a00002w9HgLAAU,Helen,He,Helen He,"Senior Manager, Strategy",Manager/Team Lead,Other,helen_he@homedepot.com,(770) 433-8211,,Expo Design Center,,Axonify,2022-10-02T23:20:39.000+0000,,SHORT_NAME
+0030h00002XKOY4AAP,Horace,He,Horace He,"Senior Manager, Sales",Manager/Team Lead,Sales,horace.he@checkpt.com,(856) 848-1800,,Checkpoint Systems,,Axonify,2019-10-29T14:35:12.000+0000,,SHORT_NAME
+003Mm000008H5hpIAC,Le,He,Le He,IT Consultant,Consultant,Technical,le.he@aiib.org,+861083580628,,Asian Infrastructure Investment Bank,,Patrick Malaperiman,2024-01-17T11:57:25.000+0000,2024-01-17,SHORT_NAME
+0030h00002M8wwPAAR,Lisa,He,Lisa He,Analyst,Analyst,Other,lisa.henry.j2lh@statefarm.com,,,State Farm,,Adam George,2018-06-06T13:22:07.000+0000,2018-09-17,SHORT_NAME
+0030L00001vN1faQAC,Maggie,He,Maggie He,"Assistant Manager, Key Accounts",Manager/Team Lead,Other,mhe@murata.com,0,,"Murata Electronics North America, Inc.",,Jen Tolbert,2018-01-29T19:33:16.000+0000,,SHORT_NAME
+0038a000030kUJlAAM,Mei,He,Mei He,accountant,Other,Other,mmhe.s03134@ca.wal-mart.com,6136005710,,Walmart U.S.,,Liz Davis,2022-10-23T15:08:10.000+0000,,SHORT_NAME
+0038a00003LdfigAAB,Yanhua,HE,Yanhua HE,,Needs Assignment,Other,13641488a@gmil.com,66297391,,Ii Elanga,,Grant McNulty,2023-09-16T14:05:21.000+0000,2020-07-12,SHORT_NAME
+003Mm00000Q8t7fIAB,"YuHong, L&D",He,"YuHong, L&D He",,Needs Assignment,Other,yuhong.he2@pfizer.com,,,Pfizer Eliquis,,Brian Smith,2025-07-26T08:10:48.000+0000,,SHORT_NAME
+0030h00002c3mc8AAA,Jo,Heard,Jo Heard,Business Relationship Manager,Manager/Team Lead,Other,jo.heard@de.astellas.com,,,Astellas Pharma Ltd,,Grant McNulty,2020-05-04T16:05:12.000+0000,,SHORT_NAME
+0030h00002M8x3NAAR,Al,Hebron,Al Hebron,Agency Field Executive,Needs Assignment,Other,al.hebron.j51c@statefarm.com,,,State Farm,,Adam George,2018-06-06T13:29:13.000+0000,2018-09-17,SHORT_NAME
+0038a00003G5DbfAAF,Jo,Hedegaard,Jo Hedegaard,hr business partner & rekrutteringschef for g4s dk,Needs Assignment,Other,jo.hedegaard@g4s.us,,,AMCP Retail Holdings Corp,,Jen Tolbert,2023-05-16T20:27:58.000+0000,,SHORT_NAME
+0038a00002w9J1xAAE,Al,Hendrick,Al Hendrick,General Manager,Manager/Team Lead,Other,ahendrick@accelerate360.com,(800) 929-8274,,Accelerate360,,Jen Tolbert,2022-10-02T23:39:34.000+0000,2024-01-25,SHORT_NAME
+0030h00002XKUgbAAH,Jo,Henges,Jo Henges,"Manager, Customer Service",Manager/Team Lead,Other,jo.henges@fmr.com,(617) 563-7000,,Fidelity Investments,,Axonify,2019-10-29T20:07:18.000+0000,,SHORT_NAME
+0030h00002XKSRKAA5,Jj,Heredia,Jj Heredia,Account Executive,Other,Sales,jheredia@costar.com,(202) 346-6500,,CoStar Group,,Axonify,2019-10-29T18:05:38.000+0000,,SHORT_NAME
+0030h00002XKSSkAAP,Aj,Herlitz,Aj Herlitz,Sales Associate,Other,Sales,aherlitz@costar.com,(209) 203-0287,,CoStar Group,,Axonify,2019-10-29T18:06:21.000+0000,,SHORT_NAME
+0030L00001vxcgZQAQ,Ed,Hernan,Ed Hernan,"Regional Manager, Human Resourcse",Manager/Team Lead,Other,ed.hernan@burlingtonstores.com,(609) 387-7800,,Burlington Stores,,Adam George,2018-02-19T16:52:14.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030h00002XKR4bAAH,Al,Herndon,Al Herndon,"Manager, Sales (US Road Building & Utilities)",Manager/Team Lead,Sales,al.herndon@terex.com,(517) 552-2420,,Terex Corporation,,Axonify,2019-10-29T17:12:19.000+0000,,SHORT_NAME
+0030h00002m2c6GAAQ,Ed,Hesselgren,Ed Hesselgren,Game Growth Lead,Manager/Team Lead,Other,ehesselgren@skillz.com,,,Skillz Inc.,,Kelly Wasden,2021-09-05T15:11:39.000+0000,2022-08-09,SHORT_NAME
+0030h00002T9IxfAAF,Ed,Hesselgren,Ed Hesselgren,"Manager, Strategy & Operations Growth Marketing",Manager/Team Lead,Marketing,ehesselgren@google.com,,,Google Inc,,Amanda Monk,2019-04-23T20:24:17.000+0000,,SHORT_NAME
+0038a00003G5FXBAA3,My,Hexo,My Hexo,hr business partner,Needs Assignment,Other,mhexo@fb.com,,,Meta Platforms Inc.,,Joe McCulla,2023-05-16T20:38:55.000+0000,,SHORT_NAME
+0030h00002M8rTgAAJ,Ed,Hinkle,Ed Hinkle,"Divisional Manager, Security and Loss Prevention",Manager/Team Lead,Other,ehinkle@meijer.com,513-755-4810,,"Meijer, Inc.",,Adam George,2018-06-05T19:59:51.000+0000,,SHORT_NAME
+0030h00002PMTeAAAX,J.,Hinton,J. Hinton,General Manager,Manager/Team Lead,Other,bruce.hinton@enbridge.com,,,Enbridge Inc.,,Kelly Wasden,2018-10-23T03:09:37.000+0000,,SHORT_NAME
+0038a00003G58nWAAR,Shalini,HL,Shalini HL,hr business partner,Needs Assignment,Other,shl@ibm.com,,+91 80 4076 2000,The Hanover Insurance Group,,Axonify,2023-05-16T20:03:05.000+0000,,SHORT_NAME
+0038a00003G58yIAAR,Ai,Ho,Ai Ho,"hr partner, gcg wfr",Needs Assignment,Other,ai.ho@ibm.com,,+886 978 060 926,The Hanover Insurance Group,,Axonify,2023-05-16T20:03:49.000+0000,,SHORT_NAME
+0030h00002QW5tWAAT,Alfred,Ho,Alfred Ho,"Product Manager, Digital Innovation",Manager/Team Lead,Innovation,alfred.ho@elizabetharden.com,,,"Elizabeth Arden, Inc.",,Jen Tolbert,2018-12-18T21:36:48.000+0000,,SHORT_NAME
+003Mm00000SonC1IAJ,Andy,Ho,Andy Ho,It Solution Manager,Manager/Team Lead,Technical,aho@fossil.com,,,Fossil,,Jen Tolbert,2025-09-24T19:33:41.000+0000,,SHORT_NAME
+0030h00002VbvpsAAB,Ben,Ho,Ben Ho,Senior Enterprise Customer SuccessMmanager,Manager/Team Lead,Other,bho@8x8.com,(669) 245-4439,,"8x8, Inc.",,Kelly Wasden,2019-08-06T13:36:02.000+0000,2019-08-28,SHORT_NAME
+0038a00002w9JfEAAU,Bernice,Ho,Bernice Ho,Employee Communications Professional,Needs Assignment,Other,bernice.ho@siemens-healthineers.com,(905) 465-8000,,Siemens Canada,,Axonify,2022-10-02T23:47:30.000+0000,,SHORT_NAME
+003Mm00000SisROIAZ,Chengchun,Ho,Chengchun Ho,,Needs Assignment,Other,chengchunh@tawa.com,,,99 Ranch Market,,Kelly Wasden,2025-09-22T15:34:59.000+0000,,SHORT_NAME
+0030L00001vMvwmQAC,Eric,Ho,Eric Ho,Digital Partner Account Manager,Manager/Team Lead,Sales,eric.ho@bhnetwork.com,0,,"Blackhawk Network, Inc.",,Kelly Wasden,2018-01-29T19:22:27.000+0000,,SHORT_NAME
+0030h00002XKR3PAAX,Glenn,Ho,Glenn Ho,Regional Sales Manager,Manager/Team Lead,Sales,glenn.ho@terex.com,(203) 222-7170,,Terex Corporation,,Axonify,2019-10-29T17:11:30.000+0000,,SHORT_NAME
+0030h00002T9HbMAAV,Jason,Ho,Jason Ho,"Sales Manager, Operations, National Distribution BC",Manager/Team Lead,Sales,jason.ho@bell.ca,,,Bell Canada - Holding Account,,Liz Davis,2019-04-23T20:16:03.000+0000,,SHORT_NAME
+0030h00002XKOeIAAX,John,Ho,John Ho,Sales Tools & Technology Product Manager,Manager/Team Lead,Sales,jho2@leggmason.com,(203) 703-6162,,Legg Mason,,Axonify,2019-10-29T14:37:54.000+0000,,SHORT_NAME
+0030h00002aXV2gAAG,Joy,Ho,Joy Ho,Marketing Manager,Manager/Team Lead,Marketing,jho@freshdirect.com,2128542391,,Fresh Direct,,Axonify,2020-02-26T20:13:46.000+0000,,SHORT_NAME
+0030h00002XKPJdAAP,Mary,Ho,Mary Ho,Salesforce Business Analyst,Analyst,Sales,mary.ho@vonage.com,(732) 528-2600,,Vonage,,Axonify,2019-10-29T15:20:46.000+0000,,SHORT_NAME
+0038a00003G5FkSAAV,Pei,Ho,Pei Ho,hr business partner,Needs Assignment,Other,pei.ho@uniqlo-design.com,,+1 503 329 4218,Uniqlo,,Axonify,2023-05-16T20:40:11.000+0000,,SHORT_NAME
+0030h00002hBl3CAAS,Phanh,Ho,Phanh Ho,Hrbp,Needs Assignment,Other,phanh_ho@colpal.com,(094) 445-6751,,Colgate-Palmolive,,Axonify,2021-02-01T23:26:04.000+0000,,SHORT_NAME
+0030h00002T9NlLAAV,Sam,Ho,Sam Ho,"Manager, Customer Service",Manager/Team Lead,Other,sam.ho@td.com,,,Toronto-Dominion Bank,,Adam George,2019-04-24T13:40:28.000+0000,,SHORT_NAME
+0038a00002w9QYgAAM,Simon,Ho,Simon Ho,Program Analyst,Analyst,Other,simonb.ho@rci.rogers.com,416-935-6882,,Rogers - Consumer Care,,Ryan Flaherty,2022-10-07T12:43:57.000+0000,,SHORT_NAME
+0030h00002M8woTAAR,Talia,Ho,Talia Ho,Consultant,Consultant,Other,aliciahho@yahoo.ca,7786810030,,Ymca,,Axonify,2018-06-06T13:19:27.000+0000,2017-11-30,SHORT_NAME
+0038a00002w9IOCAA2,Theresa,Ho,Theresa Ho,Online Marketing Manager,Manager/Team Lead,Marketing,tho@delawarenorth.com,(209) 372-1294,,"Delaware North Companies Travel Hospitality Services, Inc.",,Joe McCulla,2022-10-02T23:30:31.000+0000,,SHORT_NAME
+0030h00002ZoDLpAAN,Vic,Ho,Vic Ho,"Competitive & Market Intel, Sales Operations & Strategy Analyst (APAC)",Analyst,Sales,hov@google.com,,,Google Inc,,Amanda Monk,2020-02-11T20:34:39.000+0000,,SHORT_NAME
+0038a00002n4jk6AAA,Ed,Hofmann,Ed Hofmann,"Partner, Design + Strategy",Needs Assignment,Other,ed.hofmann@chutegerdeman.com,,,Chute Gerdeman,,Adam George,2021-11-02T21:03:14.000+0000,,SHORT_NAME
+003Mm00000LvwUcIAJ,P,Hogle,P Hogle,Writer,Needs Assignment,Other,phogle@elearningguild.com,,,The eLearning Guild,,Kelly Wasden,2025-03-25T17:43:55.000+0000,,SHORT_NAME
+0030h00002hBkzTAAS,Ed,Hohenstein,Ed Hohenstein,Internal Audit Manager,Manager/Team Lead,Technical,edward.hohenstein@wakefern.com,7324624700,,"Saker ShopRites, Inc.",,Brian Smith,2021-02-01T23:20:35.000+0000,,SHORT_NAME
+0030h00002M8xBoAAJ,C,Holmes,C Holmes,Sr ISD,Needs Assignment,Other,cholmes@gpstrategies.com,1.443.539.8544,,BlessingWhite,,Axonify,2018-06-06T13:27:17.000+0000,,SHORT_NAME
+0030h00002OWzhDAAT,RJ,Holterman,RJ Holterman,product marketing,Needs Assignment,Marketing,reintjan.holterman@dieboldnixdorf.com,3.15E+11,,"Diebold Nixdorf, Incorporated",,Adam George,2018-10-10T16:25:18.000+0000,,SHORT_NAME
+003E000001gosYgIAI,At,Home,At Home,,Needs Assignment,Other,axonifyhelp@athome.com,,,At Home,,Beth Houpis,2016-07-26T20:17:26.000+0000,2024-01-25,SHORT_NAME
+0038a00003G5EZYAA3,Gi,Hong,Gi Hong,people hr partner,Needs Assignment,Other,gi.hong@gm.com,,+1 248 921 1528,GM Financial,,Adam George,2023-05-16T20:33:25.000+0000,,SHORT_NAME
+0030L00001vPJurQAG,Ed,Hoover,Ed Hoover,"Manager, LivingWell",Manager/Team Lead,Other,hooverel@ah.org,503-251-6201,,Adventist Health,,Kelly Wasden,2018-02-13T23:21:18.000+0000,2018-08-17,SHORT_NAME
+0038a00003PHQeNAAX,T,Houpe,T Houpe,,Needs Assignment,Other,houpe.1@napls.us,1 614 855 2040,,School,,Axonify,2023-09-27T17:09:12.000+0000,,SHORT_NAME
+0038a00003G58otAAB,Akinwale,Hr,Akinwale Hr,"hr business partner, emea",Needs Assignment,Other,akinwalea@us.ibm.com,,+971 56 505 4318,The Hanover Insurance Group,,Axonify,2023-05-16T20:03:05.000+0000,,SHORT_NAME
+0038a00003G56QpAAJ,Sushil,Hr,Sushil Hr,hr business partner,Needs Assignment,Other,sushil.hr@concentrix.com,,,Sutherland Global Services,,Axonify,2023-05-16T19:49:31.000+0000,,SHORT_NAME
+003E00000086ffhIAA,Al,Hrubeniuk,Al Hrubeniuk,Dir. Loss Prevention,Needs Assignment,Other,al.hrubeniuk@smartandfinal.com,(323) 869-7707,,Smart & Final Inc.,Loss Prevention,Kelly Wasden,2011-11-11T20:17:57.000+0000,2020-11-19,SHORT_NAME
+0030h00002M9sDhAAJ,Daryl,Hu,Daryl Hu,Electronics Manufacturing Manager,Manager/Team Lead,Other,dhu@irobot.com,+1 808 851 7090,,Irobot Corporation,,Axonify,2018-06-18T16:46:07.000+0000,,SHORT_NAME
+0030h00002M8s4gAAB,Hai,Hu,Hai Hu,Dr.,Needs Assignment,Other,hai@orgrimmar.io,,,South Moon Under,,Axonify,2018-06-05T20:11:10.000+0000,,SHORT_NAME
+0030h00002T9L4WAAV,Sera,Hu,Sera Hu,"Manager, Customer Service (Asia)",Manager/Team Lead,Other,sera.hu@ti.com,,,Texas Instruments Incorporated,,Jen Tolbert,2019-04-23T20:36:49.000+0000,,SHORT_NAME
+0038a00002wAFdtAAG,Tony,Hu,Tony Hu,,Needs Assignment,Other,tony.hu@coop.no,47 69 28 41 82,,Coop Norway,,Beth Houpis,2022-10-11T07:10:23.000+0000,2022-10-11,SHORT_NAME
+0030h00002gGz3sAAC,Yan Qiong,Hu,Yan Qiong Hu,Medical Device Admin APAC,Administrator,Other,yhu32@its.jnj.com,,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-11-15T18:32:25.000+0000,,SHORT_NAME
+0030h00002h9Jt8AAE,Zi,Huang,Zi Huang,,Needs Assignment,Other,t-zihuang@expediagroup.com,4252198152,,Expedia Group,,Grant McNulty,2020-12-29T15:21:32.000+0000,2020-12-26,SHORT_NAME
+0030L00001vzFmCQAU,Al,Hummel,Al Hummel,Plant Manager,Manager/Team Lead,Other,al_hummel@admworld.com,204-925-2100,,Adm Milling Co.,,Adam George,2018-03-01T23:48:51.000+0000,,SHORT_NAME
+0030h00002MAEDYAA5,suresh,hv,suresh hv,Sr Developer,Needs Assignment,Other,sureshv@edutech.com,9840974671,,Edutech,,Axonify,2018-06-27T16:12:44.000+0000,,SHORT_NAME
+0038a00003InD7tAAF,Nguyễn,Hà,Nguyễn Hà,Officer,Needs Assignment,Other,ha.nt8@mbageas.life,57 1 4855241,,Nữ giới,,Axonify,2023-07-11T04:57:35.000+0000,,SHORT_NAME
+003Mm000008XPXhIAO,PR,Inquiry,PR Inquiry,asdfasdf,Needs Assignment,Other,prinquiry@axonify.com,5195851200,,"Axonify, Inc.",,Matthew Horsman,2024-01-25T20:55:58.000+0000,,SHORT_NAME
+0030h00002jtSuYAAU,test,io,test io,,Needs Assignment,Other,testworker@test.io,2013356698,,Test Io,,Axonify,2021-06-08T22:00:21.000+0000,2021-08-24,JUNK_KEYWORD | SHORT_NAME
+0030h00002T9I1oAAF,Jennifer,Ip,Jennifer Ip,"Manager, Customer Service",Manager/Team Lead,Other,jennifer.ip@checkpt.com,(856) 848-1800,,Checkpoint Systems,,Axonify,2019-04-23T20:18:36.000+0000,,SHORT_NAME
+0030h00002T9L84AAF,Jonathan,Ip,Jonathan Ip,"Manager, Finance Sales & Expenses, Financial & Risk (Asia)",Manager/Team Lead,Finance,jonathan.ip@thomsonreuters.com,,,Thomson Reuters Corporation,,Axonify,2019-04-23T20:37:08.000+0000,,JUNK_KEYWORD | SHORT_NAME
+003Mm00000JNKjKIAX,K,J,K J,accountant,Other,Other,kjohnso1@circlek.com,555-555-5555,,Circle K,,Joe McCulla,2025-01-08T13:50:03.000+0000,,SHORT_NAME
+003Mm00000Vvg5WIAR,Rc,Jackson,Rc Jackson,Senior Manager,Manager/Team Lead,Other,jackson.r@apple.com,,,Apple Inc.,,Joe McCulla,2025-12-04T18:03:33.000+0000,,SHORT_NAME
+0030h00002M8rHEAAZ,Ed,Jacobs,Ed Jacobs,"Senior Manager, Performance Effectiveness",Manager/Team Lead,Other,ed.jacobs@bmo.com,(416) 927-6181,,BMO Financial Group,,Ryan Flaherty,2018-06-05T19:55:39.000+0000,,SHORT_NAME
+0030h00002RTsKFAA1,Ky,Jansson,Ky Jansson,Product/Program Manager,Manager/Team Lead,Other,kyj@amazon.com,8013615467,,Amazon,,Joe McCulla,2019-03-08T17:43:47.000+0000,2019-04-05,SHORT_NAME
+0030h00002m2OOSAA2,Ky,Jansson,Ky Jansson,Sr. Product Manager,Manager/Team Lead,Other,ky-jansson@pluralsight.com,,,Pluralsight,,Kelly Wasden,2021-09-03T00:49:22.000+0000,,SHORT_NAME
+0030h00002M8twVAAR,Ed,Jarecki,Ed Jarecki,Internal Consultant,Consultant,Other,erjarecki@bellevue.edu,,,Bellevue University,,Adam George,2018-06-05T23:39:50.000+0000,,SHORT_NAME
+003E0000016BlqAIAS,JC,jcmillr1,JC jcmillr1,Sales Repa,Needs Assignment,Sales,jcmillr1@gmail.com,916717-9260,,,,Lesia Crocker,2014-11-03T14:27:35.000+0000,,SHORT_NAME
+0030L00001uYPJnQAO,Bruce,Ji,Bruce Ji,"Supervisor, Call Center (Asia Pacific)",Manager/Team Lead,Customer Service,bji@scottrade.com,(314) 965-1555,,Scottrade,Call Center,Joe McCulla,2017-12-19T23:31:02.000+0000,2018-06-11,SHORT_NAME
+0030L00001vN0jYQAS,Charles,JO,Charles JO,Senior Corporate Recruiter,Other,Other,charles.jo@powerint.com,(408) 414-8752,,"Power Integrations, Inc.",,Kelly Wasden,2018-01-29T19:31:06.000+0000,,SHORT_NAME
+003Mm00000T3JBuIAN,Jo,Jo,Jo Jo,,Needs Assignment,Other,ded@axonify.com,,,"Axonify, Inc.",,Matthew Horsman,2025-09-30T23:16:36.000+0000,,SHORT_NAME
+0030h00002ZoHn7AAF,jo,jo,jo jo,manager,Manager/Team Lead,Other,jo@jo.com,3105685748,,Starpoint,,Axonify,2020-02-12T18:26:53.000+0000,,SHORT_NAME
+003Mm00000NrCAgIAN,YOUNHO,JO,YOUNHO JO,,Needs Assignment,Other,ololololv@naver.com,,,statistics training institute,,Axonify,2025-05-22T16:45:34.000+0000,,SHORT_NAME | ALL_CAPS
+0030h00002XKU1YAAX,Jj,Jones,Jj Jones,"Manager, General Sales III",Manager/Team Lead,Sales,jj.jones@charter.com,(203) 905-7800,,Spectrum,,Jen Tolbert,2019-10-29T19:37:23.000+0000,,SHORT_NAME
+0038a00003G5AIBAA3,M,Jones,M Jones,hr business partner,Needs Assignment,Other,mjones85@humana.com,,+1 314 346 0203,"Fanatics, Inc.",,Jen Tolbert,2023-05-16T20:10:43.000+0000,,SHORT_NAME
+003Mm00000JNO7aIAH,M,Jones,M Jones,Title,Needs Assignment,Other,mike.jones@broadcom.com,1 604 233 8500,,Broadcom Corporation,,Kelly Wasden,2025-01-08T14:33:15.000+0000,,SHORT_NAME
+0030h00002hCcKSAA0,Al,Judd,Al Judd,Sr Sales Engineer,Other,Sales,pjx487@zebra.com,+1 612 225 1922,,Zebra Technologies Corporation,,Susan McGovern,2021-02-12T17:57:45.000+0000,,SHORT_NAME
+0030h00002QVV22AAH,Jeffrey,K,Jeffrey K,Pharmacy Ambassador,Needs Assignment,Other,jeffrey.k@kinneydrugs.com,,,"Kinney Drugs, Inc.",,Axonify,2018-12-12T14:45:53.000+0000,,SHORT_NAME
+003Mm000007FthiIAC,Shuk,K.,Shuk K.,CISO,Needs Assignment,Other,shuk.khader@footlocker.com,1 212 720 3700,,Foot Locker Inc.,,Ryan Flaherty,2023-12-14T15:31:19.000+0000,2023-12-14,SHORT_NAME
+0030h00002T9HlLAAV,Al,Kain,Al Kain,"Senior Manager, Sales & Operations",Manager/Team Lead,Sales,al.kain@brightstarcorp.com,(866) 277-6325 x8063074,,Brightstar,,Jen Tolbert,2019-04-23T20:16:59.000+0000,,SHORT_NAME
+0038a00002w9HivAAE,Mi,Kang,Mi Kang,IT Business Relationship Manager,Manager/Team Lead,Technical,mkang@finishline.com,(317) 613-6517,,"The Finish Line, Inc.",,Adam George,2022-10-02T23:20:56.000+0000,,SHORT_NAME
+003Mm000008mIu7IAE,PK,Kasibhotla,PK Kasibhotla,Engineering Manager,Manager/Team Lead,Other,phanikumar.kasibhotla@keysight.com,1 800 829 4444,,"Keysight Technologies, Inc.",,Kelly Wasden,2024-02-02T20:42:47.000+0000,2024-02-02,SHORT_NAME
+0038a00003G5DIPAA3,Jo,Kelly,Jo Kelly,hr business partner,Needs Assignment,Other,jo.kelly@unilever.com,,,Alberto-Culver Company,,Grant McNulty,2023-05-16T20:26:23.000+0000,,SHORT_NAME
+0030L00001vMqeNQAS,Ed,Kern,Ed Kern,"Manager, Business Development (LNG)",Manager/Team Lead,Sales,ed.kern@chartindustries.com,(770) 721-7605,,"Chart Industries, Inc.",,Jen Tolbert,2018-01-29T19:13:02.000+0000,,SHORT_NAME
+0030h00002XKQ9uAAH,Ed,Kern,Ed Kern,Senior Business Analyst (Salesforce.com),Analyst,Sales,ed.kern@lfg.com,(484) 583-6433,,Lincoln Financial Group,,Adam George,2019-10-29T16:21:39.000+0000,,SHORT_NAME
+0038a00003QRxhmAAD,j,khjk,j khjk,,Needs Assignment,Other,herry@klara.com,1 303 571 5377,,gh,,Axonify,2023-10-20T22:50:03.000+0000,,SHORT_NAME
+0030h00002iJWOeAAO,HB,Kincaid,HB Kincaid,,Needs Assignment,Other,hbkincaid@carliecs.com,,,Carli C's IGA,,Jen Tolbert,2021-03-17T06:00:07.000+0000,2021-03-22,SHORT_NAME
+0038a00003G5Dh7AAF,Jo,Kingsley-Rowe,Jo Kingsley-Rowe,hr business partner,Needs Assignment,Other,jo.rowe@rbs.com,,,The Royal Bank of Scotland,,Grant McNulty,2023-05-16T20:28:31.000+0000,,SHORT_NAME
+0030h00002QVjO6AAL,TJ,Kischook,TJ Kischook,Innovation and Technology Lead,Manager/Team Lead,Innovation,travis.kischook@skipthedishes.ca,,,SkipTheDishes,,Adam George,2018-12-15T04:01:32.000+0000,,SHORT_NAME
+0030h00002QVjO7AAL,TJ,Kischook,TJ Kischook,Innovation and Technology Lead,Manager/Team Lead,Innovation,vis.kischook@skipthedishes.ca,,,SkipTheDishes,,Adam George,2018-12-15T04:01:32.000+0000,,SHORT_NAME
+0030h00002NpFOKAA3,Arunkumar,KK,Arunkumar KK,,Needs Assignment,Other,akk@woolworths.com.au,,,Woolworths Group,,Joe McCulla,2018-08-07T20:10:57.000+0000,,SHORT_NAME
+0030h00002XKS5fAAH,Ty,Knabb,Ty Knabb,Senior Sales Representative,Other,Sales,tknabb@lutron.com,(610) 282-3800,,Lutron Electronics,,Adam George,2019-10-29T17:51:18.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00003LdlqEAAR,K,Knight,K Knight,,Needs Assignment,Other,knightk@fremontschools.net,1 419 332 6454,,FCS,,Grant McNulty,2023-09-21T12:35:55.000+0000,2023-09-21,SHORT_NAME
+0030h00002XJ81aAAD,Cindy,Ko,Cindy Ko,Senior Customer Engagement Executive,Needs Assignment,Other,cindy.ko@sap.com,,+852 6082 3467,SAP SuccessFactors,,Kelly Wasden,2019-10-10T14:00:35.000+0000,,SHORT_NAME
+003Mm000006AiFeIAK,Ji,Ko,Ji Ko,Hr Manager,Manager/Team Lead,Other,jieun.ko@aircanada.ca,,,Air Canada,,Joe McCulla,2023-11-09T18:43:06.000+0000,2023-11-29,SHORT_NAME
+0030h00002QW5t7AAD,Michael,Ko,Michael Ko,Manager of Retail Systems,Manager/Team Lead,Other,mko@eileenfisher.com,,,"Eileen Fisher, Inc.",,Axonify,2018-12-18T21:36:16.000+0000,2019-01-31,SHORT_NAME
+0030L00001sXNvvQAG,Susy,Ko,Susy Ko,"Senior Manager, Professional Practice Team",Manager/Team Lead,Other,sko@atb.com,,,ATB Financial,,Joe McCulla,2017-10-05T00:05:13.000+0000,,SHORT_NAME
+0030L00001pMNzXQAW,Ed,"Krise, CHMM, CSP, CPEA, CET","Ed Krise, CHMM, CSP, CPEA, CET",H&S Manager,Manager/Team Lead,Other,krise.ed@cleanharbors.com,\+1 215-425-5144,,"Clean Harbors, Inc.",,Axonify,2017-04-27T19:45:31.000+0000,,SHORT_NAME
+0038a00002w9GVTAA2,Minnie,Ku,Minnie Ku,Category Business Manager,Manager/Team Lead,Other,minnie.ku@cantire.com,6132583479,,FGL Sports,,Kelly Wasden,2022-10-02T23:03:26.000+0000,,SHORT_NAME
+003Mm000007yh9LIAQ,kuanysh,kz,kuanysh kz,Senior Manager,Manager/Team Lead,Other,kz@kazpost.kz,7 7172 61 16 99,,Kazpost,,Grant McNulty,2024-01-08T17:26:35.000+0000,,SHORT_NAME
+0038a00003Ldk8kAAB,a,l,a l,,Needs Assignment,Other,strikeu2hell@yahoo.com,,,Yahoo! Inc.,,Axonify,2023-09-20T19:48:52.000+0000,2021-08-10,SHORT_NAME
+003Mm00000Xa2RwIAJ,Alice,L,Alice L,Team Manager,Manager/Team Lead,Other,alice.l@waitrose.co.uk,,,"Leckford Estate, The Waitrose & Partners Farm",,Grant McNulty,2026-01-16T14:39:30.000+0000,,SHORT_NAME
+003Mm00000HkFGoIAN,Faye,L,Faye L,,Needs Assignment,Other,fliang@omers.com,,,OMERS Administration Corporation,,Axonify,2024-11-12T18:44:17.000+0000,,SHORT_NAME
+003Mm000006WqJPIA0,jen,l,jen l,supervisor,Manager/Team Lead,Other,jen.labarge@kingstonhsc.ca,6133919104,,KGH,,Axonify,2023-11-22T16:00:54.000+0000,2023-11-22,SHORT_NAME
+0030h00002PLv0AAAT,Oliver,L,Oliver L,Engineering And Maintenance Manager,Manager/Team Lead,Other,oliver.l@specialtyminerals.com,,,Specialty Minerals Inc.,,Axonify,2018-10-16T01:32:08.000+0000,,SHORT_NAME
+0038a00003G5A6iAAF,Marion,L.,Marion L.,hr business partner retail france & suisse,Needs Assignment,Other,mariana_lares@vfc.com,,,The North Face,,Kelly Wasden,2023-05-16T20:09:39.000+0000,,SHORT_NAME
+0038a00003G5GDYAA3,Robin,L.,Robin L.,"hr business partner - ssc, pilot company",Needs Assignment,Other,l.robin@pilotflyingj.com,,+1 832 418 9807,Pilot Flying J,,Joe McCulla,2023-05-16T20:43:15.000+0000,,SHORT_NAME
+003Mm000006GPodIAG,Tuong,La,Tuong La,Multimedia Producer,Needs Assignment,Other,tla@axonify.com,1 519 585 1200,,"Axonify, Inc.",,Matthew Horsman,2023-11-13T15:53:24.000+0000,,SHORT_NAME
+003Mm00000Zls0nIAB,Ed,La Bay,Ed La Bay,"Marketing, Advertising and Communications",Needs Assignment,Marketing,elabay@hottopic.com,,,"Hot Topic, Inc.",,Kelly Wasden,2026-03-05T23:58:35.000+0000,,SHORT_NAME
+0038a00003G5EyPAAV,My,Lam,My Lam,hr business partner,Needs Assignment,Other,my.lam@sce.com,,+1 626 456 3695,Southern California Edison,,Kelly Wasden,2023-05-16T20:35:42.000+0000,,SHORT_NAME
+0030L00001vz4UoQAI,F.,Laniecki,F. Laniecki,"Senior Manager, Development",Manager/Team Lead,Other,ftlaniecki@ft.newyorklife.com,(415) 393-6089,,New York Life,,Axonify,2018-03-01T16:36:53.000+0000,2019-10-29,SHORT_NAME
+0030h00002XKU7WAAX,Al,Larson,Al Larson,Business Account Manager,Manager/Team Lead,Sales,allan.larson@charter.com,(813) 436-2217,,Spectrum,,Jen Tolbert,2019-10-29T19:41:43.000+0000,,SHORT_NAME
+0030h00002XKT8XAAX,Ed,Lawdan,Ed Lawdan,Field Service Specialist,Specialist,Other,ed.lawdan@perkinelmer.com,(781) 663-6900,,PerkinElmer,,Axonify,2019-10-29T18:45:54.000+0000,,SHORT_NAME
+0030h00002l4s7vAAA,Angela,Le,Angela Le,,Needs Assignment,Other,angela.le@boehringer-ingelheim.com,604 318 6453,,Boehringer Ingelheim,,Ryan Flaherty,2021-07-07T17:35:53.000+0000,2021-10-20,SHORT_NAME
+0030h00002XKU1fAAH,Anton,Le,Anton Le,"Manager, Business Development",Manager/Team Lead,Sales,anton.le@charter.com,(469) 791-0708,,Spectrum,,Jen Tolbert,2019-10-29T19:37:23.000+0000,,SHORT_NAME
+0030h00002cHisnAAC,David,Le,David Le,Senior Enterprise Relationship Manager,Manager/Team Lead,Other,dle@beaconpointe.com,9497181600,,Beacon Pointe Advisors LLC,,Kelly Wasden,2020-05-25T13:23:23.000+0000,2020-08-18,SHORT_NAME
+0030L00001vN1GZQA0,Frank,Le,Frank Le,Sales Incentive Compensation Analyst,Analyst,Sales,frank.le@allergan.com,0,,Allergan Canada,,Adam George,2018-01-29T19:32:18.000+0000,,SHORT_NAME
+0030h00002T9HcVAAV,Kim,Le,Kim Le,"Account Manager, Retail",Manager/Team Lead,Sales,kim.le@benefitcosmetics.com,+1 408 904 4938,,Benefit Cosmetics,,Kelly Wasden,2019-04-23T20:16:21.000+0000,2019-10-03,SHORT_NAME
+003Mm00000YEnLSIA1,Michelle,Le,Michelle Le,Lead University Recruiter,Manager/Team Lead,Other,michelle.le@uniqlo-usa.com,,,Fast Retailing USA Inc,,Axonify,2026-01-30T18:32:44.000+0000,,SHORT_NAME
+003E000001FBLDUIA5,Sally,Le,Sally Le,Sales Trainer,Needs Assignment,Sales,sally.le@stryker.com,(408) 679-3687,,Stryker Corporation,,Adam George,2015-04-10T18:42:06.000+0000,2015-06-30,SHORT_NAME
+0030L00001vN1MOQA0,Shannen,Le,Shannen Le,Senior Compensation Analyst,Analyst,Other,shannen.le@allergan.com,(905) 940-7330,,Allergan Canada,,Adam George,2018-01-29T19:32:28.000+0000,,SHORT_NAME
+0038a00002w9K2gAAE,Shawn,Le,Shawn Le,"Manager, Marketing & Public Relations",Manager/Team Lead,Marketing,sle@supercare.com,(626) 854-2285,,SuperCare Health,,Kelly Wasden,2022-10-02T23:51:58.000+0000,2023-02-06,SHORT_NAME
+0030h00002jsw3DAAQ,Thi,Le,Thi Le,,Needs Assignment,Other,bang_thi_le@merck.com,1 908 740 4000,,MSD,,Grant McNulty,2021-06-01T02:27:35.000+0000,2021-05-31,SHORT_NAME
+0030h00002XKQKfAAP,Tiffany,Le,Tiffany Le,"Manager, Business Development (Advertising & Ticketing)",Manager/Team Lead,Sales,tle@zulily.com,(484) 701-1000,,Qurate Retail Group,,Adam George,2019-10-29T16:31:32.000+0000,,SHORT_NAME
+0030h00002M9KDXAA3,Vincent,Le,Vincent Le,Sr QA Manufacturing Supervisor,Manager/Team Lead,Other,vincent.le@tevapharm.com,,,"Teva Pharmaceuticals Usa, Inc.",,Adam George,2018-06-11T18:04:16.000+0000,,SHORT_NAME
+0030h00002XKTmyAAH,Vy,Le,Vy Le,Service Representative,Other,Other,vy.le@ssa.gov,(800) 772-1213,,Social Security Administration,,Axonify,2019-10-29T19:27:07.000+0000,,SHORT_NAME
+0030h00002XKSlzAAH,Yung,Le,Yung Le,International Business Development Executive Specialist,Specialist,Sales,yung.a.le@lmco.com,(817) 777-4750,,Lockheed Martin,,Axonify,2019-10-29T18:20:22.000+0000,,SHORT_NAME
+003Mm00000JNQE5IAP,Jo,Leduc,Jo Leduc,Facilities & Office Services Analyst,Analyst,Other,jolene.leduc@ovintiv.com,,,Ovintiv Inc,,Adam George,2025-01-08T14:36:02.000+0000,,SHORT_NAME
+0030h00002XKNvGAAX,Ho,Lee,Ho Lee,Manufacturing Engineer,Other,Other,ho.lee@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:12:25.000+0000,,SHORT_NAME
+0030L00001vPGVDQA4,WL,Lee,WL Lee,Senior Manager,Manager/Team Lead,Other,leeweeleong@sim.edu.sg,98539315,,Singapore Institute of Management,,Axonify,2018-02-13T21:01:22.000+0000,,SHORT_NAME
+0038a00003LdkUMAAZ,PB,Leong,PB Leong,Principal,Needs Assignment,Other,petrina.leong@inkemaris.com,,,Inke Maris & Associates,,Axonify,2023-09-20T20:06:17.000+0000,,SHORT_NAME
+0030h00002cJSEDAA4,Aaron,Li,Aaron Li,Senior Sales Manager,Manager/Team Lead,Sales,aaron.li01@sap.com,,,SAP SuccessFactors,,Kelly Wasden,2020-06-18T16:21:58.000+0000,,SHORT_NAME
+0038a00002pnRZqAAM,Alan,Li,Alan Li,,Needs Assignment,Other,xuewei.li@alcon.com,41 58 911 21 10,,Alcon Laboratories Holding Corporation,,Jen Tolbert,2022-02-23T00:42:54.000+0000,2022-02-24,SHORT_NAME
+0038a00002w9KEaAAM,Angela,Li,Angela Li,"Manager, Transition",Manager/Team Lead,Other,angela.li@ap.jll.com,1-312-782-5800,,Jones Lang LaSalle Incorporated,,Beth Houpis,2022-10-02T23:54:12.000+0000,,SHORT_NAME
+0030L00001vPJmTQAW,angela,Li,angela Li,sales,Other,Sales,angelali@baidu.com,8615228874509,,Baidu Online Network Technology,,Axonify,2018-02-13T23:16:11.000+0000,,SHORT_NAME
+0038a000037IDmFAAW,Brian,Li,Brian Li,web developer,Needs Assignment,Other,brian.li@theory.com,,,Theory LLC,,Axonify,2023-01-03T17:43:09.000+0000,,SHORT_NAME
+0030h00002RSzgbAAD,Carmen,Li,Carmen Li,Manager,Manager/Team Lead,Other,carmen1.li@citi.com,6463428739,,Bank of America Corp.,,Jen Tolbert,2019-02-21T17:05:44.000+0000,,SHORT_NAME
+0038a00003G58cLAAR,Catherine,Li,Catherine Li,senior hr partner,Needs Assignment,Other,cli@ibm.com,,,The Hanover Insurance Group,,Axonify,2023-05-16T20:02:03.000+0000,,SHORT_NAME
+0030h00002jtn2jAAA,Di,Li,Di Li,,Needs Assignment,Other,dli112@its.jnj.com,1 800 227 6633,,J&J - DePuy-Synthes - Spine,,Ryan Flaherty,2021-06-14T08:33:46.000+0000,2021-06-20,SHORT_NAME
+0030h00002QXbR8AAL,Jamie,Li,Jamie Li,"Senior Manager, Organisational Development",Manager/Team Lead,Other,jli@cppib.com,(416) 972-8436,,Canada Pension Plan Investment Board,,Axonify,2019-01-16T14:30:07.000+0000,2019-02-05,SHORT_NAME
+0030h00002XKUGUAA5,Jeffrey,Li,Jeffrey Li,Business Development Manager,Manager/Team Lead,Sales,jeffrey.li@fmr.com,(617) 563-7000,,Fidelity Investments,,Axonify,2019-10-29T19:52:17.000+0000,,SHORT_NAME
+003Mm000008dGrVIAU,jian,li,jian li,mkt,Needs Assignment,Other,lijian.2@umu.com,13691269946,86 10 6473 6966,Pharmcube,,Axonify,2024-01-29T14:31:25.000+0000,2024-02-21,SHORT_NAME
+003Mm00000Q96GxIAJ,Jing (Training),Li,Jing (Training) Li,"Asso. II, TMF Doc. Specialist",Specialist,Other,jing.li@pfizer.com,,,Pfizer Eliquis,,Brian Smith,2025-07-26T08:11:45.000+0000,,SHORT_NAME
+0030L00001vN1lXQAS,Jiyan,Li,Jiyan Li,Staff Compensation Analyst,Analyst,Other,jiyan.li@microsemi.com,(613) 270-7156 x4202487,,Microsemi Soc Corp.,,Kelly Wasden,2018-01-29T19:33:25.000+0000,,SHORT_NAME
+0030h00002XKOvfAAH,John,Li,John Li,"Manager, Portfolios",Manager/Team Lead,Other,jli@wellington.com,(617) 951-5948,,Wellington Management Company,,Axonify,2019-10-29T14:58:16.000+0000,,SHORT_NAME
+003Mm00000LvvIPIAZ,Kelly,Li,Kelly Li,"Account Manager, Vendors Amazon Retail (Amazon ES)",Manager/Team Lead,Sales,kli@amazon.com,,,Amazon,,Joe McCulla,2025-03-25T17:34:33.000+0000,,SHORT_NAME
+0030h00002RTVfIAAX,Maggie,Li,Maggie Li,IT Analyst,Analyst,Technical,maggie.li@clp.com.hk,+852 2678 6642,,CLP Power Hong Kong,,Axonify,2019-03-01T20:29:53.000+0000,2019-02-28,SHORT_NAME
+0030h00002T9NkYAAV,Margaret,Li,Margaret Li,"Manager, Customer Care (China)",Manager/Team Lead,Other,margaret.li@qiagen.com,,,Qiagen North American Holdings Inc.,,Kelly Wasden,2019-04-24T13:40:28.000+0000,,SHORT_NAME
+0030h00002XKRNGAA5,Mengchuan,Li,Mengchuan Li,Manufacturing Engineer,Other,Other,mengchuan.li@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T17:32:41.000+0000,,SHORT_NAME
+0038a00003G5A6qAAF,Monica,Li,Monica Li,hr business partner,Needs Assignment,Other,monica_li@vfc.com,,,The North Face,,Kelly Wasden,2023-05-16T20:09:39.000+0000,,SHORT_NAME
+0030h00002T9HhzAAF,Ou,Li,Ou Li,"Account Manager, Customer Services (CSAM) (North, Asia)",Manager/Team Lead,Sales,ou.li@aero.bombardier.com,,,Bombardier Inc,,Axonify,2019-04-23T20:16:41.000+0000,,SHORT_NAME
+0030L00001s4OzmQAE,Patrick,Li,Patrick Li,Sales Executive,Other,Sales,patrick.li3@hpe.com,,,Hewlett-Packard Enterprise (HPE) - Sales/Support/Field Enablement,,Kelly Wasden,2017-09-05T16:04:20.000+0000,2018-01-15,SHORT_NAME
+0030h00002gJvIPAA0,Richard,Li,Richard Li,Software Lead,Manager/Team Lead,Other,zli@assurance.com,,,Assurance IQ,,Brian Smith,2020-12-16T16:06:29.000+0000,,SHORT_NAME
+0030L00001vN4BBQA0,Sha,Li,Sha Li,"Senior Manager, Sales & Market Analysis and Senior Business Analyst",Manager/Team Lead,Sales,sha.li@samsung.com,(425) 562-2796 x2796,,Samsung Electronics America,,Axonify,2018-01-29T19:43:48.000+0000,,SHORT_NAME
+0030h00002gGz4AAAS,Siyi,Li,Siyi Li,Commercial Education Manager,Manager/Team Lead,Other,sli17@its.jnj.com,,,J&J - Johnson & Johnson (Hierarchy Parent for MSA),MedTech China,Ryan Flaherty,2020-11-15T18:32:25.000+0000,2021-04-01,SHORT_NAME
+0038a00002w9HO1AAM,Spencer,Li,Spencer Li,Needs Updating**,Needs Assignment,Other,spencerli@vmware.com,1-312-782-5800,,Jones Lang LaSalle Incorporated,,Beth Houpis,2022-10-02T23:16:19.000+0000,,SHORT_NAME
+003Mm00000JNPXaIAP,Xiaofang,Li,Xiaofang Li,,Needs Assignment,Other,xiaofangli@micron.com,,,"Micron Technology, Inc.",,Kelly Wasden,2025-01-08T14:29:32.000+0000,,SHORT_NAME
+0030h00002XKO6gAAH,Xiaojing,Li,Xiaojing Li,Product Sales Specialist,Specialist,Sales,xiaojing.li@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:18:13.000+0000,,SHORT_NAME
+003Mm00000Q96GyIAJ,"Xu(Kevin, GL&D)",Li,"Xu(Kevin, GL&D) Li",Admin. Manager,Manager/Team Lead,Other,xu.li@pfizer.com,+86 10 8516 7019,,Pfizer Eliquis,,Brian Smith,2025-07-26T08:11:45.000+0000,,SHORT_NAME
+0030h00002gGz3qAAC,Xuemei,Li,Xuemei Li,Medical Device Admin APAC,Administrator,Other,xli283@its.jnj.com,,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-11-15T18:32:25.000+0000,,SHORT_NAME
+0030h00002XKS0sAAH,Yongan,Li,Yongan Li,Senior Key Account Manager,Manager/Team Lead,Sales,yongan.li@rohde-schwarz.com,(410) 910-7800,,Rohde & Schwarz,,Axonify,2019-10-29T17:49:02.000+0000,,SHORT_NAME
+0030h00002XKS27AAH,Yuanzi,Li,Yuanzi Li,"Sales Supervisor, Defense & Security",Manager/Team Lead,Sales,yuanzi.li@rohde-schwarz.com,(410) 910-7800,,Rohde & Schwarz,,Axonify,2019-10-29T17:49:27.000+0000,,SHORT_NAME
+0030h00002hBl02AAC,Zidong,Li,Zidong Li,Product Marketing Associates,Other,Marketing,cestlzd@gmail.com,4122095367,,"Management Sciences for Health, Inc.",,Axonify,2021-02-01T23:21:31.000+0000,,SHORT_NAME
+0030h00002XKS1dAAH,Al,Lillis,Al Lillis,Account Manager,Manager/Team Lead,Sales,al.lillis@rohde-schwarz.com,(410) 910-7800,,Rohde & Schwarz,,Axonify,2019-10-29T17:49:27.000+0000,,SHORT_NAME
+0030h00002XKRiaAAH,Ed,Lindsey,Ed Lindsey,Wholesale Senior Account Executive,Other,Sales,ed.lindsey@ftr.com,(203) 614-5600,,Frontier Communications,,Axonify,2019-10-29T17:38:57.000+0000,,SHORT_NAME
+003Mm00000RkE0TIAV,Alexis,Lo,Alexis Lo,Sale,Needs Assignment,Other,alexishtlo@golftown.com,4039220832,,Golf Town Operating Limited Partnership,,Amanda Monk,2025-08-28T17:20:27.000+0000,,SHORT_NAME
+0030h00002T9HIgAAN,Allan,Lo,Allan Lo,"Manager, Customer Service",Manager/Team Lead,Other,allan_lo@amat.com,408-727-5555,,"Applied Materials, Inc",,Kelly Wasden,2019-04-23T20:14:25.000+0000,2019-12-09,SHORT_NAME
+0030L00001vPJgBQAW,na,lo,na lo,,Needs Assignment,Other,masuminatalie.lorenz@hm.com,123456789,,H&M,,Douglas Leonard,2018-02-13T23:12:13.000+0000,2018-08-07,JUNK_KEYWORD | SHORT_NAME
+0038a00002w9H9YAAU,Peggy,Lo,Peggy Lo,Eastern Canada Marketing Lead,Manager/Team Lead,Marketing,plo@boosterjuice.com,(416) 529-6167,,Booster Juice,,Kelly Wasden,2022-10-02T23:12:59.000+0000,,SHORT_NAME
+0030h00002XKNrJAAX,Bo,Long,Bo Long,Sales Manager,Manager/Team Lead,Sales,bo.long@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:10:15.000+0000,,SHORT_NAME
+0030L00001jFpm1QAC,Hu,Longmire,Hu Longmire,Senior Manager Interactive Marketing,Manager/Team Lead,Marketing,hlongmire@dollargeneral.com,+1 615-871-4505,,Dollar General,,Brian Smith,2016-09-23T16:41:02.000+0000,,SHORT_NAME
+003E000000eqbMVIAY,Le,Lopez,Le Lopez,Cynthia assistant,Other,Other,lelopez@amgen.com,(805) 447-1000,,Amgen Inc.,,Kelly Wasden,2013-05-13T20:02:57.000+0000,2013-11-20,SHORT_NAME
+003Mm00000M4fIhIAJ,M,Lorenz,M Lorenz,N/A,Needs Assignment,Other,lorenzmark@yahoo.com,,,N/A,,Kelly Wasden,2025-03-29T08:07:54.000+0000,,SHORT_NAME
+0030L00001uZ1ewQAC,TJ,Losowski,TJ Losowski,Hospitality Sales & Marketing Associate,Other,Sales,theodore.losowski@legrand.us,(315)271-5118,(315)271-5118,"Legrand North America, LLC",,Axonify,2017-12-22T14:46:15.000+0000,2018-08-07,SHORT_NAME
+003Mm000008XNfaIAG,Ford,Lu,Ford Lu,Sales & Marketing Intern and Software QA,Needs Assignment,Sales,flu@axonify.com,5197291221,,"Axonify, Inc.",,Matthew Horsman,2024-01-25T20:52:49.000+0000,,SHORT_NAME
+0038a00003Ccxh0AAB,Grace,Lu,Grace Lu,"Senior Manager, Platform Product & Partnerships",Manager/Team Lead,Other,grace.lu@agilebits.com,,,1Password,,Axonify,2023-03-20T17:27:16.000+0000,,SHORT_NAME
+0030h00002M8sgDAAR,Jessica,Lu,Jessica Lu,sever developer,Needs Assignment,Other,jlu@axonify.com,519-741-6622,+1 519 741-6622,Axonify,,Axonify,2018-06-05T20:22:53.000+0000,2021-01-26,SHORT_NAME
+0038a00003G59IWAAZ,Kathy,Lu,Kathy Lu,hr business partner,Needs Assignment,Other,kathy.l@motorolasolutions.com,,,"Motorola Solutions, Inc.",,Ryan Flaherty,2023-05-16T20:05:21.000+0000,,SHORT_NAME
+0030h00002m4hxWAAQ,Mike,Lu,Mike Lu,Business System Analyst,Analyst,Other,mike.lu@desjardins.com,,,Desjardins,,Axonify,2021-10-02T05:10:59.000+0000,2021-11-10,SHORT_NAME
+0030h00002M80QeAAJ,Mike,Lu,Mike Lu,Administrator and Teaching Asistant,Administrator,Other,mike_lu@manulife.com,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2018-05-28T14:08:42.000+0000,,SHORT_NAME
+0030h00002XJfwtAAD,Ping,Lu,Ping Lu,"Manager, Product Analytics & RBS Capital Management",Manager/Team Lead,Other,ping.lu@rci.rogers.com,(416) 935-7777,,Rogers Communications Inc - Holding Account,,Ryan Flaherty,2019-10-18T13:39:06.000+0000,,SHORT_NAME
+0030h00002XKSJyAAP,Weida,Lu,Weida Lu,Key Account Manager,Manager/Team Lead,Sales,weida.lu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T17:57:48.000+0000,,SHORT_NAME
+0030h00002jstaPAAQ,Ba Vi,Ly,Ba Vi Ly,IT Project Manager,Manager/Team Lead,Technical,ba.vi.ly@merck.com,1 908 740 4000,,Merck Manufacturing Division (MMD),,Liz Davis,2021-05-31T09:31:51.000+0000,2021-05-31,SHORT_NAME
+0030h00002XKUZQAA5,Hieu,Ly,Hieu Ly,Territory Manager,Manager/Team Lead,Other,hieu.ly@libertymutual.com,(617) 357-9500,,Liberty Mutual Insurance,,Axonify,2019-10-29T20:02:23.000+0000,,SHORT_NAME
+0030h00002QW9NfAAL,I-Ling,Ly,I-Ling Ly,Retail Project Manager,Manager/Team Lead,Other,i-ling.ly@groupeclarins.com,,,Clarins USA,,Axonify,2018-12-19T14:33:11.000+0000,2019-02-20,SHORT_NAME
+0030h00002M80W5AAJ,Maderson,Ly,Maderson Ly,Technical Support Manager,Manager/Team Lead,Customer Service,maderson.ly@theice.com,(310) 664-2521,,ICE - Intercontinental Exchange,,Jen Tolbert,2018-05-28T14:14:26.000+0000,2019-11-15,SHORT_NAME
+003Mm00000Tr7KUIAZ,Mouhamadou,Ly,Mouhamadou Ly,IT Program Manager,Manager/Team Lead,Technical,mouhamadou.ly@credit-agricole.com,+33 7 70 40 65 28,,Crédit Agricole Group Infrastructure Platform,,Axonify,2025-10-21T15:16:35.000+0000,,SHORT_NAME
+0030h00002XKUdbAAH,Nguyet,Ly,Nguyet Ly,Account Executive,Other,Sales,nguyet.ly@fmr.com,(415) 445-7108,,Fidelity Investments,,Axonify,2019-10-29T20:04:26.000+0000,,SHORT_NAME
+0030L00001vxPOdQAM,Stephanie,Ly,Stephanie Ly,"Manager, Planning",Manager/Team Lead,Other,stephanie_ly@vfc.com,336-424-6000,,V.F. Corporation,,Adam George,2018-02-16T18:47:40.000+0000,,SHORT_NAME
+0038a00002sAzwbAAC,Ana,M,Ana M,Sales Attendant - Kitchen and Wardrobes - Leroy Merlin,Needs Assignment,Sales,ana.m@bdo.es,,,"BDO Auditores, S.L.P.",,Grant McNulty,2022-05-04T14:59:09.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030h00002M9JqEAAV,Dale,M,Dale M,"Senior Supply Chain Manager, Innovations",Manager/Team Lead,Innovation,dale.m@bdpinternational.com,,,BDP International,,Adam George,2018-06-11T17:45:34.000+0000,,SHORT_NAME
+0038a00003CcGx5AAF,Jack,M,Jack M,Applications Development Manager,Manager/Team Lead,Other,jack.m@rackroom.com,(704) 547-9200,,Rack Room Shoes Inc.,,Jen Tolbert,2023-02-14T16:19:36.000+0000,2023-02-14,SHORT_NAME
+003Mm00000WTWCJIA5,Jennifer,M,Jennifer M,Technical Specialist,Specialist,Other,,,,Apple Inc.,,Aman Lokhandwala,2025-12-17T19:39:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+003Mm000006aeczIAA,Marissa,M,Marissa M,Manager of Customer Experience,Manager/Team Lead,Other,marissa@awaytravel.com,,+1-203-507-4665,Away,,Axonify,2023-11-24T14:12:17.000+0000,2023-11-29,SHORT_NAME
+0038a00003LdbgKAAR,Ryan,M,Ryan M,Workplace Technology Lead,Manager/Team Lead,Technical,ryan_m@next.co.uk,,,Next Retail,,Grant McNulty,2023-09-12T12:40:51.000+0000,2023-09-26,SHORT_NAME
+0038a00003G55wRAAR,Tashika,M,Tashika M,hr business partner,Needs Assignment,Other,tashika.m@otis.com,,+1 860 690 9694,Network Rail,,Grant McNulty,2023-05-16T19:46:27.000+0000,,SHORT_NAME
+003Mm000007yqZBIAY,Taylor,M,Taylor M,Sr. LP Manager,Manager/Team Lead,Other,taylor.moore@staples.com,1 847 627 7000,,"Staples, Inc.",,Brian Smith,2024-01-08T17:26:52.000+0000,2024-01-08,SHORT_NAME
+003Mm00000JNPxrIAH,Vikram,M,Vikram M,Sr. Product Marketing Manager,Manager/Team Lead,Marketing,vikram.murdeshwar@manthan.com,+91 9731310438,,Manthan,,Axonify,2025-01-08T13:40:06.000+0000,,SHORT_NAME
+0038a00003Ld2diAAB,Jessica,M.,Jessica M.,-,Needs Assignment,Other,jessica@simplyintel.com,8666737374,,SimplyIntel,,Axonify,2023-08-10T17:46:42.000+0000,2023-08-10,SHORT_NAME
+003Mm000005eY4wIAE,Julie,M.,Julie M.,Business Process Architect,Needs Assignment,Other,jmoceri@ciis.canon.com,+1-631-330-5464,,Canon Business Solutions,,Kelly Wasden,2023-10-24T20:15:11.000+0000,2023-11-29,SHORT_NAME
+0030h00002m2IznAAE,Carrie,Ma,Carrie Ma,Financial Services Professional,Needs Assignment,Other,cma@fortislux.com,,,Fortis Lux Financial,,Axonify,2021-09-02T00:58:24.000+0000,,SHORT_NAME
+0038a00002w9MOGAA2,Carrie,Ma,Carrie Ma,Investment Solutions,Needs Assignment,Other,carrie.ma@fmr.com,,,Fidelity Investments,,Axonify,2022-10-03T21:54:31.000+0000,,SHORT_NAME
+0030h00002XKRVVAA5,Cedric,Ma,Cedric Ma,Specialist & Account Manager & Customer Service Analyst,Manager/Team Lead,Sales,cedric.ross@ftr.com,(203) 614-5600,,Frontier Communications,,Axonify,2019-10-29T17:36:00.000+0000,,SHORT_NAME
+0038a00003G5DVyAAN,Emma,Ma,Emma Ma,"manager, hr business partner",Manager/Team Lead,Other,emmama@hsbc.com,,,HSBC Global Services (UK) Limited,,Grant McNulty,2023-05-16T20:27:23.000+0000,,SHORT_NAME
+0030h00002gGz3vAAC,Gang,Ma,Gang Ma,Medical Device Admin APAC,Administrator,Other,gma2@its.jnj.com,,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-11-15T18:32:25.000+0000,,SHORT_NAME
+003Mm00000JNT6YIAX,Hilary,Ma,Hilary Ma,Senior Group Digital Manager,Manager/Team Lead,Other,hilary.ma@itsu.com,44 20 7930 2680,,itsu,,Grant McNulty,2025-01-08T14:08:05.000+0000,,SHORT_NAME
+0030h00002XKOE5AAP,Hui,Ma,Hui Ma,Sales Lead & Specialist,Manager/Team Lead,Sales,hui.ma@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:22:18.000+0000,,SHORT_NAME
+0030L00001kqOXDQA2,Kelly,Ma,Kelly Ma,NO LONGER WITH COMPANY,Needs Assignment,Other,kma@fredsinc.com,+1 901-794-9420,,"Fred's, Inc.",,Jen Tolbert,2016-11-28T20:30:59.000+0000,2019-04-09,SHORT_NAME
+0030L00001vMqdqQAC,Sharon,Ma,Sharon Ma,Senior Benefits Analyst,Analyst,Other,sharon.ma@coherent.com,0,,"Coherent, Inc.",,Kelly Wasden,2018-01-29T19:13:02.000+0000,,SHORT_NAME
+0030h00002M91WyAAJ,K,maclean,K maclean,Manager,Manager/Team Lead,Other,kmaclean@cihi.ca,6136946292,,Canadian Institute for Health Information,,Axonify,2018-06-06T15:49:14.000+0000,,SHORT_NAME
+0030h00002XKQezAAH,Pj,Macom,Pj Macom,Senior Campus Recruiter,Other,Other,pj.macom@libertymutual.com,(857) 224-2446,,Liberty Mutual Insurance,,Axonify,2019-10-29T16:50:02.000+0000,,SHORT_NAME
+0038a000037HnXwAAK,Ed,Madden,Ed Madden,"DIR PLNG, ALLOC, RPLN",Needs Assignment,Other,maddene@aafes.com,1 214 312 4064,,Army & Air Force Exchange Service,,Jen Tolbert,2022-12-12T14:39:00.000+0000,,SHORT_NAME
+0030h00002XKQdJAAX,Ed,Mahon,Ed Mahon,Territory Manager,Manager/Team Lead,Other,edward.mahon@libertymutual.com,(484) 438-5648,,Liberty Mutual Insurance,,Axonify,2019-10-29T16:49:12.000+0000,,SHORT_NAME
+0038a00003G59U6AAJ,Au,Mangalonzo,Au Mangalonzo,hr business partner,Needs Assignment,Other,au.m@wellsfargo.com,,+63 922 877 0522,Umpqua Bank,,Kelly Wasden,2023-05-16T20:06:19.000+0000,,SHORT_NAME
+0030h00002XKTEaAAP,J.,Mark Etherington,J. Mark Etherington,Real Estate Investment Specialist,Specialist,Other,jetherington@eatonvance.com,(617) 672-7082,,Eaton Vance,,Axonify,2019-10-29T18:49:06.000+0000,,SHORT_NAME
+0030h00002RilrUAAR,O,Marshall,O Marshall,Senior Business Management Consultant,Consultant,Other,omarshall@cibusinessconsultants.com,3055927754,,Canadian Imperial Bank of Commerce,,Amanda Monk,2019-02-20T04:03:27.000+0000,,SHORT_NAME
+0030L00001vPHCBQA4,RD,MARTIN,RD MARTIN,CONSULTANT,Consultant,Other,rdm-1@tampabay.rr.com,,,Shriners Hospitals For Children,,Jen Tolbert,2018-02-13T21:06:29.000+0000,,SHORT_NAME | ALL_CAPS
+0030L00001jFcx9QAC,MA,Masarech,MA Masarech,Engagement Practice Consultant,Consultant,Other,mmasarech@gpstrategies.com,203-367-0847,,GP Strategies,,Axonify,2016-09-21T20:06:00.000+0000,2021-10-26,SHORT_NAME
+0030h00002QYLCIAA5,J,Matt Siney,J Matt Siney,NO LONGER WORKS HERE,Needs Assignment,Other,matt.siney@bonton.com,+1-585-223-0700,,Bon-Ton Stores,,Adam George,2019-01-30T19:32:07.000+0000,2019-02-06,SHORT_NAME
+003E000001RGgCOIA1,MJ,McCauley,MJ McCauley,Sr. Program Manager,Manager/Team Lead,Other,mccauleym@vmware.com,603-292-6678,,VMware,,Kelly Wasden,2015-11-16T16:00:44.000+0000,2015-12-01,SHORT_NAME
+0038a00002w9JfDAAU,Ty,McCelleis,Ty McCelleis,Database Marketing Manager,Manager/Team Lead,Marketing,tmccelleis@delawarenorth.com,(304) 231-1726,,"Delaware North Companies Travel Hospitality Services, Inc.",,Joe McCulla,2022-10-02T23:47:30.000+0000,,SHORT_NAME
+0038a00003G58OvAAJ,Jo,McCormick,Jo McCormick,associate relations business partner | hr office of associate conduct,Other,Other,jo.mccormick@regions.com,+1 469 608 2735,+1 423 364 3513,Regions,,Jen Tolbert,2023-05-16T20:00:55.000+0000,,SHORT_NAME
+0030L00001vMuIYQA0,Ed,McGivern,Ed McGivern,"Manager, Compensation & Benefits",Manager/Team Lead,Other,edward.mcgivern@linde.com,(908) 771-1102,,The Linde Group,,Axonify,2018-01-29T19:19:43.000+0000,2018-09-11,SHORT_NAME
+0030L00001vN0ufQAC,Ed,Mckenna,Ed Mckenna,"Senior Manager, Brand",Manager/Team Lead,Other,ed.mckenna@st-group.com,(804) 935-2811,,General Cigar Co Inc,,Jen Tolbert,2018-01-29T19:31:28.000+0000,2018-07-18,JUNK_KEYWORD | SHORT_NAME
+0030h00002XKR7jAAH,Ed,Mcmurrer,Ed Mcmurrer,"Senior Manager, National Account",Manager/Team Lead,Other,ed.mcmurrer@sbdinc.com,(303) 503-5903,,Stanley Black & Decker,,Axonify,2019-10-29T17:14:02.000+0000,,SHORT_NAME
+0038a00002nuZugAAE,Ty,MEd,Ty MEd,People Services Manager,Manager/Team Lead,Other,tmed@taylormorrison.com,+1 281 598 3066,,Taylor Morrison,,Kelly Wasden,2022-01-05T00:59:20.000+0000,2022-11-24,SHORT_NAME
+0038a00003CcGpJAAV,yo,merengues,yo merengues,SR MKT,Needs Assignment,Other,yomerengue@merengol.com,+44243832934,,Merengues merengol,,Axonify,2023-02-14T14:34:53.000+0000,2023-02-14,SHORT_NAME
+0038a00003G5FWtAAN,Ed,Meskey,Ed Meskey,hr business partner,Needs Assignment,Other,emeskey@fb.com,,+1 717 413 9841,Meta Platforms Inc.,,Joe McCulla,2023-05-16T20:38:55.000+0000,,SHORT_NAME
+003Mm00000JNMFWIA5,B,Meyer,B Meyer,Technical Writer,Needs Assignment,Other,bmeyer@huronconsultinggroup.com,503-748-4217,,Huron Consulting Group Inc,,Adam George,2025-01-08T14:20:48.000+0000,,SHORT_NAME
+0038a00003G5FWbAAN,Aj,Mizes,Aj Mizes,hr leader / hr business partner,Manager/Team Lead,Other,ajmizes@fb.com,,+1 925 548 3241,Meta Platforms Inc.,,Joe McCulla,2023-05-16T20:38:55.000+0000,,SHORT_NAME
+0030h00002PNcXqAAL,venugopal,ML,venugopal ML,Project Manager,Manager/Team Lead,Other,venuaquila@hotmail.com,9167858782,,Mphasis,,Axonify,2018-11-06T04:01:57.000+0000,,SHORT_NAME
+0030h00002M8vSIAAZ,Sally,Mo,Sally Mo,"Manager, T&OD",Manager/Team Lead,Other,smo@blizzard.com,+8613601812083,,Blizzard Entertainment,,Kelly Wasden,2018-06-06T04:39:22.000+0000,,SHORT_NAME
+0030L00001vPJqzQAG,j,montgomery,j montgomery,developer,Other,Other,jmonty71@talk21.com,8132200209,,"Allied Healthcare International, Inc.",,Axonify,2018-02-13T23:19:06.000+0000,2020-09-10,SHORT_NAME
+0030h00002M8uCfAAJ,Ty,Moore,Ty Moore,Manufacturing Supervisor,Manager/Team Lead,Other,tmoore@arielcorp.com,740-397-0311,,Ariel Corporation,,Adam George,2018-06-06T00:26:56.000+0000,2018-12-05,SHORT_NAME
+0038a00003G5CJTAA3,Hayley,Ms,Hayley Ms,senior hr business partner,Needs Assignment,Other,crabtree.hayley@usbank.com,+1 651 468 0951,,PNC,,Adam George,2023-05-16T20:21:23.000+0000,,SHORT_NAME
+0030L00001vaHR0QAM,Aj,Mueller,Aj Mueller,Sr. Loss Prevention Analyst,Analyst,Other,amueller@finishline.com,317-899-1022,,"The Finish Line, Inc.",,Adam George,2018-03-20T20:33:45.000+0000,2019-05-28,SHORT_NAME
+0030h00002M8rvhAAB,Ed,Murphy,Ed Murphy,,Needs Assignment,Other,emurphy@costco.com,,,Costco,,Joe McCulla,2018-06-05T20:08:38.000+0000,2018-11-24,SHORT_NAME
+0030h00002c3wcHAAQ,Vignesh,MV,Vignesh MV,,Needs Assignment,Other,vignesh.mv@lowes.com,(741) 177-1614,,Lowe's,,Ryan Flaherty,2020-05-06T20:19:21.000+0000,,SHORT_NAME
+0038a00002srRl6AAE,Abdul mukit,N,Abdul mukit N,,Needs Assignment,Other,abdulmukitn@gmail.com,,,Help AG,,Axonify,2022-05-27T14:53:55.000+0000,2022-06-17,SHORT_NAME
+0038a00003G5FX2AAN,Irma,N,Irma N,hr business partner,Needs Assignment,Other,irman@fb.com,,,Meta Platforms Inc.,,Joe McCulla,2023-05-16T20:38:55.000+0000,,SHORT_NAME
+0038a00003ImgtSAAR,Jemma,N,Jemma N,People Partner,Needs Assignment,Other,jemman@caffenero.com,,+447540221569,Caffé Nero,,Grant McNulty,2023-06-13T08:17:11.000+0000,2023-09-29,SHORT_NAME
+0038a00003G5D3DAAV,Navya,N,Navya N,hr business partner,Needs Assignment,Other,navya@bt.com,,,BT Group Plc,,Beth Houpis,2023-05-16T20:25:26.000+0000,,JUNK_KEYWORD | SHORT_NAME
+003Mm00000JNODUIA5,Pradeep,N,Pradeep N,,Needs Assignment,Other,pradeep@goldcast.io,1 774 267 9605,,Goldcast,,Axonify,2025-01-08T13:55:58.000+0000,,SHORT_NAME
+0038a00003LdkURAAZ,Inez,N.,Inez N.,,Needs Assignment,Other,inez@lush.nl,,,Lush,,Grant McNulty,2023-09-20T20:06:20.000+0000,2023-09-20,SHORT_NAME
+003E000001eY3yxIAC,YON,NA,YON NA,Senior Manager,Manager/Team Lead,Other,yon.na@nytimes.com,2125567671,,The New York Times,,Axonify,2016-07-13T14:47:22.000+0000,2019-05-08,JUNK_KEYWORD | SHORT_NAME | ALL_CAPS
+0038a000037Ij0kAAC,K,Naidu,K Naidu,Sales Development Representative,Other,Sales,sean.movers@gmail.com,,,Presidential Services Ltd,,Grant McNulty,2023-02-01T21:04:26.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030h00002M9033AAB,m,nardell,m nardell,l and d,Needs Assignment,Other,michelle.nardell@us.hsbc.com,7166977511,,Hsbc Finance Corporation,,Adam George,2018-06-06T14:33:43.000+0000,2018-10-01,JUNK_KEYWORD | SHORT_NAME
+0030h00002XKQqHAAX,Ed,Nelson,Ed Nelson,Territory Sales Manager,Manager/Team Lead,Sales,enelson@hanover.com,(508) 855-1000,,The Hanover Insurance Group,,Axonify,2019-10-29T17:03:46.000+0000,,SHORT_NAME
+0030h00002M8yGEAAZ,P,Nelson,P Nelson,manager,Manager/Team Lead,Other,pam.nelson@state.mn.us,000-000-0000,,State of Minnesota,,Adam George,2018-06-06T13:50:00.000+0000,,SHORT_NAME
+0030h00002M8zumAAB,barry,ng,barry ng,"executive, academic development",Needs Assignment,Other,barryng@sim.edu.sg,+65 62480282,,Singapore Institute of Management,,Axonify,2018-06-06T14:27:48.000+0000,,SHORT_NAME
+0038a00002w8ax9AAA,Belinda S.,Ng,Belinda S. Ng,Strategic Partnerships and Business Development,Other,Sales,ng.belinda.20@gmail.com,,,Presidential Services Ltd,,Grant McNulty,2022-08-30T13:49:23.000+0000,,SHORT_NAME
+003Mm00000LvSJhIAN,Dan,Ng,Dan Ng,,Needs Assignment,Other,dan.ng@pathfactory.com,,,Path Factory,,Axonify,2025-03-25T16:06:39.000+0000,,SHORT_NAME
+0038a00002w9CyDAAU,Esmond,Ng,Esmond Ng,Digital Marketing Specialist,Specialist,Marketing,boo.esmond@gmail.com,1 613 599 8288,,Presidential Services Ltd,,Grant McNulty,2022-09-29T20:10:39.000+0000,,SHORT_NAME
+0038a00003G5E8iAAF,Firmin,Ng,Firmin Ng,hr business partner,Needs Assignment,Other,firmin.ng@chevron.com,,,Chevron Corporation,,Kelly Wasden,2023-05-16T20:31:03.000+0000,,SHORT_NAME
+003Mm00000XaPZpIAN,Gigi,Ng,Gigi Ng,Partner Enablement Manager,Manager/Team Lead,Other,ngg@amazon.com,,,Amazon Web Services (AWS),,Axonify,2026-01-16T14:41:18.000+0000,,SHORT_NAME
+003E000001SqRmiIAF,John,Ng,John Ng,"Manager, EPG Contracts",Manager/Team Lead,Other,johng@shoppersdrugmart.ca,(416) 493-1220 Ext.5757|,,Loblaw Digital,,Ryan Flaherty,2016-01-04T14:37:37.000+0000,2016-01-19,SHORT_NAME
+0038a00003G5CUwAAN,Joyce,Ng,Joyce Ng,regional hr business partner (apac),Needs Assignment,Other,joyce.ng@jnj.com,,,Janssen - EMEA,,Ryan Flaherty,2023-05-16T20:22:24.000+0000,,SHORT_NAME
+0038a00003G5BqyAAF,Kaka,Ng,Kaka Ng,"senior analyst, hr business partner",Analyst,Other,kaka.ng@gs.com,,,Goldman Sachs,,Axonify,2023-05-16T20:19:03.000+0000,,SHORT_NAME
+0030h00002M8r3YAAR,Mary,Ng,Mary Ng,"Sr. Manager, Leadership Development",Manager/Team Lead,Other,mary.k.ng@aa.com,8179311358,,U.S. Pharmacopeia,,Axonify,2018-06-05T19:50:32.000+0000,,SHORT_NAME
+0030L00001vMrVxQAK,Mary,Ng,Mary Ng,"Team Lead, Compliance",Manager/Team Lead,Other,mng@firstrepublic.com,(415) 262-2524,,First Republic Bank,,Kelly Wasden,2018-01-29T19:14:50.000+0000,2018-10-22,SHORT_NAME
+0030L00001uamj7QAA,Natalie,Ng,Natalie Ng,"Supervisor, Benefits",Manager/Team Lead,Other,natalie_ng@cable.comcast.com,(215) 286-1700,,ComCast,,Adam George,2018-01-02T20:42:37.000+0000,2018-10-31,JUNK_KEYWORD | SHORT_NAME
+0030h00002KklljAAB,Stephanie,Ng,Stephanie Ng,Snr Exec,Needs Assignment,Other,stephanieng@sim.edu.sg,62480073,,Singapore Institute of Management,,Axonify,2018-04-10T20:26:59.000+0000,,SHORT_NAME
+003Mm00000L1bheIAB,Wayne,Ng,Wayne Ng,IT Manager,Manager/Team Lead,Technical,wayne.ng@shell.com,44 20 7934 1234,,Shell Plc,,Grant McNulty,2025-03-01T09:39:58.000+0000,,SHORT_NAME
+0038a00002n2zvCAAQ,An,Nguyen,An Nguyen,,Needs Assignment,Other,an_4.nguyen@boehringer-ingelheim.com,1 203 778 7366,,Boehringer Ingelheim,,Ryan Flaherty,2021-10-19T05:49:06.000+0000,2021-10-26,SHORT_NAME
+003Mm00000JNP3NIAX,Ni,Nguyen,Ni Nguyen,Client Success Manager,Manager/Team Lead,Other,ni@haventech.us,1 909 340 0800,,Haven Technologies,,Kelly Wasden,2025-01-08T14:27:13.000+0000,,SHORT_NAME
+0030h00002M6s86AAB,VU,NGUYEN,VU NGUYEN,ENGINEER 1,Needs Assignment,Other,vu.minh.tran.nguyen@gmail.com,3107659436,,"Teledyne Controls, LLC",,Kelly Wasden,2018-04-24T15:00:55.000+0000,,SHORT_NAME | ALL_CAPS
+0030h00002XKQewAAH,Vu,Nguyen,Vu Nguyen,Sales Representative,Other,Sales,vu.nguyen@libertymutual.com,(617) 357-9500,,Liberty Mutual Insurance,,Axonify,2019-10-29T16:50:02.000+0000,,SHORT_NAME
+0030h00002XKUTkAAP,Vy,Nguyen,Vy Nguyen,Sales Agent,Needs Assignment,Sales,vy.nguyen@libertymutual.com,(614) 458-2014,,Liberty Mutual Insurance,,Axonify,2019-10-29T19:59:27.000+0000,,SHORT_NAME
+0038a00002w9OcnAAE,Ty,Nguyên,Ty Nguyên,Ve,Needs Assignment,Other,nhjmom3060@gmail.com,,,Presidential Services Ltd,,Grant McNulty,2022-10-06T14:21:11.000+0000,,SHORT_NAME
+0038a00003G5FpCAAV,Na,Ni,Na Ni,hr business partner,Needs Assignment,Other,na.ni@cardinalhealth.ca,,,Huntington Bank,,Adam George,2023-05-16T20:40:49.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00003G5FpqAAF,Nina,Ni,Nina Ni,hr business partner,Needs Assignment,Other,nina.ni@cardinalhealth.ca,,,Huntington Bank,,Adam George,2023-05-16T20:40:49.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00003G57nuAAB,Winnie,Ni,Winnie Ni,hr business partner,Needs Assignment,Other,winnie_ni@baxter.com,,,Abbott,,Adam George,2023-05-16T19:57:41.000+0000,,SHORT_NAME
+003Mm00000JNTHiIAP,PJ,Noascono,PJ Noascono,Site Manager,Manager/Team Lead,Other,paul.noascono@ipaper.com,419-560-3930,,International Paper Company,,Jen Tolbert,2025-01-08T14:10:08.000+0000,,SHORT_NAME
+0030h00002OWyqJAAT,Jo,Oakes,Jo Oakes,Design,Needs Assignment,Other,jo.oakesprestbury@hotmail.co.uk,09877678654,,Barclays Financial Corp,,Grant McNulty,2018-10-10T16:03:44.000+0000,,SHORT_NAME
+0030h00002OWyqLAAT,Jo,Oakes,Jo Oakes,Design,Needs Assignment,Other,joanne.oakes@barclays.com,09999888888,,Barclays Financial Corp,,Grant McNulty,2018-10-10T16:03:44.000+0000,,SHORT_NAME
+0038a000037IDmUAAW,Ed,Ochoa,Ed Ochoa,Sales Manager,Manager/Team Lead,Sales,e.ochoa@samsung.com,,,Samsung Electronics America,,Axonify,2023-01-03T17:43:13.000+0000,2023-01-20,SHORT_NAME
+0038a00003LdmoPAAR,hanbit,oh,hanbit oh,,Needs Assignment,Other,sphanbit@kaist.ac.kr,,,kaist,,Axonify,2023-09-22T13:02:17.000+0000,,SHORT_NAME
+0030h00002XKRSOAA5,Melvin,Oh,Melvin Oh,Regional Sales Manager,Manager/Team Lead,Sales,melvin.oh@ftr.com,(818) 923-5196,,Frontier Communications,,Axonify,2019-10-29T17:35:13.000+0000,,SHORT_NAME
+0038a00003G5FAWAA3,Sarah,Oh,Sarah Oh,"manager, employer branding and engagement & hr business partner, asia pacific",Manager/Team Lead,Other,sarah.oh@dhl.com,,,DHL Supply Chain,,Axonify,2023-05-16T20:36:48.000+0000,,SHORT_NAME
+003E000001dJiisIAC,Orlando,OJ,Orlando OJ,Innovations Manager,Manager/Team Lead,Innovation,orlando.oj@wal-mart.com,,,"Walmart Puerto Rico, Inc",,Liz Davis,2016-06-17T18:46:32.000+0000,,SHORT_NAME
+0030h00002f1VLBAA2,Tu,Ong,Tu Ong,Project Manager,Manager/Team Lead,Other,tuong@launchcg.com,(360) 292-2895,,Launch Consulting Group,,Kelly Wasden,2020-10-19T17:25:11.000+0000,2021-02-05,SHORT_NAME
+003Mm000006OH6hIAG,Fm,Onilu,Fm Onilu,,Needs Assignment,Other,oonilude@cmhc-schl.gc.ca,1 224 207 8444,,VW,,Axonify,2023-11-17T16:23:31.000+0000,2023-11-17,SHORT_NAME
+0038a00002w9H5LAAU,Karen,Or,Karen Or,Design Team Manager,Manager/Team Lead,Other,kor@petvalu.com,(905) 305-6444,,Pet Valu Canada Inc,,Axonify,2022-10-02T23:12:10.000+0000,,SHORT_NAME
+0030h00002OWzesAAD,Ed,Ostrowski,Ed Ostrowski,Manufacturing Engineer,Other,Other,ostrowski_ed@cat.com,,,Caterpillar Inc.,,Adam George,2018-10-10T16:24:30.000+0000,2018-10-19,SHORT_NAME
+0038a00003G5DC4AAN,Cindy,Ow,Cindy Ow,regional hr business partner,Needs Assignment,Other,cindy.ow@vodafone.com,,+65 9643 0561,Vodafone Czech Republic,,Grant McNulty,2023-05-16T20:25:54.000+0000,,SHORT_NAME
+0030h00002XKR0PAAX,Al,Owen,Al Owen,Territory Sales Manager,Manager/Team Lead,Sales,al.owen@terex.com,(717) 650-1044,,Terex Corporation,,Axonify,2019-10-29T17:10:15.000+0000,,SHORT_NAME
+0030h00002QXBLeAAP,Moris,Oz,Moris Oz,gb,Needs Assignment,Other,morizoz@mom.com,,,Mom LTD,,Grant McNulty,2019-01-07T21:07:04.000+0000,,SHORT_NAME
+0030h00002M8zMNAAZ,Karthikeyan,P,Karthikeyan P,Knowledge Manager,Manager/Team Lead,Other,karthikeyan.p2@vodafone.com,9663255500,,Vodafone Group PLC,,Grant McNulty,2018-06-06T14:14:09.000+0000,,SHORT_NAME
+0030h00002OWzKYAA1,vikranth,p,vikranth p,Pre-sales,Needs Assignment,Sales,vkranth.pothireddy@in.bosch.com,9.18068E+11,,Bosch USA,,Adam George,2018-10-10T16:16:01.000+0000,,SHORT_NAME
+0030h00002TCoXEAA1,Balasubramaniam,P.,Balasubramaniam P.,"Manager, Engineering",Manager/Team Lead,Other,balasubramaniam_p@beaerospace.com,(617) 443-3000,,General Electric Company,,Axonify,2019-04-12T17:54:17.000+0000,,SHORT_NAME
+0038a00003LdbuMAAR,William,P.,William P.,Security Manager,Manager/Team Lead,Other,william.perez@heb.com,,,HEB,,Jen Tolbert,2023-09-12T16:26:26.000+0000,2023-09-25,SHORT_NAME
+0030h00002M8xO3AAJ,Ed,Pacan,Ed Pacan,Loss Preventions Manager,Manager/Team Lead,Other,bentriver@rogers.com,705-769-1064,,macdonald training & consulting,,Jen Tolbert,2018-06-06T13:31:27.000+0000,,SHORT_NAME
+0030L00001uYPOBQA4,Ro,Pacifico,Ro Pacifico,Principal Customer Experience Strategy,Needs Assignment,Other,ro.pacifico@floridablue.com,+1 800-352-2583,,Florida Blue,Call Center,Emily Smith,2017-12-19T23:31:07.000+0000,2018-12-18,SHORT_NAME
+0038a00002w7DROAA2,CK,Pagsuyuin,CK Pagsuyuin,,Needs Assignment,Other,chrisuis.karren.pagsuyuin@sunlife.com,1 781 237 6030,,"Sun Life of Canada (u.s.) Holdings, Inc.",,Ryan Flaherty,2022-07-14T19:18:30.000+0000,2022-12-28,SHORT_NAME
+0030h00002cJNpeAAG,A,Palma,A Palma,,Needs Assignment,Other,alberto.palma@cardorks.com,5.16576E+13,,CardWorks Servicing,,Adam George,2020-06-17T16:44:37.000+0000,,SHORT_NAME
+0030h00002XKOXlAAP,Ed,Pandoff,Ed Pandoff,Senior Field Service Representative,Other,Other,ed.pandoff@checkpt.com,(856) 848-1800,,Checkpoint Systems,,Axonify,2019-10-29T14:34:50.000+0000,,SHORT_NAME
+0030L00001vPEMTQA4,AS,Parker,AS Parker,PM,Needs Assignment,Other,asparker@us.ibm.com,8179378461,,IBM,,Axonify,2018-02-13T20:27:29.000+0000,,SHORT_NAME
+0030L00001vMq5KQAS,DJ,Parker,DJ Parker,Senior Recruiter,Other,Other,dparker@eplus.com,(703) 984-8372,,Eplus Inc.,,Jen Tolbert,2018-01-29T19:11:47.000+0000,,SHORT_NAME
+0030L00001vPHX5QAO,B,Patel,B Patel,Rei Senior Online Asset Protection Specialist,Specialist,Other,bpatel@delta-foods.com,334-480-0745,,Delta Foods International Inc,,Kelly Wasden,2018-02-13T21:14:07.000+0000,,SHORT_NAME
+003Mm00000JNT8AIAX,Al,Paton,Al Paton,IT Project Manager,Manager/Team Lead,Technical,apaton@booths.co.uk,44 800 221 8086,,"EH.Booth and Co., Ltd.",,Grant McNulty,2025-01-08T14:08:48.000+0000,,SHORT_NAME
+0030h00002YQ2U0AAL,Denis,Pe,Denis Pe,Managing Partner,Needs Assignment,Other,denis@auduboncompanies.com,(281) 669-0590,,Audubon Companies,,Jen Tolbert,2019-11-04T13:50:11.000+0000,,SHORT_NAME
+0038a00002w9IkyAAE,M,Peay,M Peay,Consultant,Consultant,Other,mpeay@focusbrands.com,(404) 255-3250,,GoTo Foods,,Jen Tolbert,2022-10-02T23:35:40.000+0000,,SHORT_NAME
+003Mm00000Lw00OIAR,S,Pell,S Pell,,Needs Assignment,Other,sandy.pell@vidyard.com,,,Buildscale (Vidyard),,Axonify,2025-03-25T18:44:30.000+0000,,SHORT_NAME
+0030h00002M7050AAB,Ed,Pepp,Ed Pepp,Field Service Supervisor,Manager/Team Lead,Other,ed.pepp@alticeusa.com,(516) 803-2300,,Altice USA,,Axonify,2018-04-30T14:22:57.000+0000,2018-05-22,SHORT_NAME
+0030h00002XKQMLAA5,Al,Perez,Al Perez,General Manager,Manager/Team Lead,Other,al_perez@qvc.com,(484) 701-1000,,Qurate Retail Group,,Adam George,2019-10-29T16:33:08.000+0000,,SHORT_NAME
+0030h00002hCcLCAA0,Al,Piatkowski,Al Piatkowski,Systems Integration Engineer,Needs Assignment,Other,al.piatkowski@zebra.com,,,Zebra Technologies Corporation,,Susan McGovern,2021-02-12T17:58:10.000+0000,,SHORT_NAME
+0038a00003G5DxYAAV,An,Plusquin,An Plusquin,hr business partner,Needs Assignment,Other,an.plusquin@medtronic.com,,,Medtronic Public Limited Company,,Grant McNulty,2023-05-16T20:29:59.000+0000,,SHORT_NAME
+0038a00002nczGQAAY,K,Pradhan,K Pradhan,,Needs Assignment,Other,kaustubhp@altostrat.com,,,Altostrat,,Axonify,2021-11-17T14:34:55.000+0000,2022-01-28,SHORT_NAME
+0030L00001vz2xTQAQ,JD,Pugh,JD Pugh,Regional Manager,Manager/Team Lead,Other,j.david.pugh@mwarep.org,,,Modern Woodmen Of America,,Adam George,2018-03-01T16:05:32.000+0000,2018-03-11,SHORT_NAME
+0030h00002M6ul5AAB,Ed,Puskas,Ed Puskas,Regional Asset Protection Specialist,Specialist,Other,ed.puskas@smartandfinal.com,323-869-7500,,Smart & Final Inc.,,Kelly Wasden,2018-04-25T20:02:41.000+0000,2018-05-30,SHORT_NAME
+0030h00002m1KrXAAU,Jo,Pyper,Jo Pyper,Sales assistant,Needs Assignment,Sales,joanddavepyper@gmail.com,4285838,,Briscoes Group Limited,,Douglas Leonard,2021-08-19T21:05:03.000+0000,2021-08-19,SHORT_NAME
+0030h00002QYf8dAAD,Nathan,Qi,Nathan Qi,Manager,Manager/Team Lead,Other,hui.qi@pnc.com,614-270-8238,,PNC,,Adam George,2019-02-06T04:03:22.000+0000,,JUNK_KEYWORD | SHORT_NAME
+003Mm00000FFQG5IAP,Akshitha,R,Akshitha R,Workday Consultant,Consultant,Other,akshitha.r@wnco.com,,,Southwest Airlines,,Jen Tolbert,2024-08-08T18:47:06.000+0000,,SHORT_NAME
+0038a00002q86ELAAY,md,rabbyhossain,md rabbyhossain,copy,Needs Assignment,Other,distaprabby5@gamil.com,01773011384,,indeya,,Axonify,2022-03-05T17:46:29.000+0000,2022-03-05,SHORT_NAME
+003E000001NdDXuIAN,Ed,Rainey,Ed Rainey,District Loss Prevention Manager,Manager/Team Lead,Other,erainey@dickssportinggoods.com,\+1.919.806.5153,,"Dick's Sporting Goods, Inc.",,Ryan Flaherty,2015-08-26T14:54:32.000+0000,,SHORT_NAME
+0030h00002M7TjrAAF,Jo,Raley,Jo Raley,Public Sector Inside Sales Manager,Manager/Team Lead,Sales,jhraley@lenovo.com,(919) 874-3324,(919) 389-1393,Lenovo,"Government & Higher Education, East",Ryan Flaherty,2018-05-15T23:22:52.000+0000,,SHORT_NAME
+0038a000037IbntAAC,T,Rapajic,T Rapajic,Senior Manager,Manager/Team Lead,Other,trapajic@deloitte.com,,,Deloitte Touche Tohmatsu Services - US Consulting,,Axonify,2023-01-29T17:59:23.000+0000,2023-03-15,SHORT_NAME
+0038a00003G5CgRAAV,Jj,Raymond,Jj Raymond,"avp, marketing & sales technology operations",Needs Assignment,Sales,jj.raymond@nasdaq.com,,+1 770 912 3758,Nasdaq,,Axonify,2023-05-16T20:23:13.000+0000,,SHORT_NAME
+0030h00002QYYhUAAX,Natalie,RB,Natalie RB,Education Specialist,Specialist,Other,nbruner@salud.unm.edu,(505) 272-0111,,University of New Mexico,,Kelly Wasden,2019-02-04T13:21:29.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030h00002QW1ysAAD,Jean-Sebastien,Re,Jean-Sebastien Re,System Analyst (OMS),Analyst,Other,jre@bouclair.com,,,Bouclair Inc.,,Axonify,2018-12-18T04:05:31.000+0000,2019-01-03,SHORT_NAME
+003Mm00000LvJJdIAN,Md,Riyad,Md Riyad,,Needs Assignment,Other,rase.riyad@rbc.com,,,RBC,,Ryan Flaherty,2025-03-25T15:10:48.000+0000,,SHORT_NAME
+003E000000FPIC3IAP,Al,Robinette,Al Robinette,Regional Loss Prevention Manager,Manager/Team Lead,Other,alfred.robinette@charming.com,5714051333,,Charming Shoppes,,Adam George,2012-06-25T18:08:51.000+0000,2018-01-25,SHORT_NAME
+0030h00002Noe5zAAB,MC,Rodriguez,MC Rodriguez,CSM,Needs Assignment,Other,mrodriguez@axonify.com,,,Axonify,,Axonify,2018-07-26T14:27:01.000+0000,2019-01-08,SHORT_NAME
+0030h00002XKPD6AAP,Ed,Rogala,Ed Rogala,District Sales Manager,Manager/Team Lead,Sales,ed.rogala@carpenter.com,(804) 359-0800,,Carpenter Co.,,Jen Tolbert,2019-10-29T15:14:13.000+0000,,SHORT_NAME
+0030h00002XKUSFAA5,Ho,Roger,Ho Roger,Sales Representative,Other,Sales,roger.ho@libertymutual.com,(857) 224-9654,,Liberty Mutual Insurance,,Axonify,2019-10-29T19:59:01.000+0000,,SHORT_NAME
+003E0000013YySPIA0,Ed,Rohrs,Ed Rohrs,"Commercial Solutions Manager, European Business Effectiveness",Manager/Team Lead,Other,ed.d.rohrs@pfizer.com,(212) 733-2323,,Pfizer Sales - Internal Medicine,Oncology,Brian Smith,2014-09-11T15:14:27.000+0000,,SHORT_NAME
+0030h00002XKUMNAA5,Jo,Rose,Jo Rose,Regional Sales Manager,Manager/Team Lead,Sales,jrose@rsihomeproducts.com,(540) 665-9100,,American Woodmark Corporation,,Jen Tolbert,2019-10-29T19:56:00.000+0000,,SHORT_NAME
+003Mm00000JNMFAIA5,TJ,Rosenberg,TJ Rosenberg,,Needs Assignment,Other,tj.rosenberg@epicbrokers.com,2267892240,,EPIC Insurance Brokers & Consultants,,Kelly Wasden,2025-01-08T14:15:48.000+0000,2020-04-23,SHORT_NAME
+003E000001UUYnOIAX,Ed,Rowe,Ed Rowe,Sales Manager,Manager/Team Lead,Sales,ed.rowe@globalknowledge.com,919-463-7391,,Global Knowledge Training,,Jen Tolbert,2016-01-14T14:36:04.000+0000,2016-02-18,SHORT_NAME
+0038a000037HtJ8AAK,Benjamin,S,Benjamin S,Technology Depot Manager,Manager/Team Lead,Technical,thezeekeal@yahoo.com,,,Yahoo! Inc.,,Axonify,2022-12-19T14:30:32.000+0000,,SHORT_NAME
+0038a000037HieHAAS,Hari,S,Hari S,CISO,Needs Assignment,Other,hari@tapestry.com,,,Tapestry,,Axonify,2022-12-06T19:16:30.000+0000,2022-12-15,SHORT_NAME
+003Mm00000HkRzVIAV,Jamuna,S,Jamuna S,analyst,Analyst,Other,jamuna.devi@tagww.com,,,Tag,,Grant McNulty,2024-11-12T18:57:45.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00002qckAsAAI,K,S,K S,Food Service Team Lead,Manager/Team Lead,Other,karen.thompson@target.com,1 612 304 6073,,Target,,Adam George,2022-03-24T01:26:07.000+0000,2023-04-06,SHORT_NAME
+003Mm00000LvyUnIAJ,Kat,S,Kat S,Digital VoC Lead,Manager/Team Lead,Other,sapronovak@aetna.com,(401) 765-1500,,Aetna Inc.,,Joe McCulla,2025-03-25T17:51:32.000+0000,,SHORT_NAME
+0030h00002QW5ckAAD,Sajal,S,Sajal S,Domain Architect - Marketing,Needs Assignment,Marketing,sajal.s@retailbusinessservices.com,,,Retail Business Services,,Jen Tolbert,2018-12-18T20:59:00.000+0000,,SHORT_NAME
+0030h00002QXsgvAAD,sanjana,s,sanjana s,MT,Needs Assignment,Other,sanjana.s@hcl.com,00,,PowerObjects,,Adam George,2019-01-22T04:01:27.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030h00002M9uBgAAJ,Vignesh,S,Vignesh S,RFP Process Manager,Manager/Team Lead,Other,vigneshwar.s@ab-inbev.com,+91 80 4676 9848,,Anheuser-Busch InBev,,Adam George,2018-06-19T12:59:03.000+0000,2018-06-26,SHORT_NAME
+0030h00002f2EihAAE,Stephanie,S.,Stephanie S.,"Sr Manager, Business Development",Manager/Team Lead,Sales,ss@westelm.com,(888) 922-4119,,West Elm,,Kelly Wasden,2020-10-29T20:33:22.000+0000,,SHORT_NAME
+0030h00002hBMjRAAW,TJ,Sandella,TJ Sandella,Senior Integrations Specialist,Specialist,Other,thomas.sandella@sherwin.com,(216) 566-2000,,Sherwin-Williams Company,,Adam George,2021-01-25T19:32:37.000+0000,2021-02-09,SHORT_NAME
+0038a00002w9QX4AAM,Em,Saunier,Em Saunier,Real Estate Consultant,Consultant,Other,emsaunier33@gmail.com,2259548275,,Presidential Services Ltd,,Grant McNulty,2022-10-07T12:42:24.000+0000,,SHORT_NAME
+003E000001UWiMGIA1,l,sayam,l sayam,Manager,Manager/Team Lead,Other,l.sayam@ieee.org,7325625461,,Ieee,,Axonify,2016-01-28T14:53:55.000+0000,,SHORT_NAME
+0030L00001uYPKXQA4,Ed,Schnedler,Ed Schnedler,"Manager, Call Center",Manager/Team Lead,Customer Service,eschnedler@veteransunited.com,(573) 876-2600,,Veterans United Home Loans,Call Center,Adam George,2017-12-19T23:31:02.000+0000,2018-08-13,SHORT_NAME
+0030L00001vMqoSQAS,Ed,Scholl,Ed Scholl,Personnel Executive,Needs Assignment,Other,escholl@cdtechno.com,(215) 775-1378,,"C&D Technologies, Inc.",,Adam George,2018-01-29T19:13:19.000+0000,,SHORT_NAME
+0030h00002M7MBGAA3,AL,Schwarzhaupt,AL Schwarzhaupt,"Senior Manager, National Sales Education Center",Manager/Team Lead,Sales,aschwarz@allstate.com,(847) 402-1123,,Allstate,,Adam George,2018-05-11T17:26:50.000+0000,2019-05-31,SHORT_NAME
+003Mm00000JMM2RIAX,Ed,Scibil,Ed Scibil,Senior Analyst,Analyst,Other,edwin.scibilia@wegmans.com,5852392013,,Wegmans Food Markets,,Adam George,2025-01-08T14:27:41.000+0000,2019-06-27,SHORT_NAME
+0030L00001jFiNaQAK,N,Scriven,N Scriven,Lead Nurse Planner for CE,Manager/Team Lead,Other,nscriven@mchs.com,(614) 234-6000,,Mount Carmel Health System,,Adam George,2016-09-22T13:39:14.000+0000,2019-02-18,SHORT_NAME
+003Mm000008XXn0IAG,Ali,Se,Ali Se,N/A,Needs Assignment,Other,sealika@gmail.com,650-772-8983,,N/A,,Kelly Wasden,2024-01-25T21:22:29.000+0000,2024-01-25,SHORT_NAME
+0038a00003ImuMlAAJ,Jo,Seidel,Jo Seidel,Account Executive,Other,Sales,jo.seidel@zebra.com,+1 248 914 1726,,Zebra Technologies Corporation,,Susan McGovern,2023-06-27T15:14:54.000+0000,2023-11-13,SHORT_NAME
+003Mm00000JNR1VIAX,L,Set,L Set,Senior Manager,Manager/Team Lead,Other,lily.seto@rbc.com,,,RBC,,Ryan Flaherty,2025-01-08T13:48:35.000+0000,,SHORT_NAME
+0038a00002w9Ja8AAE,Ng,Sharlene,Ng Sharlene,Communications,Needs Assignment,Other,sharlene.ng@rolex.com,_+41 22 302 22 00,,Rolex,,Grant McNulty,2022-10-02T23:46:29.000+0000,,SHORT_NAME
+0030h00002M7kacAAB,S,Shawne,S Shawne,Associate product manager,Manager/Team Lead,Other,msfitz2u@hotmail.com,2138403037,,"Advanced Bionics, LLC",,Kelly Wasden,2018-05-22T15:26:19.000+0000,,SHORT_NAME
+0038a00003Ldb6HAAR,Jo,Shepherd,Jo Shepherd,Regional Business Manager,Manager/Team Lead,Other,jo.shepherd@mandco.com,,,M&Co,,Grant McNulty,2023-09-11T20:02:21.000+0000,,SHORT_NAME
+0038a00002w9LDdAAM,Tj,Shiflet,Tj Shiflet,Sales Manager,Manager/Team Lead,Sales,tj.shiflet@tdindustries.com,(972) 888-9500,,TDIndustries,,Jen Tolbert,2022-10-03T00:07:02.000+0000,,SHORT_NAME
+0030h00002XKS0vAAH,Jo,Skjerdal,Jo Skjerdal,Sales Manager & Engineer,Manager/Team Lead,Sales,jo.skjerdal@rohde-schwarz.com,(410) 910-7800,,Rohde & Schwarz,,Axonify,2019-10-29T17:49:02.000+0000,,SHORT_NAME
+0038a00002w9LZrAAM,Olgap,Sl,Olgap Sl,Manager,Manager/Team Lead,Other,o.sladkikh@gmail.com,(479) 277-7000,,Sam's Club,,Liz Davis,2022-10-03T00:11:30.000+0000,,SHORT_NAME
+0030h00002M80UGAAZ,Ty,Smit,Ty Smit,Technical Support Manager,Manager/Team Lead,Customer Service,ty.smit@tiaa.org,,,TIAA Direct,,Axonify,2018-05-28T14:15:01.000+0000,,SHORT_NAME
+0030h00002XKQ1uAAH,Jennifer,So,Jennifer So,Mf Production Cp Associate,Other,Other,jennifer_so@freddiemac.com,(703) 903-2000,,Freddie Mac,,Jen Tolbert,2019-10-29T16:16:09.000+0000,,SHORT_NAME
+0030h00002iUusmAAC,Judith,So,Judith So,Senior Project Manager (Cyber Security),Manager/Team Lead,Other,judith.so@tollgroup.com,,,Toll Global Forwarding Limited,,Adam George,2021-08-17T14:55:22.000+0000,,SHORT_NAME
+0030h00002NpFb0AAF,Judith,So,Judith So,,Needs Assignment,Other,judith.so@energyaustralia.com.au,,,Energy Australia - Call Center,,Douglas Leonard,2018-08-07T20:15:15.000+0000,,SHORT_NAME
+0030h00002RiWJdAAN,Maggie,So,Maggie So,Senior Advisor,Needs Assignment,Other,somaggie@ymail.com,5149618160,,National Bank of Canada,,Beth Houpis,2019-02-15T04:02:45.000+0000,,SHORT_NAME
+0030L00001vPFA8QAO,Maria,So,Maria So,Senior Manager,Manager/Team Lead,Other,maria.so@cbre.com.hk,28202800,,CBRE Group,,Jen Tolbert,2018-02-13T20:45:02.000+0000,2018-10-03,SHORT_NAME
+0030h00002XKSKxAAP,Ming,So,Ming So,Sales Compensation Lead & Analyst,Manager/Team Lead,Sales,ming.so@ge.com,(513) 813-9379,,General Electric Company,,Axonify,2019-10-29T17:58:20.000+0000,,SHORT_NAME
+003Mm000009GlKLIA0,Samnang,So,Samnang So,,Needs Assignment,Other,sso@rrcc.lacounty.gov,1 818 868 6435,,LA County,,Axonify,2024-02-20T17:51:51.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030h00002iKQL3AAO,Ea,Sophal,Ea Sophal,,Needs Assignment,Other,esophal@dfilucky.com,,,Dairy Farm,,Douglas Leonard,2021-03-30T08:17:22.000+0000,2021-03-30,SHORT_NAME
+0038a00003G5ETcAAN,Jo,Southworth,Jo Southworth,regional hr partner,Needs Assignment,Other,jo.southworth@sainsburys.co.uk,,,Homebase,,Grant McNulty,2023-05-16T20:32:50.000+0000,,SHORT_NAME
+0030h00002QY0CtAAL,mo,spadot,mo spadot,manager,Manager/Team Lead,Other,maureen.spadoto@lexisnexis.com,+1 212 309 7859,,Lexisnexis Risk Solutions Inc.,,Jen Tolbert,2019-01-24T04:03:53.000+0000,,SHORT_NAME
+0038a00003G57gtAAB,Ed,Sphr,Ed Sphr,hr business partner - adp totalsource,Needs Assignment,Other,guajardo.ed@adp.com,,,ADP Canada,,Axonify,2023-05-16T19:57:10.000+0000,,SHORT_NAME
+0030L00001vz5naQAA,Al,Spinelli,Al Spinelli,Plant Manager,Manager/Team Lead,Other,al@sierranevada.com,530-893-3520,,Sierra Nevada Corporation,,Kelly Wasden,2018-03-01T17:02:43.000+0000,2018-08-29,SHORT_NAME
+0030h00002iIun5AAC,K,Squires,K Squires,,Needs Assignment,Other,squires.kristin@bcg.com,,,The Boston Consulting Group,,Axonify,2021-03-08T22:00:19.000+0000,2021-03-08,SHORT_NAME
+0038a00002w9JTvAAM,Beth,St,Beth St,"Senior Manager, Marketing Communications",Manager/Team Lead,Marketing,bethke@buildabear.com,(314) 423-8000,,"Build-A-Bear Workshop, Inc.",,Adam George,2022-10-02T23:45:13.000+0000,,SHORT_NAME
+0030h00002M8yXyAAJ,Jo,Stafford,Jo Stafford,SHE Facilitator,Needs Assignment,Other,joanne.stafford@astrazeneca.com,7827836705,,Astrazeneca Pharmaceuticals Lp,,Grant McNulty,2018-06-06T13:56:11.000+0000,,SHORT_NAME
+0030h00002Noki3AAB,Y,Sterken,Y Sterken,Consultatn,Needs Assignment,Other,yvonne.sterken@nl.abnamro.com,0987654321,,ABN AMRO North America,,Grant McNulty,2018-07-29T03:07:59.000+0000,,SHORT_NAME
+0030L00001vMwz9QAC,Ty,Stevenson,Ty Stevenson,Education Sales Representative (Pacific Northwest Region),Other,Sales,ty.stevenson@lego.com,0,,"Lego Systems, Inc.",,Axonify,2018-01-29T19:24:11.000+0000,,SHORT_NAME
+0030h00002QXks3AAD,TJ,STEWART,TJ STEWART,INDUSTRIAL HYGIENIST,Needs Assignment,Other,thomas.stewart@va.gov,269-966-5600,,US Department of Veteran Affairs,,Kelly Wasden,2019-01-19T04:06:20.000+0000,2023-04-15,SHORT_NAME | ALL_CAPS
+003E0000015Wk9HIAS,Y,Stoliker,Y Stoliker,FINANCE MANAGER,Manager/Team Lead,Finance,ystoliker@redmac.net,2103789988,,,,Lesia Crocker,2014-10-25T13:11:16.000+0000,,SHORT_NAME
+0030h00002M7MBRAA3,George,Su,George Su,"Assistant President, Service Center",Other,Other,gsu@scottrade.com,(314) 965-1555 x2889,,Scottrade,,Joe McCulla,2018-05-11T17:27:11.000+0000,2019-05-30,SHORT_NAME
+0038a00003G5DIVAA3,Juana,Su,Juana Su,hr business partner,Needs Assignment,Other,juana.su@unilever.com,,,Alberto-Culver Company,,Grant McNulty,2023-05-16T20:26:23.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030L00001vN2zkQAC,Robert,Su,Robert Su,Account Manager,Manager/Team Lead,Sales,rsu@fpcusa.com,(973) 716-7420,,"Formosa Plastics Corporation, U.S.A.",,Axonify,2018-01-29T19:36:57.000+0000,,SHORT_NAME
+0030L00001rEmeOQAS,Susan,Su,Susan Su,LMS Administrator,Administrator,Other,ssu@appliedmedical.com,+1-949-635-9153,,Applied Medical Corporation,,Kelly Wasden,2017-07-26T18:09:08.000+0000,2017-08-29,SHORT_NAME
+0038a00002w8uugAAA,Sylvia,Su,Sylvia Su,-,Needs Assignment,Other,ssylvia.su@gmail.com,1 800 872 4642,,Presidential Services Ltd,,Grant McNulty,2022-09-15T15:47:07.000+0000,,SHORT_NAME
+0038a00003Lcs0nAAB,Yi,Sui,Yi Sui,,Needs Assignment,Other,sui.y.2@pg.com,44 1375 395000,,The Procter & Gamble Company,,Adam George,2023-08-03T14:51:23.000+0000,,SHORT_NAME
+003Mm00000LxmB3IAJ,Ed,Sulick,Ed Sulick,Plant Manager,Manager/Team Lead,Other,ed.sulick@sherwin.com,(216) 566-2000,,Sherwin-Williams Company,,Adam George,2025-03-26T14:13:35.000+0000,,SHORT_NAME
+0030h00002dQpxjAAC,Leona,Sy,Leona Sy,"Manager, IT Business Applications",Manager/Team Lead,Technical,leonasy@epri.com,6508558729,,EPRI,,Kelly Wasden,2020-07-24T12:12:56.000+0000,2020-07-28,JUNK_KEYWORD | SHORT_NAME
+003Mm00000XXh9pIAD,Donna,T,Donna T,Other,Needs Assignment,Other,donna.porritt@albertsons.com,+1 208-395-4271,,Albertsons Companies,,Kelly Wasden,2026-01-15T21:11:58.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0030L00001vPEtEQAW,varun,t,varun t,Sr Manager,Manager/Team Lead,Other,varun.t@techmahindra.com,9959849743,,Tech Mahindra Limited,,Axonify,2018-02-13T20:38:25.000+0000,,SHORT_NAME
+0038a00002w9F71AAE,Mariko,T.,Mariko T.,"Assistant Manager, Marketing and Communications",Manager/Team Lead,Marketing,mt@toto.com,(770) 282-8686,,"Toto U.S.A. Holdings, Inc.",,Jen Tolbert,2022-10-02T22:44:53.000+0000,,SHORT_NAME
+003Mm00000GjwoGIAR,P.,T.,P. T.,,Needs Assignment,Other,truong.t.phuong@outlook.com,,,Agilec,,Axonify,2024-10-09T14:44:33.000+0000,,SHORT_NAME
+0030L00001vMwjJQAS,Andy,Ta,Andy Ta,Principal Engineer,Needs Assignment,Other,andy.ta@bloomenergy.com,0,,Bloom Energy Corporation,,Kelly Wasden,2018-01-29T19:23:43.000+0000,,SHORT_NAME
+0030L00001uak2kQAA,Mai,Ta,Mai Ta,Programmer,Needs Assignment,Other,mta@celestica.com,(416) 448-5800,,Celestica Inc.,,Axonify,2018-01-02T18:43:07.000+0000,,SHORT_NAME
+0030L00001vMqHRQA0,Mike,Ta,Mike Ta,Senior Information System Administrator,Administrator,Other,mike.ta@enlink.com,(214) 721-9342,,"Enlink Midstream Partners, LP",,Jen Tolbert,2018-01-29T19:12:08.000+0000,,SHORT_NAME
+003E000000qwKwhIAE,Sarah,Ta,Sarah Ta,Product Manager,Manager/Team Lead,Other,sarah.ta@veriskretail.com,,,Verisk Retail,,Adam George,2014-02-25T17:37:08.000+0000,2014-03-05,SHORT_NAME
+0030L00001vN1ICQA0,Sinh,Ta,Sinh Ta,Senior Systems Analyst,Analyst,Other,ta_sinh@allergan.com,(905) 940-7059,,Allergan Canada,,Adam George,2018-01-29T19:32:18.000+0000,,SHORT_NAME
+0038a00003G59qiAAB,Jo,Talliss,Jo Talliss,international hr business partner,Needs Assignment,Other,jo.talliss@att.com,,,Sprint Retail Store Division,,Joe McCulla,2023-05-16T20:08:21.000+0000,,SHORT_NAME
+0030L00001vN1fSQAS,Al,Tamayo,Al Tamayo,"Manager, Key Accounts",Manager/Team Lead,Other,al.tamayo@murata.com,(408) 392-1280 x1290,,"Murata Electronics North America, Inc.",,Jen Tolbert,2018-01-29T19:33:16.000+0000,,SHORT_NAME
+0030h00002M9162AAB,KH,Tan,KH Tan,Snr Opn Mgr,Needs Assignment,Other,kok-huan.tan@perkinelmer.com,+65 6868-1545,,PerkinElmer,,Axonify,2018-06-06T15:30:31.000+0000,,SHORT_NAME
+0038a00003LdkrBAAR,A,Tank,A Tank,,Needs Assignment,Other,admin@podgepartners.com,,,RG,,Axonify,2023-09-20T20:38:18.000+0000,,SHORT_NAME
+003Mm00000Ly6HoIAJ,Km,Tankel,Km Tankel,,Needs Assignment,Other,kimberlee.tankel@ahss.org,,,Adventist Health System Sunbelt Healthcare Corporation,,Jen Tolbert,2025-03-26T15:51:41.000+0000,,SHORT_NAME
+0030L00001uaxRYQAY,Li,Tao,Li Tao,"Compensation & Benefits Manager, Americas Region",Manager/Team Lead,Other,taol@corning.com,(607) 974-9000,,Corning Incorporated,,Axonify,2018-01-03T20:35:22.000+0000,,SHORT_NAME
+003Mm00000JNVWYIA5,B,Taskin,B Taskin,,Needs Assignment,Other,b.taskin@hussmann.com,1 800 592 2060,,Hussmann Corporation,,Adam George,2025-01-08T14:30:43.000+0000,,SHORT_NAME
+0030h00002XKTVcAAP,Ed,Tausky,Ed Tausky,Account Manager,Manager/Team Lead,Sales,ed.tausky@kronos.com,(978) 947-2980,,Ultimate Kronos Group (UKG),,Susan McGovern,2019-10-29T19:08:51.000+0000,,SHORT_NAME
+003E000001eYTNsIAO,Ed,Taylor,Ed Taylor,Meat & Seafood Department Manager,Manager/Team Lead,Other,ed.taylor@kroger.com,,,The Kroger Co.,,Amanda Monk,2016-07-15T13:21:57.000+0000,,SHORT_NAME
+0030h00002iUvQ4AAK,Ed,Taylor,Ed Taylor,Senior Consultant,Consultant,Other,etaylor@storesconsulting.com,+1 513 348 7348,,"The Stores Consulting Group, LLC",,Adam George,2021-08-17T16:08:15.000+0000,,SHORT_NAME
+0030h00002T9I8sAAF,JJ,Thomson,JJ Thomson,"Senior Manager, Manufacturing Engineering",Manager/Team Lead,Other,jj.thomson@rockwellcollins.com,+1 319 295 6072,,Collins Aerospace,,Jen Tolbert,2019-04-23T20:19:33.000+0000,2019-05-17,SHORT_NAME
+0030L00001vMtcvQAC,Al,Tilbe,Al Tilbe,Sales Manager (Northeast Region),Manager/Team Lead,Sales,al.tilbe@cookmedical.com,(800) 457-4500 x808277,,Cook Group Incorporated,,Adam George,2018-01-29T19:18:40.000+0000,,SHORT_NAME
+0030h00002M8y57AAB,Manju,TL,Manju TL,L & D Specialist,Specialist,Other,tmanjusr@ford.com,24551018,,Ford Motor (China) Limited,,Adam George,2018-06-06T13:46:13.000+0000,,SHORT_NAME
+0038a00003G5FApAAN,Brandie,To,Brandie To,senior hr business partner,Needs Assignment,Other,bto@teslamotors.com,,+1 408 660 7592,Tesla Energy,,Jen Tolbert,2023-05-16T20:36:48.000+0000,,SHORT_NAME
+0038a00003LdCtBAAV,Timothy,To,Timothy To,Associate Hospitality Leader,Manager/Team Lead,Other,tto@rh.com,(415) 924-1005,+1-415-722-4088,"Restoration Hardware, Inc.",,Joe McCulla,2023-08-21T19:19:13.000+0000,2023-09-20,SHORT_NAME
+0038a00002w9Hy9AAE,Vanessa,To,Vanessa To,"Senior Manager, Retail and Concierge Communications",Manager/Team Lead,Other,vto@aritzia.com,(604) 251-3132,,Aritzia,,Joe McCulla,2022-10-02T23:24:24.000+0000,,SHORT_NAME
+0030L00001vxdDnQAI,An,Tran,An Tran,Store Manager,Manager/Team Lead,Other,an.tran@mandee.com,,,A & M (2015) LLC,,Axonify,2018-02-19T17:02:27.000+0000,,SHORT_NAME
+0030L00001uamrLQAQ,Vu,Trieu,Vu Trieu,"Manager, Workforce Diversity & Inclusion",Manager/Team Lead,Other,vu_trieu@comcast.com,(215) 286-1700,,ComCast,,Adam George,2018-01-02T20:44:10.000+0000,2020-12-21,SHORT_NAME
+0030h00002T9LSbAAN,Jeanette,Tu,Jeanette Tu,Sales Operations Account Manager,Manager/Team Lead,Sales,jeanette.tu@wdc.com,(949) 672-9469,,Western Digital Corporation,,Kelly Wasden,2019-04-23T20:38:59.000+0000,,SHORT_NAME
+0030h00002iLVe7AAG,Valerie,Tu,Valerie Tu,,Needs Assignment,Other,joyce.yu@bizgroup.ae,,,Biz-Group,,Douglas Leonard,2021-04-15T06:27:22.000+0000,2022-11-24,SHORT_NAME
+0030h00002T9KNOAA3,Oznur,Us,Oznur Us,"Manager, Supply Chain Finance",Manager/Team Lead,Finance,oznur.us@pepsico.com,,,Pepsico Inc.,,Axonify,2019-04-23T20:32:27.000+0000,,SHORT_NAME
+003Mm00000JNPxsIAH,Anchal,V,Anchal V,Sales,Other,Sales,anchal@manthan.com,,,Manthan,,Axonify,2025-01-08T13:40:07.000+0000,,SHORT_NAME
+003Mm00000Q94aNIAR,DEVARAJAN,V,DEVARAJAN V,,Needs Assignment,Other,devarajan.v@pfizer.com,,,Pfizer Eliquis,,Brian Smith,2025-07-26T08:10:36.000+0000,,SHORT_NAME | ALL_CAPS
+0030h00002XKRgwAAH,Al,Vaicekauskas,Al Vaicekauskas,Customer Support & Sales Manager,Manager/Team Lead,Sales,al.vaicekauskas@ftr.com,(203) 614-5600,,Frontier Communications,,Axonify,2019-10-29T17:38:33.000+0000,,SHORT_NAME
+0038a000030keEiAAI,B,Valdez,B Valdez,,Needs Assignment,Other,bvaldez@cmkts.com,(909) 923-7426,,Cardenas Markets Inc,,Kelly Wasden,2022-10-28T20:02:14.000+0000,2023-05-25,SHORT_NAME
+0030h00002T9ICaAAN,Al,Vanegas,Al Vanegas,"Manager, National Asset Protection (Eurest National Accounts)",Manager/Team Lead,Other,al.vanegas@compass-usa.com,+1 704 659 3898,,Compass Group,,Liz Davis,2019-04-23T20:19:50.000+0000,,SHORT_NAME
+0030h00002m2JTtAAM,Al,Vanegas,Al Vanegas,"National Asset Protection Manager, Eurest National Accounts",Manager/Team Lead,Other,alvanegas@compass-usa.com,+1 704 659 3898,,Compass Group,,Liz Davis,2021-09-02T09:55:33.000+0000,,SHORT_NAME
+003E000000BFkIeIAL,Al,Vanegas,Al Vanegas,NO LONGER WORKS HERE,Needs Assignment,Other,avanegas@dollargeneral.com,(615) 855-4000,,Dollar General,,Brian Smith,2012-04-03T13:56:49.000+0000,2012-11-07,SHORT_NAME
+0030h00002M8zEtAAJ,A,Vasilakes,A Vasilakes,title,Needs Assignment,Other,vasilakesa@gojo.com,330-255-6000,,GOJO Industries,,Adam George,2018-06-06T14:11:29.000+0000,,SHORT_NAME
+0030h00002XKSdJAAX,Al,Vazquez,Al Vazquez,Select Customer Sales Manager,Manager/Team Lead,Sales,alec.vazquez@thehartford.com,(860) 547-5000,,"The Hartford Financial Services Group, Inc.",,Axonify,2019-10-29T18:15:20.000+0000,,SHORT_NAME
+0030h00002T9KNCAA3,Anh,Vo,Anh Vo,"Senior Manager, Operations Finance",Manager/Team Lead,Finance,anh.vo@pepsico.com,,,Pepsico Inc.,,Axonify,2019-04-23T20:32:27.000+0000,,SHORT_NAME
+0030h00002T9JhdAAF,Anna,Vo,Anna Vo,"Business Development Manager, Customer",Manager/Team Lead,Sales,anna.vo@mapleleaf.com,,,Maple Leaf Foods Inc,,Axonify,2019-04-23T20:28:50.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00002w9QbLAAU,Cece,Vo,Cece Vo,Regional Manager,Manager/Team Lead,Other,cecevo@gmail.com,5712866191,,Presidential Services Ltd,,Grant McNulty,2022-10-07T12:46:21.000+0000,,SHORT_NAME
+0030h00002T9J2FAAV,Daniel,Vo,Daniel Vo,"Account Manager, Providers Operations, SMB",Manager/Team Lead,Sales,dvo@google.com,,,Google Inc,,Amanda Monk,2019-04-23T20:24:34.000+0000,,SHORT_NAME
+0030h00002m2VNvAAM,Daniel,Vo,Daniel Vo,"Product Foundations Project Manager, Community Partnerships",Manager/Team Lead,Other,danielvo@fb.com,,,Meta Platforms Inc.,,Joe McCulla,2021-09-04T01:07:37.000+0000,2022-01-26,SHORT_NAME
+0038a00003G57N9AAJ,Minh,Vo,Minh Vo,hr business partner,Needs Assignment,Other,vo.m@abbott.com,,+84 90 256 02 22,Abbott,,Adam George,2023-05-16T19:55:12.000+0000,,SHORT_NAME
+0030L00001vMyPzQAK,Trinh,Vo,Trinh Vo,Labor Relations Representative,Other,Other,trinh.vo@arcelormittal.com,(216) 429-6500,,ArcelorMittal,,Grant McNulty,2018-01-29T19:26:41.000+0000,,SHORT_NAME
+0030L00001vMyOcQAK,Ed,Vore,Ed Vore,"General Manager, ArcelorMittal Tubular Products (North America Region)",Manager/Team Lead,Other,edward.vore@arcelormittal.com,(419) 342-1400,,ArcelorMittal,,Grant McNulty,2018-01-29T19:26:41.000+0000,,SHORT_NAME
+0030h00002gGZutAAG,TJ,Vranicar,TJ Vranicar,Business Development Manager,Manager/Team Lead,Sales,tj.vranicar@ukg.com,978-250-9800,,Ultimate Kronos Group (UKG),,Susan McGovern,2020-11-10T19:35:42.000+0000,,SHORT_NAME
+0030h00002M8xSTAAZ,Nguyen,Vu,Nguyen Vu,Staff Accountant,Other,Other,nvu@edenhousing.org,,,Eden Housing Inc.,,Emily Smith,2018-06-06T13:33:07.000+0000,,SHORT_NAME
+0030h00002m2LujAAE,Nguyen,Vu,Nguyen Vu,Financial Analyst,Analyst,Other,vu.h.nguyen@kp.org,+1 619 392 7384,,Kaiser Permanente - Northern California Vision Essentials,,Kelly Wasden,2021-09-02T13:39:29.000+0000,,SHORT_NAME
+0038a00002w9QSRAA2,Stephanie,Vu,Stephanie Vu,On Premise Marketing Manager,Manager/Team Lead,Marketing,stephanie.vu@redbull.com,4366265820,,Red Bull GmbH,,Axonify,2022-10-07T12:38:13.000+0000,,SHORT_NAME
+0030h00002XKOHtAAP,Thach,Vu,Thach Vu,Account Manager,Manager/Team Lead,Sales,thach.vu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:24:22.000+0000,,SHORT_NAME
+0038a00002sr0ylAAA,Glynn,W,Glynn W,.,Needs Assignment,Other,glynn.williams@me.com,,,me.com,,Axonify,2022-05-11T20:00:22.000+0000,2022-05-20,SHORT_NAME
+003Mm00000TzH85IAF,John,W,John W,Network Manager,Manager/Team Lead,Other,john.w@att.com,+1 210 821 4105,,AT&T,,Brian Smith,2025-10-23T20:27:32.000+0000,,SHORT_NAME
+0030L00001vN45yQAC,Ed,Walinski,Ed Walinski,Sales Engineer and Representative,Other,Sales,,(703) 230-7554,,Carahsoft Technology Corp.,,Jen Tolbert,2018-01-29T19:43:34.000+0000,,SHORT_NAME
+0030h00002XKRX4AAP,Ty,Walters,Ty Walters,"Manager, Sales Engineering",Manager/Team Lead,Sales,ty.walters@ftr.com,(203) 614-5600,,Frontier Communications,,Axonify,2019-10-29T17:36:23.000+0000,,SHORT_NAME
+0030h00002dTT0oAAG,Ed,Wan,Ed Wan,"Program Manager, Rogers For Business Planning & Performance",Manager/Team Lead,Other,ed.wan@rci.rogers.com,(416) 637-4898,,Rogers - R4B Operations,,Ryan Flaherty,2020-10-16T15:43:40.000+0000,2023-04-12,SHORT_NAME
+003Mm000006nFNSIA2,Jo,Ward,Jo Ward,People Business Partner: Business Change Technology & Data | Avayler (SaaS) | B2B,Needs Assignment,Technical,jward@halfords.com,,,Halfords,,Grant McNulty,2023-12-01T15:49:36.000+0000,,SHORT_NAME
+003E000001dHv0KIAS,Al,Warren,Al Warren,Merchandising Manager,Manager/Team Lead,Other,awarren@abcwarehouse.com,+1 248-683-1660,,ABC Warehouse,,Adam George,2016-06-09T20:29:57.000+0000,2018-08-02,SHORT_NAME
+003Mm00000Ngp6CIAR,A,White,A White,,Needs Assignment,Other,awhite@ypo.org,972-837-9275,,YPO,,Jen Tolbert,2025-05-17T08:20:27.000+0000,,SHORT_NAME
+0030h00002T9JgUAAV,Ed,White,Ed White,"Manager, Customer Care",Manager/Team Lead,Other,ewhite@mihomes.com,(704) 597-4538,,M/I Homes,,Jen Tolbert,2019-04-23T20:28:31.000+0000,,SHORT_NAME
+0038a00002w9JIZAA2,Jc,Whiteside,Jc Whiteside,General Manager,Manager/Team Lead,Other,jcwhiteside@bestofbanff.com,(403) 762-2642,,Banff Lodging,,Kelly Wasden,2022-10-02T23:42:59.000+0000,,SHORT_NAME
+0030L00001vN0WrQAK,Al,Wilburn,Al Wilburn,"Customer Service Engineer, Cloud & Data Center Security",Other,Other,al_wilburn@trendmicro.com,(817) 522-7930,,Trend Micro,,Jen Tolbert,2018-01-29T19:30:46.000+0000,,SHORT_NAME
+0038a00003G5AbXAAV,Lo,Williams,Lo Williams,hr business partner,Needs Assignment,Other,lowi@amazon.com,,+1 425 442 1644,Nordstrom Inc,,Joe McCulla,2023-05-16T20:12:19.000+0000,,SHORT_NAME
+0038a00003LdmFnAAJ,T,Williams,T Williams,,Needs Assignment,Other,tdmillerwilliams@cps.edu,1 410 686 8727,,Dvorak,,Axonify,2023-09-21T19:07:27.000+0000,,SHORT_NAME
+0030h00002YSDugAAH,Jo,Willoughby,Jo Willoughby,,Needs Assignment,Other,jo@dassocintl.com,9102627766,,Data Associates International,,Axonify,2019-12-06T16:10:31.000+0000,2019-12-06,SHORT_NAME
+0030L00001vz4tEQAQ,Al,Wilson,Al Wilson,"Manager, Total Rewards",Manager/Team Lead,Other,al.wilson@yrcw.com,(913) 344-3463,,YRC Worldwide Inc.,,Adam George,2018-03-01T16:44:34.000+0000,2020-06-11,SHORT_NAME
+0030h00002cJSN0AAO,Jo,Wilson,Jo Wilson,Sr Solutions Consultant,Consultant,Other,jo.wilson01@sap.com,,,SAP SuccessFactors,,Kelly Wasden,2020-06-18T16:23:26.000+0000,,SHORT_NAME
+0038a00003G5FdoAAF,Temiki,Wm,Temiki Wm,hr business partner,Needs Assignment,Other,temiki.wm@pfchangs.com,,,Pfccb Marlton LLC,,Kelly Wasden,2023-05-16T20:39:29.000+0000,,SHORT_NAME
+003Mm00000Sj4u1IAB,Mk,Woltz,Mk Woltz,,Needs Assignment,Other,mk.woltz@danone.com,,,Danone,,Axonify,2025-09-22T16:34:53.000+0000,,SHORT_NAME
+0030L00001vMx2eQAC,BJ,Womack,BJ Womack,Pilot Plant Technician,Needs Assignment,Other,b.j.womack@chemtura.com,(870) 864-2010,,Chemtura Corporation,,Adam George,2018-01-29T19:24:19.000+0000,,SHORT_NAME
+0038a00003G5CfYAAV,E,Wood,E Wood,hr business partner,Needs Assignment,Other,e.wood@bancofcal.com,,+1 949 943 4752,"Banc of California, Inc.",,Kelly Wasden,2023-05-16T20:23:13.000+0000,,SHORT_NAME
+0030L00001sYxRnQAK,Jo,Wood,Jo Wood,Project Oracle Change Lead,Manager/Team Lead,Other,jwood@primark.ie,0871742668,,Primark,,Grant McNulty,2017-10-18T18:09:14.000+0000,,SHORT_NAME
+0030h00002M6zvaAAB,Alex,Wu,Alex Wu,Marketing Manager,Manager/Team Lead,Marketing,alexw@synnex.com,+1 510 668 3242,,SYNNEX,,Kelly Wasden,2018-04-30T13:20:32.000+0000,,SHORT_NAME
+0030L00001vMrF7QAK,Andy,Wu,Andy Wu,"General Manager, Engineered Solutions",Manager/Team Lead,Other,awu@ducommun.com,(310) 380-5313,,Ducommun Incorporated,,Kelly Wasden,2018-01-29T19:14:23.000+0000,2018-06-08,SHORT_NAME
+0030h00002XKSL3AAP,Charlie,Wu,Charlie Wu,"Regional Sales Manager, Druck Product (North)",Manager/Team Lead,Sales,charlie.wu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T17:58:20.000+0000,,SHORT_NAME
+003Mm00000JNN4OIAX,Clarence,Wu,Clarence Wu,Regional Manager,Manager/Team Lead,Other,cwu@henrys.com,7055608686,,Henry's,,Axonify,2025-01-08T14:02:49.000+0000,,SHORT_NAME
+0030h00002gGz43AAC,Fan,Wu,Fan Wu,Medical Device Admin APAC,Administrator,Other,fwu3@its.jnj.com,,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-11-15T18:32:25.000+0000,,SHORT_NAME
+003Mm000008LzK7IAK,James,Wu,James Wu,Partner Nexretail,Needs Assignment,Other,james@nexretail.com,,,Qualcomm Technologies,,Axonify,2024-01-19T20:02:58.000+0000,,SHORT_NAME
+0030h00002M8zYdAAJ,Jenny,Wu,Jenny Wu,Researcher,Needs Assignment,Other,jenny.wu@kohler.com,8621260622,,Kohler Co.,,Adam George,2018-06-06T14:18:35.000+0000,,SHORT_NAME
+0030h00002XKOI2AAP,Jerry,Wu,Jerry Wu,"General Manager, Great Vertical Sales (China)",Manager/Team Lead,Sales,jerry.wu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:24:22.000+0000,,SHORT_NAME
+0038a00003G5BHMAA3,Jessica,Wu,Jessica Wu,"sr. hr business partner at amazon devices, ring taiwan",Needs Assignment,Other,jessicaw@amazon.com,,,Nordstrom Inc,,Joe McCulla,2023-05-16T20:15:42.000+0000,,SHORT_NAME
+0030h00002M8xswAAB,Jessie,Wu,Jessie Wu,Knowledge Manager,Manager/Team Lead,Other,jessie.wu@sap.com,862161083551,,SAP Canada Inc,,Axonify,2018-06-06T13:42:07.000+0000,,SHORT_NAME
+0030h00002dRyMwAAK,Joyce,Wu,Joyce Wu,Medical Device Admin APAC,Administrator,Other,jwu35@its.jnj.com,908-218-0707,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-08-11T15:50:21.000+0000,2022-06-22,SHORT_NAME
+0030h00002QVRTBAA5,Kerry,Wu,Kerry Wu,Seasonal Sales Associate,Other,Sales,kwu@coach.com,,,"Coach, Inc.",,Axonify,2018-12-11T18:57:24.000+0000,,SHORT_NAME
+0030L00001vxcjZQAQ,Linda,Wu,Linda Wu,Office Manager,Manager/Team Lead,Other,linda.wu@macys.com,,,"Macy's, Inc.",,Brian Smith,2018-02-19T16:56:46.000+0000,,SHORT_NAME
+0038a00002w9LSrAAM,Marishka,Wu,Marishka Wu,Operating Partner,Needs Assignment,Other,mwu@silverdiner.com,(703) 821-5666,,"Silver Diner, Inc",,Axonify,2022-10-03T00:09:49.000+0000,,SHORT_NAME
+0030h00002XKUKyAAP,Michelle,Wu,Michelle Wu,Customer Service Representative,Other,Other,mwu@rsihomeproducts.com,(540) 665-9100,,American Woodmark Corporation,,Jen Tolbert,2019-10-29T19:55:09.000+0000,,SHORT_NAME
+0030h00002VcTZkAAN,Penny,Wu,Penny Wu,"Senior Manager, Marketing Operations",Manager/Team Lead,Marketing,penny.wu@adidas.com,,,Adidas AG,,Grant McNulty,2019-08-14T14:39:50.000+0000,2019-08-30,SHORT_NAME
+0030h00002XKR5VAAX,Rita,Wu,Rita Wu,Senior SAP Business Analyst,Analyst,Other,rita.wu@bdk.com,(860) 225-5111,,Stanley Black & Decker,,Axonify,2019-10-29T17:12:45.000+0000,,SHORT_NAME
+0038a00003G5930AAB,Rona,Wu,Rona Wu,hr business partner,Needs Assignment,Other,rona.w@ibm.com,,,The Hanover Insurance Group,,Axonify,2023-05-16T20:04:07.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00003G58cNAAR,Shirley,Wu,Shirley Wu,beijing branch hr manager/senior hr business partner,Manager/Team Lead,Other,shirleywu@ibm.com,,,The Hanover Insurance Group,,Axonify,2023-05-16T20:02:03.000+0000,,SHORT_NAME
+0030h00002aZNgWAAW,Sijia,Wu,Sijia Wu,Webcast & Studio Service Product Manager,Manager/Team Lead,Other,sijia.wu@volvogroup.com,(+46)31 660000,,Volvo,,Grant McNulty,2020-03-26T17:24:23.000+0000,,SHORT_NAME
+0038a000037HWKCAA4,twinsen,wu,twinsen wu,,Needs Assignment,Other,twinsen.wu@irco.com,1 414 212 4700,,Thermo King,,Adam George,2022-11-22T07:36:07.000+0000,2022-11-22,SHORT_NAME
+0030h00002gGz4EAAS,Xiaokang,Wu,Xiaokang Wu,Medical Device Admin APAC,Administrator,Other,xwu38@its.jnj.com,,,J&J - Medical Devices - ASPAC,,Ryan Flaherty,2020-11-15T18:32:25.000+0000,,SHORT_NAME
+0030h00002XKNj5AAH,Yuanbiao,Wu,Yuanbiao Wu,Manufacturing Lead & Engineer,Manager/Team Lead,Other,yuanbiao.wu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:04:51.000+0000,,SHORT_NAME
+0030h00002M8rJMAAZ,Gillian Geremia,x,Gillian Geremia x,x,Needs Assignment,Other,ggeremia@axonify.com,x,,Axonify,,Axonify,2018-06-05T19:56:19.000+0000,,SHORT_NAME
+0038a00003G5GGOAA3,"Cici,",Xi,"Cici, Xi",hr business partner for asia pacific/greater china executives,Needs Assignment,Other,wang_cici@dell.com,,,Del Taco Restaurants,,Kelly Wasden,2023-05-16T20:43:15.000+0000,,SHORT_NAME
+0030h00002XKNfcAAH,Beier,Xu,Beier Xu,Sales Manager,Manager/Team Lead,Sales,beier.xu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:03:08.000+0000,,SHORT_NAME
+003Mm00000L1aFBIAZ,Cong,Xu,Cong Xu,"IT Infrastructure Demand Manager, China/Hong Kong/Taiwan and South Korea",Manager/Team Lead,Technical,cong.xu@shell.com,44 20 7934 1234,,Shell Plc,,Grant McNulty,2025-03-01T09:39:52.000+0000,,SHORT_NAME
+0030h00002XKOzKAAX,Edward,Xu,Edward Xu,Sales Engineer,Other,Sales,edward.xu@kennametal.com,(724) 539-5000,,Kennametal,,Adam George,2019-10-29T15:03:20.000+0000,,SHORT_NAME
+0030h00002XKS0iAAH,Genquan,Xu,Genquan Xu,Sales Engineer,Other,Sales,genquan.xu@rohde-schwarz.com,(410) 910-7800,,Rohde & Schwarz,,Axonify,2019-10-29T17:49:02.000+0000,,SHORT_NAME
+0030h00002XKO3WAAX,Grace,Xu,Grace Xu,"Manager, Business Development & M&A",Manager/Team Lead,Sales,grace.xu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:16:33.000+0000,,SHORT_NAME
+0038a000037HnGCAA0,Jason,Xu,Jason Xu,Assistant Nightfill Manager,Manager/Team Lead,Other,jxu7@woolworths.com.au,,,Woolworths Australia,,Axonify,2022-12-12T13:06:09.000+0000,,SHORT_NAME
+0030L00001rxp4mQAA,Jason,Xu,Jason Xu,Instructional Technologist,Needs Assignment,Other,jia_xu@mcafee.com,8454015595,,"McAfee, Inc.",,Kelly Wasden,2017-08-23T13:42:31.000+0000,2017-09-12,SHORT_NAME
+0030h00002T9L4HAAV,Jenny,Xu,Jenny Xu,"Manager, Customer Service",Manager/Team Lead,Other,jenny.xu@ti.com,,,Texas Instruments Incorporated,,Jen Tolbert,2019-04-23T20:36:29.000+0000,,SHORT_NAME
+003Mm00000Q96H2IAJ,Jia (Dalian),Xu,Jia (Dalian) Xu,Legal Advisor,Needs Assignment,Other,jia.xu@pfizer.com,+86 411 8801 1301,,Pfizer Eliquis,,Brian Smith,2025-07-26T08:11:45.000+0000,,SHORT_NAME
+0030h00002XKOAhAAP,Jun,Xu,Jun Xu,"Sales Manager, Zone",Manager/Team Lead,Sales,jun.xu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:20:18.000+0000,,SHORT_NAME
+0038a00002oSlO0AAK,Ling,Xu,Ling Xu,Returning,Needs Assignment,Other,xuling19951999@163.com,6478859220,,"NetEase, Inc.",,Axonify,2022-01-11T18:13:08.000+0000,2022-01-11,SHORT_NAME
+0030h00002ZmMLqAAN,Nan,Xu,Nan Xu,Ecommerce Specialist,Specialist,Other,nanxu@ihlcanada.net,4167480204,,IHL Group,,Axonify,2020-01-15T20:04:17.000+0000,2021-04-03,JUNK_KEYWORD | SHORT_NAME
+0038a00003G58OKAAZ,Sarah,Xu,Sarah Xu,hr business partner,Needs Assignment,Other,sxu@fastenal.com,,,Fastenal Canada Ltd,,Adam George,2023-05-16T20:00:55.000+0000,,SHORT_NAME
+0030h00002M6rSpAAJ,Sherry,Xu,Sherry Xu,Customer Service Manager,Manager/Team Lead,Other,sherry.xu@sealedair.com,,,Sealed Air Corporation,,Jen Tolbert,2018-04-24T14:25:48.000+0000,,SHORT_NAME
+0038a00003G5CtNAAV,Shirley,Xu,Shirley Xu,hr business partner,Needs Assignment,Other,sxu@underarmour.com,,,Under Armour EMEA,,Grant McNulty,2023-05-16T20:24:19.000+0000,,SHORT_NAME
+0030h00002T9IM8AAN,Wenyan,Xu,Wenyan Xu,"Assistant Manager, Risk & Capital Management",Manager/Team Lead,Other,wxu@deloitte.com,,,Deloitte& Touche LLP Canada,,Axonify,2019-04-23T20:20:51.000+0000,,SHORT_NAME
+0038a000037HimfAAC,Yang,Xu,Yang Xu,"Senior Manager, Corporate Strategy",Manager/Team Lead,Other,yang.xu@bombas.com,1 800 314 0980,,Bombas,,Axonify,2022-12-06T19:23:50.000+0000,,SHORT_NAME
+0038a00002w7pFcAAI,xx,xx,xx xx,,Needs Assignment,Other,thuraya.sazali@accenture.com,353 1 646 2000,,Accenture,,Adam George,2022-07-26T00:59:18.000+0000,2022-08-01,SHORT_NAME
+003Mm00000SjzC7IAJ,Dan,Y,Dan Y,,Needs Assignment,Other,yangdan5@huawei.com,,,Huawei Device USA Inc.,,Jen Tolbert,2025-09-22T22:55:51.000+0000,,SHORT_NAME
+0038a00002w9IjmAAE,Ai,Yamauchi,Ai Yamauchi,Business Development,Other,Sales,yamauchi-a@marubeni.com,+81 84-941-2626,,Marubeni Corporation,,Axonify,2022-10-02T23:35:11.000+0000,,SHORT_NAME
+0030h00002XIyhdAAD,Amy,Ye,Amy Ye,Consultant,Consultant,Other,rye@bocusa.com,2129353101,,Bank of China USA,,Axonify,2019-10-08T13:14:59.000+0000,2019-06-26,SHORT_NAME
+0030h00002iUwceAAC,Angel,Ye,Angel Ye,Internal Control Manager,Manager/Team Lead,Other,angel.ye@loreal.com,,,L'Oreal France,,Axonify,2021-08-17T17:42:48.000+0000,,SHORT_NAME
+0030L00001wdVZbQAM,Angel,Ye,Angel Ye,"Manager, Store Control and Loss Prevention",Manager/Team Lead,Other,aye@coach.com,+1-212-594-1850,,"Coach, Inc.",,Axonify,2018-04-03T19:15:30.000+0000,2018-05-02,SHORT_NAME
+0030h00002QW3udAAD,Helen,Ye,Helen Ye,"SENIOR MANAGER, STRATEGY",Manager/Team Lead,Other,helen_ye@homedepot.com,416-609-0852,,Home Depot of Canada Inc.,,Jen Tolbert,2018-12-18T14:31:57.000+0000,2019-01-09,SHORT_NAME
+0030h00002YSEWDAA5,Lan,Ye,Lan Ye,"General Manager, Teams",Manager/Team Lead,Other,lan.ye@microsoft.com,+1 425 705 2140,,Microsoft Corporation,,Joe McCulla,2019-12-06T18:53:44.000+0000,,SHORT_NAME
+0030h00002dRyJOAA0,Xin,Ye,Xin Ye,Principal Scientist,Needs Assignment,Other,xye28@its.jnj.com,908-218-0707,,J&J - Johnson & Johnson (Hierarchy Parent for MSA),,Ryan Flaherty,2020-08-11T15:46:36.000+0000,,SHORT_NAME
+0030L00001vN1laQAC,Cheng,Yi,Cheng Yi,Technical Advisor,Needs Assignment,Other,cheng.yi@microsemi.com,(604) 415-6124,,Microsemi Soc Corp.,,Kelly Wasden,2018-01-29T19:33:25.000+0000,,SHORT_NAME
+0038a00003PHiQQAA1,Diana,Yi,Diana Yi,Display fixture Business Development Manager,Manager/Team Lead,Sales,diana@xmessence.com,,,"Xiamen Essence Display Fixtures Co.,Ltd",,Axonify,2023-10-13T15:26:21.000+0000,,JUNK_KEYWORD | SHORT_NAME
+0038a00002w7zaBAAQ,Ivey,Yi,Ivey Yi,Regional,Needs Assignment,Other,ivey@windgroupinc.com,289-929-1023,,Wind Group,,Axonify,2022-07-30T22:22:06.000+0000,2022-08-16,SHORT_NAME
+0038a00003G57nLAAR,Sharon,Yi,Sharon Yi,hr business partner,Needs Assignment,Other,sharon_xieyi@baxter.com,,,Abbott,,Adam George,2023-05-16T19:57:41.000+0000,,SHORT_NAME
+0038a00003G58cMAAR,Li,Yin,Li Yin,hr partner,Needs Assignment,Other,liyin@ibm.com,,,The Hanover Insurance Group,,Axonify,2023-05-16T20:02:03.000+0000,,SHORT_NAME
+003Mm000008XU9HIAW,yj,YJ,yj YJ,students,Needs Assignment,Other,yeonji.jung@nyu.edu,,,New York University,,Axonify,2024-01-25T21:45:42.000+0000,,SHORT_NAME
+0030h00002l4RuEAAU,yo,yo,yo yo,,Needs Assignment,Other,no@no.com,1 646 486 3950,,yo,,Axonify,2021-07-01T16:26:03.000+0000,2021-07-01,SHORT_NAME
+0030L00001uaxQMQAY,Bo,Yount,Bo Yount,"Field Sales Engineer - Kansa, Oklahoma, NWArk",Other,Sales,bo.yount@corning.com,(828) 901-6959,,Corning Incorporated,,Axonify,2018-01-03T20:35:11.000+0000,,SHORT_NAME
+0038a00003G5AN4AAN,Amy,Yu,Amy Yu,"principal associate, hr rotation program",Other,Other,amy.binyu@capitalone.com,,+1 301 741 9123,Capital One Financial Corporation,,Jen Tolbert,2023-05-16T20:11:17.000+0000,,SHORT_NAME
+0030h00002XK13FAAT,Chung,Yu,Chung Yu,Call Center Technology Leader,Manager/Team Lead,Customer Service,chung.yu@cox.com,(404) 269-6616,,Cox Communications,,Jen Tolbert,2019-10-23T21:01:20.000+0000,,SHORT_NAME
+0030h00002hAuBAAA0,Gloria,Yu,Gloria Yu,,Needs Assignment,Other,gloria-hc.yu@aia.com,0989048996,,AIA Company Limited - Holding Account,,Adam George,2021-01-19T21:43:14.000+0000,2021-01-19,SHORT_NAME
+0038a00003CcxmtAAB,Janie,Yu,Janie Yu,Founding Partner,Needs Assignment,Other,janie@lfxvp.com,,,LFX Venture Partners,,Kelly Wasden,2023-03-20T17:30:18.000+0000,,SHORT_NAME
+0030h00002KkloYAAR,Jing,Yu,Jing Yu,Instructinal Design Manager,Manager/Team Lead,Other,jing.yu@childrenscolorado.org,3038645191,,Children's Hospital Colorado,,Adam George,2018-04-10T20:30:14.000+0000,2019-05-16,SHORT_NAME
+0030h00002XKO23AAH,Jixiang,Yu,Jixiang Yu,Sales Manager,Manager/Team Lead,Sales,jixiang.yu@ge.com,(617) 443-3000,,General Electric Company,,Axonify,2019-10-29T14:15:44.000+0000,,SHORT_NAME
+003Mm000006VExhIAG,Joey,Yu,Joey Yu,,Needs Assignment,Other,jyu149@its.jnj.com,1 732 524 0400,,J&J - Medical Devices - NA,,Ryan Flaherty,2023-11-21T20:21:23.000+0000,2024-02-20,SHORT_NAME
+0030h00002PM35nAAD,Joyce,Yu,Joyce Yu,Security Manager,Manager/Team Lead,Other,joyceyu@tntsupermarket.com,604-276-9889,,T & T Supermarket Inc.,,Ryan Flaherty,2018-10-17T14:01:07.000+0000,2018-10-30,SHORT_NAME
+0030h00002XKONIAA5,Meredith,Yu,Meredith Yu,Lead Compensation Analyst,Manager/Team Lead,Other,meredith.yu@geappliances.com,(502) 452-4907,,General Electric Company,,Axonify,2019-10-29T14:26:58.000+0000,,SHORT_NAME
+0038a00002w9IRsAAM,Sophie,Yu,Sophie Yu,Regional Manager,Manager/Team Lead,Other,sophie.yu@onobbq.com,(323) 264-6888,,Ono Hawaiian BBQ,,Kelly Wasden,2022-10-02T23:31:24.000+0000,,SHORT_NAME
+003Mm000008XHFFIA4,Taeho,Yu,Taeho Yu,Professor,Needs Assignment,Other,taeho@virginia.edu,,,Ops,,Axonify,2024-01-25T21:40:15.000+0000,2024-01-25,SHORT_NAME
+0038a00002w8cyNAAQ,Timothy,Yu,Timothy Yu,Senior Associate,Other,Other,timmyyu+axonify@gmail.com,1 925 275 2141,,Presidential Services Ltd,,Grant McNulty,2022-09-01T17:48:24.000+0000,2024-01-25,SHORT_NAME
+003Mm00000L1beSIAR,Vincent,Yu,Vincent Yu,Sales and Operations Manager,Manager/Team Lead,Sales,vincent.yu@shell.com,44 20 7934 1234,,Shell Plc,,Grant McNulty,2025-03-01T09:38:47.000+0000,,SHORT_NAME
+0038a00002w9KDUAA2,Vinny,Yu,Vinny Yu,"Supervisor, Marketing Communication",Manager/Team Lead,Marketing,vyu@carlislecbf.com,(480) 781-5000,,Carlisle Companies Incorporated,,Kelly Wasden,2022-10-02T23:53:56.000+0000,,SHORT_NAME
+0030h00002T9HqYAAV,Yong,Yu,Yong Yu,"Manager, Operations , Inbound Sales Center",Manager/Team Lead,Sales,yong.yu@cableone.biz,+1 602 364 6542,,Sparklight,,Kelly Wasden,2019-04-23T20:17:37.000+0000,,SHORT_NAME
+0038a00003G5EXpAAN,Zinnia,Yu,Zinnia Yu,hr business partner,Needs Assignment,Other,zinnia.yu@gm.com,,+1 917 617 2563,GM Financial,,Adam George,2023-05-16T20:33:25.000+0000,,SHORT_NAME
+003E000001bYZyJIAW,Al,Zabriskie,Al Zabriskie,Manager Sales Training & Effectiveness ISF - East,Manager/Team Lead,Sales,al.zabriskie@cardinalhealth.com,,,"CARDINAL HEALTH, INC.",,Ryan Flaherty,2016-05-27T14:41:45.000+0000,,SHORT_NAME
+0030h00002YQ3YzAAL,Yi,Zhang,Yi Zhang,,Needs Assignment,Other,career@sungivenfoods.ca,7789179616,,Sungiven Foods Canada,,Joe McCulla,2019-11-04T18:20:32.000+0000,2019-11-13,SHORT_NAME
+003E000001gpNceIAE,Yi,Zhang,Yi Zhang,CONSULTANT,Consultant,Other,yi.x.zhang@pwc.com,(312) 298-4445,,PricewaterhouseCoopers LLP,,Axonify,2016-07-28T20:26:10.000+0000,2016-07-28,SHORT_NAME

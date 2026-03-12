@@ -1,0 +1,45 @@
+CONTACT DIRTY DATA AUDIT
+Run date : 2026-03-10 13:05
+------------------------------------------------------------
+
+EXCLUSIONS — CONTACTS REMOVED FROM ALL CSVs
+  Persona match:
+  • Title keywords: VP, SVP, Director, COO, CHRO, CPO, Manager, etc.
+  • Job Level (Job_Level__c) IN: C-Level, VP, Director, Manager
+  • Responsibility (Responsibility_Automation__c) contains:
+    Human Resources / Learning & Development / Health & Safety / Operations
+
+  Activity (last 24 months):
+  • Any Task with ActivityDate in last 24 months
+  • Any Event with ActivityDate in last 24 months
+
+  Bizible touchpoints (last 24 months):
+  • Any record in bizible2__Bizible_Touchpoint__c linked to the contact
+
+BUCKET DESCRIPTIONS
+  01_numeric_names.csv  (6 records)
+    -> First or Last name is entirely numbers (e.g. '64935', '1')
+  02_junk_keyword_names.csv  (6,098 records)
+    -> Name contains a known junk keyword (test, sample, dummy, etc.)
+  03_short_names.csv  (873 records)
+    -> First or Last name is 1–2 characters only
+  04_missing_last_name.csv  (0 records)
+    -> Last Name field is blank / null
+  05_all_caps_names.csv  (391 records)
+    -> Full name is ALL CAPS (two-word, letters only)
+  06_no_email_no_phone.csv  (281 records)
+    -> No Email, no Phone, and no Mobile Phone
+  07_orphaned_no_account.csv  (0 records)
+    -> No Account AND no email/phone (completely floating records)
+  08_uncontactable_no_title.csv  (6 records)
+    -> No email/phone AND no Title or Job Level populated
+
+TOTAL ROWS ACROSS ALL CSVs: 7,655
+(Note: a single contact can appear in multiple CSVs.)
+
+NEXT STEPS
+  1. Review each CSV with your manager.
+  2. Mark any records that should NOT be deleted.
+  3. Agree on waves: start with 07_orphaned and 01_numeric (lowest risk).
+  4. Use Salesforce Data Loader or a Mass Delete flow to remove approved records.
+  5. Always export a backup before any bulk delete.

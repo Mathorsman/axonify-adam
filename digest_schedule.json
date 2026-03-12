@@ -1,0 +1,9 @@
+{
+  "frequency": "Weekly",
+  "weekday": "Monday",
+  "month_day": 1,
+  "hour": 8,
+  "minute": 0,
+  "lookback_days": 7,
+  "include_ai": true
+}

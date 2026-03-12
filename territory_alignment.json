@@ -1,0 +1,22 @@
+{
+  "Territory 1": {
+    "ae_label": "Axonify (mhorsman@axonify.com)",
+    "bdr_label": "Aman Lokhandwala (alokhandwala@axonify.com)"
+  },
+  "Territory 2": {
+    "ae_label": "Kelly Wasden (kwasden@axonify.com)",
+    "bdr_label": "Jonathan Markle (jmarkle@axonify.com)"
+  },
+  "Territory 3": {
+    "ae_label": "Adam George (ageorge@axonify.com)",
+    "bdr_label": "Jonathan Markle (jmarkle@axonify.com)"
+  },
+  "Territory 4": {
+    "ae_label": "Jen Tolbert (jtolbert@axonify.com)",
+    "bdr_label": "Alexandra Himes (ahimes@axonify.com)"
+  },
+  "Europe 1": {
+    "ae_label": "Grant McNulty (gmcnulty@axonify.com)",
+    "bdr_label": "Alexandra Himes (ahimes@axonify.com)"
+  }
+}

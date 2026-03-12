@@ -1,0 +1,7 @@
+Id,FirstName,LastName,Name,Title,Job_Level__c,Responsibility_Automation__c,Email,Phone,MobilePhone,Account.Name,Department,Owner.Name,CreatedDate,LastActivityDate,dirty_flags
+003Mm00000MyKDhIAN,1,1,1 1,1,Needs Assignment,Other,inquisition-noreply@google.com,6501234567,,Google Inc,,Amanda Monk,2025-04-24T14:26:02.000+0000,,NUMERIC_NAME | SHORT_NAME
+0030h00002l4ikKAAQ,18717949617,1,18717949617 1,,Needs Assignment,Other,gongxueming1226@junxigmail.com,,,gmail,,Axonify,2021-07-06T01:30:54.000+0000,2021-07-05,NUMERIC_NAME | SHORT_NAME
+0030h00002NpFMLAA3,Store,101,Store 101,,,Other,001tc@altardstate.com,,,Altar'd State,,Jen Tolbert,2018-08-07T20:10:16.000+0000,,NUMERIC_NAME
+0038a00003G5AxGAAV,Christos,7,Christos 7,hr partner,Needs Assignment,Other,ctsiapas@amazon.com,,,Nordstrom Inc,,Joe McCulla,2023-05-16T20:14:00.000+0000,,NUMERIC_NAME | SHORT_NAME
+0030h00002NpFpsAAF,1540,Chullora,1540 Chullora,,Needs Assignment,Other,1540@woolworthspetrol.com.au,,,BT Group Plc,,Beth Houpis,2017-04-19T14:35:15.000+0000,,NUMERIC_NAME
+0030L00001n1A8uQAE,2262,Keperra,2262 Keperra,,Needs Assignment,Other,2262@woolworthspetrol.com.au,,,,,Lesia Crocker,2017-03-20T23:45:32.000+0000,,NUMERIC_NAME

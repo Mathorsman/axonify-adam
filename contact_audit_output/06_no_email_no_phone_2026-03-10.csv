@@ -1,0 +1,282 @@
+Id,FirstName,LastName,Name,Title,Job_Level__c,Responsibility_Automation__c,Email,Phone,MobilePhone,Account.Name,Department,Owner.Name,CreatedDate,LastActivityDate,dirty_flags
+0030L00001my3WtQAI,,-,-,,Needs Assignment,Other,,,,Wolters Kluwer Financial Services Solutions - Sales,,Adam George,2017-02-13T18:35:13.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRR6DAAX,-,-,- -,,Needs Assignment,Other,,,,New Zealand Blood Service,,Axonify,2019-06-27T17:42:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VdAW5AAN,-,-,- -,,Needs Assignment,Other,,,,Abbvie - Mexico,,Adam George,2019-08-23T20:48:06.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRAAAA5,-,-,- -,,Needs Assignment,Other,,,,Sephora Southeast Asia,,Axonify,2019-06-27T17:56:18.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRR13AAH,-,-,- -,,Needs Assignment,Other,,,,AstraZeneca SouthEast Asia,,Grant McNulty,2019-06-27T17:24:55.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002Vb5PkAAJ,-,-,- -,,Needs Assignment,Other,,,,ShopRite (South Africa),,Grant McNulty,2019-07-26T16:56:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRB3AAP,-,-,- -,,Needs Assignment,Other,,,,Specsavers International Healthcare Limited,,Grant McNulty,2019-06-27T17:58:21.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRBSAA5,-,-,- -,,Needs Assignment,Other,,,,TIMG,,Grant McNulty,2019-06-27T18:01:21.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRDoWAAX,-,-,- -,,Needs Assignment,Other,,,,Whites,,Axonify,2019-06-24T15:45:51.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRRHVAA5,-,-,- -,,Needs Assignment,Other,,,,PwC Southeast Asia,,Axonify,2019-06-27T18:28:53.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VcBGZAA3,-,-,- -,,Needs Assignment,Other,,,,Benetton,,Axonify,2019-08-09T18:27:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002VRR3sAAH,-,-,- -,,Needs Assignment,Other,,,,Hirepool,,Axonify,2019-06-27T17:35:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002OTl6hAAD,Aldermore,-,Aldermore -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-09-04T06:27:23.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jeQAA,Ashburton,-,Ashburton -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:02:13.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vaYjIQAU,Asia,-,Asia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-03-22T09:58:48.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M9zvlAAB,Australia,-,Australia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-06-20T17:24:56.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87EOAAZ,Bradlows (Furniture),-,Bradlows (Furniture) -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:16:35.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001s4QVeQAM,Brazil,-,Brazil -,,Needs Assignment,Other,,,,Mundipharma International Limited,,Axonify,2017-09-05T18:09:57.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DxlAAF,Building Insurance,-,Building Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:48:16.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmMQAW,C-suite,-,C-suite -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:12:36.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOYhQAO,Call Centers,-,Call Centers -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:38:42.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCsIQAW,Cardiovascular Metabolic,-,Cardiovascular Metabolic -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:22:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001wdpjzQAA,Central & Eastern Europe Business Unit,-,Central & Eastern Europe Business Unit -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-04-05T13:12:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NorQEAAZ,Commercial Managers,-,Commercial Managers -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-31T14:58:23.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002M8HPXAA3,Comms,-,Comms -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-05-31T14:05:15.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w4rCMQAY,Connections / Welcome Stages,-,Connections / Welcome Stages -,,Needs Assignment,Other,,,,BT - Consumer,,Grant McNulty,2018-03-26T13:39:08.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZGu8QAG,Corporate,-,Corporate -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:46:14.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCohQAG,Countries,-,Countries -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:17:27.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M8mIzAAJ,DirectAxis,-,DirectAxis -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-06-04T07:09:03.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZHAZQA4,DirectAxis Personal Loans,-,DirectAxis Personal Loans -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:50:16.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001s4QdyQAE,Egypt & Near East Libya,-,Egypt & Near East Libya -,,Needs Assignment,Other,,,,Mundipharma International Limited,,Axonify,2017-09-05T18:19:21.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZHB3QAO,Eldermore,-,Eldermore -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:50:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w0Ju2QAE,FCC,-,FCC -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-09T15:41:04.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001uzJpWQAU,First Rand Group,-,First Rand Group -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-01-17T16:24:01.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jAQAQ,FNB,-,FNB -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T07:59:42.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSrQAO,FNB Business (Enterprise),-,FNB Business (Enterprise) -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:24:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOTGQA4,FNB Center of Excellence,-,FNB Center of Excellence -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:25:10.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSIQA4,FNB Consumer,-,FNB Consumer -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:23:30.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOY8QAO,FNB Int'l,-,FNB Int'l -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:35:34.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSSQA4,FNB Premium (High Net Worth & SME),-,FNB Premium (High Net Worth & SME) -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:23:59.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOSwQAO,FNB Support,-,FNB Support -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:24:45.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M9zwjAAB,France,-,France -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-06-20T17:29:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87DkAAJ,Francis,-,Francis -,Buyer,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:10:07.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DyAAAV,Funeral Insurance,-,Funeral Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:49:27.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCowQAG,Germany,-,Germany -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:17:58.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCrIQAW,Global Center of Excellence (Skills),-,Global Center of Excellence (Skills) -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:20:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmbQAG,Global Medical Affairs (Disease State),-,Global Medical Affairs (Disease State) -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:13:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001n0e3wQAA,"Governance, Risk & Compliance",-,"Governance, Risk & Compliance -",,Needs Assignment,Other,,,,Wolters Kluwer Financial Services Solutions - Sales,,Adam George,2017-03-15T14:39:59.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vZTJwQAO,Group Treasury,-,Group Treasury -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:21:04.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vxvjlQAA,Grover,-,Grover -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-02-21T15:48:11.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwNqAAJ,Gulf,-,Gulf -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:12:41.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vaKoeQAE,Health Insurance,-,Health Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-03-21T07:42:40.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DxWAAV,Health Insurance,-,Health Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:48:05.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DwOAAV,HR Advisors,-,HR Advisors -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:44:11.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vyA6zQAE,Human Capital Systems,-,Human Capital Systems -,,Needs Assignment,Other,,,,Standard Bank Offshore Group Ltd,,Axonify,2018-02-22T21:11:44.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001n0wmpQAA,Icahn Group,-,Icahn Group -,,Needs Assignment,Other,,,,The Pep Boys,,Adam George,2017-03-17T13:50:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vyvchQAA,Illyanna,-,Illyanna -,EMEA - Education Lead,Manager/Team Lead,Other,,,,Bobbi Brown Cosmetics - Retail,,Axonify,2018-02-28T21:24:33.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vZTIyQAO,Internal Audit,-,Internal Audit -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:20:17.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vZOTfQAO,IT,-,IT -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:26:49.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vzpvAQAQ,Jamie,-,Jamie -,Finance Guy (need his approval),Needs Assignment,Finance,,,,BT - Consumer,,Grant McNulty,2018-03-06T21:56:07.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCpLQAW,Japan,-,Japan -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:18:16.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOv2QAG,JD Group,-,JD Group -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-03-14T10:39:39.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87E4AAJ,JD Group Execs,-,JD Group Execs -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:14:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001s3vbLQAQ,Korea,-,Korea -,,Needs Assignment,Other,,,,Mundipharma International Limited,,Axonify,2017-08-31T19:43:29.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001n0e3hQAA,Legal & Regulatory,-,Legal & Regulatory -,,Needs Assignment,Other,,,,Wolters Kluwer Financial Services Solutions - Sales,,Adam George,2017-03-15T14:39:22.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7Dy0AAF,Life Insurance,-,Life Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:49:05.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w4rDoQAI,Loyalty,-,Loyalty -,,Needs Assignment,Other,,,,BT - Consumer,,Grant McNulty,2018-03-26T13:40:30.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwNIAAZ,Malaysia,-,Malaysia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:08:36.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmvQAG,Manufacturing,-,Manufacturing -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:13:52.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002QXVHCAA5,Manulife Canada,-,Manulife Canada -,,Needs Assignment,Other,,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2019-01-14T19:17:54.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030L00001vyvTKQAY,Marta,-,Marta -,GM - EMEA,Needs Assignment,Other,,,,Bobbi Brown Cosmetics - Retail,,Axonify,2018-02-28T21:12:35.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002OWf9wAAD,Martinique,-,Martinique -,FNB Skills Dev't,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-10-09T15:02:58.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPD8MQAW,Middle East,-,Middle East -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:45:40.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZGszQAG,Motor Division,-,Motor Division -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-13T17:45:23.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCxXQAW,Oncology,-,Oncology -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:30:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCsSQAW,Oncology (Cancer),-,Oncology (Cancer) -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:22:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0xbQAA,Other,-,Other -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T09:39:27.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002QXVIPAA5,Other Exec Team Members,-,Other Exec Team Members -,,Needs Assignment,Other,,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2019-01-14T19:23:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87D1AAJ,Pepcor,-,Pepcor -,Parent Company,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:00:54.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002XH7xHAAT,Placeholder,-,Placeholder -,,Needs Assignment,Other,,,,Mexico Ministry of Education,,Axonify,2019-09-11T18:26:26.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002XI5UHAA1,Placeholder,-,Placeholder -,,Needs Assignment,Other,,,,Maximus Gulf - Saudi Arabia,,Jen Tolbert,2019-09-25T19:01:05.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002NncWPAAZ,Poland,-,Poland -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-10T20:49:40.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZOYcQAO,PoP (Branches),-,PoP (Branches) -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T09:38:24.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002KkhiFAAR,PoP Regional Heads,-,PoP Regional Heads -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-04-08T21:27:55.000+0000,,JUNK_KEYWORD | SHORT_NAME | UNCONTACTABLE
+0030h00002M9zudAAB,Procurement,-,Procurement -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-06-20T17:20:16.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DyKAAV,Real Estate,-,Real Estate -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:49:37.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCryQAG,Respiratory,-,Respiratory -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:22:05.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DzIAAV,Rest of ASR,-,Rest of ASR -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:51:35.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZTJmQAO,Risk,-,Risk -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:20:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jyQAA,RMB,-,RMB -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:03:56.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87ETAAZ,Rochester (Furniture),-,Rochester (Furniture) -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:17:01.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NncVHAAZ,Romania,-,Romania -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-10T20:46:52.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87EEAAZ,Russells (Furniture),-,Russells (Furniture) -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:15:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCp6QAG,Russia,-,Russia -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:18:07.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NncV2AAJ,Russia,-,Russia -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-07-10T20:46:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCmgQAG,Sales,-,Sales -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:13:32.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7Dz3AAF,Services,-,Services -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:51:19.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87EYAAZ,Sleepmasters,-,Sleepmasters -,,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:17:28.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwN7AAJ,SSA,-,SSA -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:06:23.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002NnwMxAAJ,SSA,-,SSA -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:04:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vZTIPQA4,Tax,-,Tax -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-14T18:19:52.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vxvkKQAQ,Terry,-,Terry -,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-02-21T15:49:17.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001wdpiwQAA,The Coca-Cola Company,-,The Coca-Cola Company -,,Needs Assignment,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-04-05T13:12:11.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M7DxqAAF,Transport / Freight Insurance,-,Transport / Freight Insurance -,,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-05-08T14:48:31.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPCorQAG,UK,-,UK -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-13T18:17:47.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001vPZsCQAW,USA,-,USA -,,Needs Assignment,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-02-15T14:27:32.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001w4rDeQAI,Value,-,Value -,,Needs Assignment,Other,,,,BT - Consumer,,Grant McNulty,2018-03-26T13:40:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030h00002M87DaAAJ,Wayne,-,Wayne -,Buyer,Needs Assignment,Other,,,,Incredible Connection,,Grant McNulty,2018-05-30T09:08:42.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001va0jPQAQ,Wesbank,-,Wesbank -,,,Other,,,,FirstRand - Holding Account,,Axonify,2018-03-19T08:01:20.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001tcrufQAA,Fabio,Abate,Fabio Abate,Software Development Manager,Manager/Team Lead,Other,,,,Bell Canada (Retail),IT and Work Force Management,Liz Davis,2017-12-04T16:32:09.000+0000,,UNCONTACTABLE
+003E000000j8VZgIAM,David,Arena,David Arena,Regional Loss Prevention Mgr,Needs Assignment,Other,,,,The Jones Group,,Axonify,2013-08-26T18:09:24.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M7c4vAAB,Jenna,Arnet,Jenna Arnet,(Oversees all call centers),Needs Assignment,Customer Service,,,,"CARDINAL HEALTH, INC.",,Ryan Flaherty,2018-05-18T19:29:16.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003E000000PdJk5IAF,Gary,Atkins,Gary Atkins,LPDM,Needs Assignment,Other,,,,Kmart Corporation,,Adam George,2012-10-17T19:28:46.000+0000,2014-01-29,UNCONTACTABLE
+0030L00001vNWioQAG,Karin,Bergstein,Karin Bergstein,Member of the Executive Board,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-02-01T14:25:33.000+0000,,UNCONTACTABLE
+0030L00001otbKgQAI,Jacqueline,Bernstein,Jacqueline Bernstein,"Curriculum Developer, Store Education",Specialist,Other,,,,"Bloomingdale's, Inc.",,Brian Smith,2017-04-21T18:38:05.000+0000,,UNCONTACTABLE
+0030L00001osQItQAM,Sara,Berry,Sara Berry,NO LONGER WORKS HERE,Needs Assignment,Other,,,,ComCast,,Adam George,2017-04-06T14:31:58.000+0000,2018-03-21,UNCONTACTABLE
+003E000000EX2TmIAL,Christopher,Boggs,Christopher Boggs,Loss Prevention Manager,Manager/Team Lead,Other,,,,Sears Holding Corporation,,Adam George,2012-06-04T18:35:03.000+0000,,UNCONTACTABLE
+003E000000FPILlIAP,David,Branum,David Branum,Regional Loss Prevention Manager,Manager/Team Lead,Other,,,,"Dots, LLC",,Adam George,2012-06-25T18:27:42.000+0000,,UNCONTACTABLE
+003E000000EXYYEIA5,Vince,Briguglio,Vince Briguglio,Loss Prevention,Needs Assignment,Other,,,,"J. Crew Group, Inc.",,Jen Tolbert,2012-06-07T04:09:47.000+0000,,UNCONTACTABLE
+003E000000FPICmIAP,Josh,Brookes,Josh Brookes,Sr. Regional LP Mgr,Needs Assignment,Other,,,,"Chico's FAS, Inc.",,Jen Tolbert,2012-06-25T18:10:40.000+0000,,UNCONTACTABLE
+003Mm00000X740hIAB,Sepideh,Burkett,Sepideh Burkett,,Needs Assignment,Other,,,,The Giant Company,,Adam George,2026-01-05T23:41:48.000+0000,,UNCONTACTABLE
+003E000000FPIBfIAP,Kevin,Byrne,Kevin Byrne,Regional Loss Prevention Mngr,Needs Assignment,Other,,,,"Chico's FAS, Inc.",,Jen Tolbert,2012-06-25T18:11:01.000+0000,,UNCONTACTABLE
+0030L00001uamfNQAQ,Cindy,Castellanos,Cindy Castellanos,"Manager, Campus Relations",Manager/Team Lead,Other,,,,Aramark Corporation,,Adam George,2018-01-02T20:41:53.000+0000,,UNCONTACTABLE
+0030h00002T9kKWAAZ,Placeholder,CBD,Placeholder CBD,,Needs Assignment,Other,,,,Commercial Bank of Dubai,,Axonify,2019-05-01T14:30:14.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003E000000iDsFNIA0,Staci,Cenis,Staci Cenis,Manager,Manager/Team Lead,Other,,,,"ACS Asset Management Group, Inc.",,Kelly Wasden,2013-08-02T18:42:40.000+0000,,UNCONTACTABLE
+003E000000FPINKIA5,Keith,Chandler,Keith Chandler,"Senior Auditor, LP - LIDS",Needs Assignment,Other,,,,Genesco Inc.,,Jen Tolbert,2012-06-25T18:50:33.000+0000,,UNCONTACTABLE
+0030h00002M8GnXAAV,Shivani,Chetty,Shivani Chetty,Credit Analyst,Analyst,Technical,,,,FirstRand - Holding Account,,Axonify,2018-05-31T12:57:50.000+0000,,UNCONTACTABLE
+003E000000FPHKEIA5,William,Childs,William Childs,Regional Loss Prevention Manag,Needs Assignment,Other,,,,"BCBG Max Azria Group, Inc.",,Kelly Wasden,2012-06-25T17:33:04.000+0000,,UNCONTACTABLE
+003E000000FPDcfIAH,Jason,Cody,Jason Cody,NO LONGER WORKS HERE,Needs Assignment,Other,,,,"Aeropostale, Inc.",,Jen Tolbert,2012-06-25T17:26:30.000+0000,,UNCONTACTABLE
+0030L00001s56K3QAI,Kerri,Comstock,Kerri Comstock,Advanced Sterilization Products,Needs Assignment,Other,,,,J&J - Ethicon US,,Ryan Flaherty,2017-09-11T12:28:41.000+0000,,UNCONTACTABLE
+0030h00002NnkvVAAR,Manulife,Consumer Markets,Manulife Consumer Markets,,Needs Assignment,Other,,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2018-07-12T18:23:47.000+0000,,UNCONTACTABLE
+0030h00002RUNXnAAP,Placeholder,Contact,Placeholder Contact,,Needs Assignment,Other,,,,Emirates Leisure Retail,,Douglas Leonard,2019-03-18T14:20:56.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030L00001vMI2dQAG,Christophe,Corvaisier,Christophe Corvaisier,,Needs Assignment,Other,,,,Bell Canada (Retail),Residential Services,Liz Davis,2018-01-24T22:09:36.000+0000,,UNCONTACTABLE
+0030h00002M7o4AAAR,Heather,Cressman,Heather Cressman,"Manager, Retail Education and Communication at Home Hardware Stores Limited",Manager/Team Lead,Other,,,,Home Hardware Store Limited,Dealer Support,Emily Smith,2018-05-23T16:45:56.000+0000,,UNCONTACTABLE
+003Mm00000WTWCIIA5,Katherine,D,Katherine D,,Needs Assignment,Other,,,,"Fabletics, Llc",,Kelly Wasden,2025-12-17T19:39:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+003E000000FPIbjIAH,Jon,Dalton,Jon Dalton,Regional Loss Prevention Manag,Needs Assignment,Other,,,,"Helzberg's Diamond Shops, Inc.",,Adam George,2012-06-25T19:11:04.000+0000,,UNCONTACTABLE
+003Mm00000TdbWrIAJ,Daryle Fletcher,Daryle Fletcher,Daryle Fletcher Daryle Fletcher,,Needs Assignment,Other,,,,"Axonify, Inc.",,Matthew Horsman,2025-10-15T20:47:06.000+0000,,UNCONTACTABLE
+0030L00001osLk4QAE,Quita,Davis,Quita Davis,GM - UK,Manager/Team Lead,Other,,,,Bobbi Brown Cosmetics - Retail,,Axonify,2017-04-05T18:32:51.000+0000,,UNCONTACTABLE
+003E000000FPI4sIAH,Kerry,Decker,Kerry Decker,Regional Loss Prevention Manager,Manager/Team Lead,Other,,,,Burlington Stores,,Adam George,2012-06-25T17:47:50.000+0000,,UNCONTACTABLE
+003Mm00000X73PaIAJ,Isabelle,Desrosiers,Isabelle Desrosiers,,Needs Assignment,Other,,,,Gestion Le Groupe Aldo Inc,,Axonify,2026-01-05T23:41:38.000+0000,,UNCONTACTABLE
+0030h00002M9uU9AAJ,Fernando,Diaz,Fernando Diaz,"Principle Lead, Value Stream Flow",Manager/Team Lead,Other,,,,Adient,,Adam George,2018-06-19T14:45:12.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002Kkhi5AAB,Vanessa,Dones-Smythe,Vanessa Dones-Smythe,PoP Staff Engagement,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-04-08T21:26:28.000+0000,,UNCONTACTABLE
+003Mm00000WTWCKIA5,Shamsher,Dullet,Shamsher Dullet,,Needs Assignment,Other,,,,Lululemon Athletica inc.,,Aman Lokhandwala,2025-12-17T19:39:43.000+0000,,UNCONTACTABLE
+0030L00001uYFulQAG,Samantha,Ellis,Samantha Ellis,"Manager, Payroll Tax & Accounting",Manager/Team Lead,Finance,,,,Brunswick Corporation,,Adam George,2017-12-19T14:09:53.000+0000,,UNCONTACTABLE
+003E000000FPIAqIAP,Tom,Ellis,Tom Ellis,Regional LP Manager,Manager/Team Lead,Other,,,,"Carter's, Inc.",,Jen Tolbert,2012-06-25T18:04:20.000+0000,,UNCONTACTABLE
+0030h00002T9hplAAB,Place,Emirates Steel Holder,Place Emirates Steel Holder,,Needs Assignment,Other,,,,Emirates Steel,,Axonify,2019-04-30T18:10:34.000+0000,,UNCONTACTABLE
+003E000000FPICIIA5,Denamarie,Ercolani,Denamarie Ercolani,LP Communications Specialist,Specialist,Other,,,,Charming Shoppes,,Adam George,2012-06-25T18:09:38.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003Mm00000SivPeIAJ,George,Essex,George Essex,,Needs Assignment,Other,,,,"Earthgrains Bakery Group, Inc.",,Adam George,2025-09-22T16:16:35.000+0000,,UNCONTACTABLE
+0030L00001vOgCbQAK,Jilly,Ethridge,Jilly Ethridge,LoB Leader - Customer Service,Manager/Team Lead,Other,,,,BT - Consumer,,Grant McNulty,2018-02-09T18:55:17.000+0000,,UNCONTACTABLE
+0030h00002VbYUKAA3,"P,",Eu,"P, Eu",Exec V,Needs Assignment,Other,,,,AstraZeneca - CVRM (formerly CVMD),,Grant McNulty,2019-07-31T19:00:45.000+0000,,SHORT_NAME | UNCONTACTABLE
+0030L00001t7xd0QAA,Mabel,Farwell,Mabel Farwell,Procurement Specialist,Specialist,Other,,,,RBC,Procurement,Ryan Flaherty,2017-10-30T00:16:40.000+0000,,UNCONTACTABLE
+0030L00001vyvYjQAI,Eduardo,Ferreira,Eduardo Ferreira,EMEA- Education Lead,Manager/Team Lead,Other,,,,Bobbi Brown Cosmetics - Retail,,Axonify,2018-02-28T21:20:03.000+0000,,UNCONTACTABLE
+0030L00001ptz8EQAQ,Nick,Fifield,Nick Fifield,"Sales Training Manager, Australia & New Zealand",Manager/Team Lead,Sales,,,,J&J - Johnson & Johnson (Hierarchy Parent for MSA),,Ryan Flaherty,2017-05-23T18:28:51.000+0000,,UNCONTACTABLE
+003E000000FPJGKIA5,Mark,Fisher,Mark Fisher,Loss Prevention Manager,Manager/Team Lead,Other,,,,Laura Canada,,Axonify,2012-06-25T19:25:53.000+0000,,UNCONTACTABLE
+003Mm00000Tb5cnIAB,Daryle,Fletcher,Daryle Fletcher,,Needs Assignment,Other,,,,"Axonify, Inc.",,Matthew Horsman,2025-10-15T12:52:22.000+0000,,UNCONTACTABLE
+0030h00002VbyB8AAJ,Burnt,Flosback?,Burnt Flosback?,,Needs Assignment,Other,,,,Vodafone Group PLC,,Grant McNulty,2019-08-07T09:46:43.000+0000,,UNCONTACTABLE
+003Mm00000XIFlhIAH,Rob,Frieman,Rob Frieman,,Needs Assignment,Other,,,,"URBN EU (Urban Outfitters, Anthropologie Group, Free People & Nuuly)",,Jonathan Markle,2026-01-09T19:16:05.000+0000,,UNCONTACTABLE
+0030h00002Nnkw4AAB,Manulife,GB Team,Manulife GB Team,,Needs Assignment,Other,,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2018-07-12T18:27:57.000+0000,,UNCONTACTABLE
+003E000000FPIPdIAP,John,Goldyn,John Goldyn,NO LONGER WORKS HERE,Needs Assignment,Other,,,,"Family Dollar Stores, Inc.",,Jen Tolbert,2012-06-25T18:43:51.000+0000,,UNCONTACTABLE
+003E000000FPICXIA5,Jacqueline,Gonzalez,Jacqueline Gonzalez,Sr. LP Analyst,Analyst,Other,,,,Charming Shoppes,,Adam George,2012-06-25T18:10:17.000+0000,,UNCONTACTABLE
+0030L00001s5yVOQAY,Placeholder,Grace Hotels,Placeholder Grace Hotels,,Needs Assignment,Other,,,,Grace Hotels,,Axonify,2017-09-16T17:03:38.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003E000000PGn7EIAT,Monique,Gravel,Monique Gravel,Mgr - Corp admin & LP,Administrator,Other,,,,Reitmans,,Axonify,2012-10-15T10:45:11.000+0000,,UNCONTACTABLE
+0030h00002TChK7AAL,Xieting,Gu,Xieting Gu,,Needs Assignment,Other,,,,J&J - Ethicon China,,Ryan Flaherty,2019-04-10T17:56:36.000+0000,,SHORT_NAME | UNCONTACTABLE
+003Mm00000WTWCLIA5,Randy,Harmon,Randy Harmon,,Needs Assignment,Other,,,,Grocery Outlet,,Kelly Wasden,2025-12-17T19:39:43.000+0000,,UNCONTACTABLE
+003E000000FPHvZIAX,Katie,Harper,Katie Harper,Regional Loss Prevention Manager,Manager/Team Lead,Other,,,,Burlington Stores,,Adam George,2012-06-25T17:47:28.000+0000,,UNCONTACTABLE
+003E000000FPI5CIAX,Larry,Hartman,Larry Hartman,Regional Loss Prevention Manager,Manager/Team Lead,Other,,,,Burlington Stores,,Adam George,2012-06-25T17:48:31.000+0000,,UNCONTACTABLE
+0030L00001lw0CVQAY,Nina,Hernández,Nina Hernández,"Sales Effectiveness & Development Manager, EMEA",Manager/Team Lead,Sales,,,,J&J - Vision Care,,Ryan Flaherty,2017-01-30T03:19:46.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030L00001oqkFOQAY,Terrill,Hiel,Terrill Hiel,"Sr. Manager, Customer Service Solutions",Manager/Team Lead,Other,,,,Barnes & Noble,,Axonify,2017-03-23T19:28:54.000+0000,,UNCONTACTABLE
+0030L00001luKRwQAM,Mauricio,Higgs,Mauricio Higgs,Manufacturing Manager,Manager/Team Lead,Other,,,,J&J - Ethicon US,,Ryan Flaherty,2017-01-06T16:42:33.000+0000,,UNCONTACTABLE
+0030h00002QYm2LAAT,Place,Holder,Place Holder,,Needs Assignment,Other,,,,Emirates Global Aluminum,,Axonify,2019-02-07T20:17:28.000+0000,,UNCONTACTABLE
+0030L00001vN3mqQAC,David,Hovey,David Hovey,Senior Compensation Analyst,Analyst,Other,,,,Webster National Bank,,Axonify,2018-01-29T19:42:54.000+0000,,UNCONTACTABLE
+003Mm00000YEgTeIAL,Alica,Ilund,Alica Ilund,Front End Systems Supervisor,Manager/Team Lead,Other,,,,Shoprite,,Brian Smith,2026-01-30T18:32:28.000+0000,,UNCONTACTABLE
+0030L00001n00miQAA,Tanya,Ingram-Irwin,Tanya Ingram-Irwin,,Needs Assignment,Other,,,,Ceridian - Rev Org,,Adam George,2017-03-07T15:41:07.000+0000,,UNCONTACTABLE
+003E000000FPIbPIAX,Ted,Jagielski,Ted Jagielski,Regional Loss Prevention Mgr.,Needs Assignment,Other,,,,"Hallmark Cards, Inc.",,Adam George,2012-06-25T19:09:18.000+0000,,UNCONTACTABLE
+0030L00001kqBAJQA2,Jean-Yves,Jault,Jean-Yves Jault,"General Manager, Corporate Communication",Manager/Team Lead,Other,,,,Toyota Motor Europe (TME),,Grant McNulty,2016-11-24T16:33:20.000+0000,,UNCONTACTABLE
+003Mm00000WPhJGIA1,Jason,Johnson,Jason Johnson,,Needs Assignment,Other,,,,Sweetwater Sound Inc,,Jonathan Markle,2025-12-16T15:12:39.000+0000,,UNCONTACTABLE
+003E000000FPDcSIAX,Sean,Johnson,Sean Johnson,Regional Loss Prevention Mng,Needs Assignment,Other,,,,"Anna's Linens, Inc.",,Kelly Wasden,2012-06-25T17:15:51.000+0000,,UNCONTACTABLE
+003Mm00000Utbs7IAB,Marta,Kapica,Marta Kapica,,Needs Assignment,Other,,,,"Axonify, Inc.",,Matthew Horsman,2025-11-12T21:00:49.000+0000,,UNCONTACTABLE
+0030h00002T9heUAAR,Cherian,Kariyadil,Cherian Kariyadil,Sales Learning Manager,Manager/Team Lead,Sales,,,,J&J - Ethicon India,,Ryan Flaherty,2019-04-30T17:17:03.000+0000,,UNCONTACTABLE
+003Mm00000Sj0LzIAJ,Hazel,Kelley,Hazel Kelley,,Needs Assignment,Other,,,,Nestle,,Grant McNulty,2025-09-22T17:07:01.000+0000,,UNCONTACTABLE
+003E000000iDsE3IAK,Brian,Koch,Brian Koch,IT Manager,Manager/Team Lead,Technical,,,,"Calbakthree Rivers Holdings, Inc",,Ryan Flaherty,2013-08-02T18:42:40.000+0000,,UNCONTACTABLE
+0030h00002NnwNbAAJ,Pranisa,Kulmadarat,Pranisa Kulmadarat,Thailand lead,Manager/Team Lead,Other,,,,AstraZeneca UK - Global Medical Affairs,,Grant McNulty,2018-07-15T12:10:54.000+0000,,UNCONTACTABLE
+0030L00001qee1dQAA,Real Estate Group,Lead TBD,Real Estate Group Lead TBD,,Needs Assignment,Other,,,,Al Tayer Group - Retail,Real Estate,Axonify,2017-07-12T19:34:02.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002VbtMqAAJ,Colin,Lees,Colin Lees,CT&IO,Needs Assignment,Other,,,,BT - Openreach,,Grant McNulty,2019-08-06T09:18:35.000+0000,,UNCONTACTABLE
+0030L00001uzPwbQAE,Gordon,Little,Gordon Little,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-01-17T17:59:58.000+0000,,UNCONTACTABLE
+0030h00002RVTVMAA5,Placeholder,Liwa,Placeholder Liwa,,Needs Assignment,Other,,,,Liwa Stores,,Axonify,2019-04-04T15:05:33.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003E000000PGnU5IAL,Vanessa,Llama,Vanessa Llama,LP Financial Analyst,Analyst,Other,,,,"Navarro Discount Pharmacies, Inc.",,Joe McCulla,2012-10-15T11:00:25.000+0000,,UNCONTACTABLE
+0030L00001n00nqQAA,Sue,Lundberg,Sue Lundberg,Services Effectiveness Product Manager,Manager/Team Lead,Other,,,,Ceridian - Rev Org,,Adam George,2017-03-07T15:44:02.000+0000,,UNCONTACTABLE
+0030h00002Novi7AAB,Antonio,Luxottica placeholder,Antonio Luxottica placeholder,,Needs Assignment,Other,,,,Luxottica Australia,,Axonify,2018-08-01T19:49:04.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003Mm00000WTWCJIA5,Jennifer,M,Jennifer M,Technical Specialist,Specialist,Other,,,,Apple Inc.,,Aman Lokhandwala,2025-12-17T19:39:43.000+0000,,SHORT_NAME | UNCONTACTABLE
+003E000000FPHCYIA5,Naomi,Maharaj,Naomi Maharaj,National Loss Prevention Mgr.,Needs Assignment,Other,,,,Bell Canada (Retail),,Liz Davis,2012-06-25T18:13:38.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030L00001uan5OQAQ,Katie,Maikowski,Katie Maikowski,Staffing Management Planner,Needs Assignment,Other,,,,Bon-Ton Stores,,Adam George,2018-01-02T20:47:07.000+0000,,UNCONTACTABLE
+003Mm00000VvhSzIAJ,Darin,Manigault,Darin Manigault,,Needs Assignment,Other,,,,"Belk, Inc.",,Jen Tolbert,2025-12-04T18:03:37.000+0000,,UNCONTACTABLE
+0030L00001rEizpQAC,Ryan,Mariano,Ryan Mariano,Lexus Master Certified Technology Specialist,Specialist,Technical,,,,Lexus USA,,Jen Tolbert,2017-07-26T16:47:21.000+0000,,UNCONTACTABLE
+003Mm00000WTNewIAH,Matthew,Marolf,Matthew Marolf,,Needs Assignment,Other,,,,Lululemon Athletica inc.,,Aman Lokhandwala,2025-12-17T19:39:38.000+0000,,UNCONTACTABLE
+003Mm00000SivPdIAJ,Margaret,Max Shu Teasdale,Margaret Max Shu Teasdale,,Needs Assignment,Other,,,,CommerceNext,,Axonify,2025-09-22T16:16:35.000+0000,,UNCONTACTABLE
+003Mm00000SivPbIAJ,Margaret,Max Shu Teasdale,Margaret Max Shu Teasdale,,Needs Assignment,Other,,,,CommerceNext,,Axonify,2025-09-22T16:16:35.000+0000,,UNCONTACTABLE
+003Mm00000Sj2pUIAR,Ravi,Mazin,Ravi Mazin,Digital Marketing Strategist,Needs Assignment,Marketing,,,,Wonderful Pistachios & Almonds Llc,,Kelly Wasden,2025-09-22T17:17:42.000+0000,,UNCONTACTABLE
+0030h00002T9zTeAAJ,Chris,McKee Test Contact,Chris McKee Test Contact,,Needs Assignment,Other,,,,Test Account - MA,,Axonify,2019-05-06T17:20:39.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002TBMPTAA5,Stephan,Meunch,Stephan Meunch,,Needs Assignment,Other,,,,Deutsche Post DHL Group,,Axonify,2019-05-30T11:26:46.000+0000,,UNCONTACTABLE
+0030h00002M7LaIAAV,Mike,Miller,Mike Miller,GM,Needs Assignment,Other,,,,FedEx Express,Business Tranformation,Jen Tolbert,2018-05-11T16:02:03.000+0000,,UNCONTACTABLE
+003E000000FPHCwIAP,Michael,Mills,Michael Mills,Regional Loss Prevention Mng,Needs Assignment,Other,,,,"Anna's Linens, Inc.",,Kelly Wasden,2012-06-25T17:18:03.000+0000,,UNCONTACTABLE
+003E000000j8VhAIAU,Dane,Mindell,Dane Mindell,Corp. Loss Prevention Manager,Manager/Team Lead,Other,,,,"PetSmart, Inc.",,Kelly Wasden,2013-08-26T18:08:32.000+0000,,UNCONTACTABLE
+003Mm00000WPYfJIAX,Lilly,Minkove,Lilly Minkove,,Needs Assignment,Other,,,,Vera Bradley Retail Stores LLC,,Adam George,2025-12-16T15:12:35.000+0000,,UNCONTACTABLE
+0030L00001vz5LCQAY,Roya,Mohammadi,Roya Mohammadi,Branch Sales Manager,Manager/Team Lead,Sales,,,,Bankers Life,,Adam George,2018-03-01T16:53:07.000+0000,2018-02-27,UNCONTACTABLE
+003E000000FPIQwIAP,Falisha,Mohammed,Falisha Mohammed,"Senior Auditor, LP - LIDS",Needs Assignment,Other,,,,Genesco Inc.,,Jen Tolbert,2012-06-25T18:50:14.000+0000,,UNCONTACTABLE
+003E000000esqdAIAQ,Dawn,Mopkins,Dawn Mopkins,Occupational  Health Nurse,Needs Assignment,Other,,,,Shell Oil US,,Jen Tolbert,2013-05-17T15:38:05.000+0000,,UNCONTACTABLE
+003E000000FPIZxIAP,Matt,Morgan,Matt Morgan,Regional LP Investigator,Needs Assignment,Other,,,,"Goodwill Industries of Southeastern Wisconsin, Inc.",,Adam George,2012-06-25T19:02:48.000+0000,,UNCONTACTABLE
+0030h00002KkhiAAAR,Kabelo,Motlhala,Kabelo Motlhala,Staffing Solutions and Customer Engagement,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-04-08T21:27:38.000+0000,,UNCONTACTABLE
+003Mm00000Siu9qIAB,Andrew,Nelson,Andrew Nelson,,Needs Assignment,Other,,,,Supermarket Perimeter,,Jen Tolbert,2025-09-22T17:12:43.000+0000,,UNCONTACTABLE
+0030L00001ry4DRQAY,,Noor bank Opp Contact,Noor bank Opp Contact,,Needs Assignment,Other,,,,Noor Bank,,Axonify,2017-08-24T15:02:39.000+0000,,UNCONTACTABLE
+003E000000FPHEEIA5,Lauren,Onque,Lauren Onque,NO LONGER WORKS HERE,Needs Assignment,Other,,,,"Aeropostale, Inc.",,Jen Tolbert,2012-06-25T17:24:28.000+0000,,UNCONTACTABLE
+0030L00001uzJlSQAU,Kierra,Pace,Kierra Pace,"Supervisor, Sales Talent Management",Manager/Team Lead,Sales,,,,UPS,,Jen Tolbert,2018-01-17T16:18:57.000+0000,,UNCONTACTABLE
+0030L00001tdVNRQA2,British American Tabacco,Partner,British American Tabacco Partner,,Needs Assignment,Other,,,,British American Tobacco South Africa,,Grant McNulty,2017-12-08T15:46:49.000+0000,,UNCONTACTABLE
+0030L00001tdUrCQAU,Galderma,Partner,Galderma Partner,,Needs Assignment,Other,,,,Galderma,,Grant McNulty,2017-12-08T14:58:30.000+0000,,UNCONTACTABLE
+0030L00001tdUwOQAU,Mashreq Bank,Partner,Mashreq Bank Partner,,Needs Assignment,Other,,,,Mashreq Bank,,Axonify,2017-12-08T15:06:26.000+0000,,UNCONTACTABLE
+003Mm00000TzI9CIAV,Christopher,Pereira,Christopher Pereira,,Needs Assignment,Other,,,,"Travelers Insurance Group Holdings, Inc.",,Axonify,2025-10-23T20:32:46.000+0000,,UNCONTACTABLE
+0030L00001vPHi3QAG,Jim,Petersen,Jim Petersen,District Advisor,Needs Assignment,Other,,,,First Command Financial Services,,Jen Tolbert,2018-02-13T21:23:58.000+0000,2018-04-18,UNCONTACTABLE
+003E000000FPJFwIAP,Vincent,Petitclerc,Vincent Petitclerc,Loss Prevention Manager,Manager/Team Lead,Other,,,,Laura Canada,,Axonify,2012-06-25T19:24:45.000+0000,,UNCONTACTABLE
+0030L00001uzJyCQAU,Roslynn,Pieters,Roslynn Pieters,LMS Admin & Axonify Super Admin (for all of First Rand),Administrator,Other,,,,FirstRand - Holding Account,,Axonify,2018-01-17T16:37:11.000+0000,,UNCONTACTABLE
+0030L00001n00oeQAA,Jill,Pietrzak,Jill Pietrzak,,Needs Assignment,Other,,,,Ceridian - Rev Org,,Adam George,2017-03-07T15:46:32.000+0000,,UNCONTACTABLE
+0030L00001vLlvmQAC,Cedesko,Place Holder,Cedesko Place Holder,,Needs Assignment,Other,,,,Cedesko,,Axonify,2018-01-22T22:19:56.000+0000,,UNCONTACTABLE
+0030L00001vLyRRQA0,FESA,Place Holder,FESA Place Holder,,Needs Assignment,Other,,,,Fármacos Especializados (FESA),,Axonify,2018-01-23T16:09:30.000+0000,,UNCONTACTABLE
+0030L00001uxGf4QAE,Grab,Place Holder,Grab Place Holder,,Needs Assignment,Other,,,,Grab Regional,,Axonify,2018-01-08T22:01:54.000+0000,,UNCONTACTABLE
+0030L00001va7JRQAY,Transpower,Place Holder,Transpower Place Holder,,Needs Assignment,Other,,,,Transpower New Zealand LTD.,,Axonify,2018-03-19T21:53:00.000+0000,,UNCONTACTABLE
+0030L00001va7MaQAI,Vector,Place Holder,Vector Place Holder,,Needs Assignment,Other,,,,Vector Ltd.,,Axonify,2018-03-19T22:00:07.000+0000,,UNCONTACTABLE
+0030h00002T9hqFAAR,2nd,Placeholder,2nd Placeholder,,Needs Assignment,Other,,,,Emirates Steel,,Axonify,2019-04-30T18:12:30.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M8MbxAAF,BDO,Placeholder,BDO Placeholder,,Needs Assignment,Other,,,,BDO UK,,Grant McNulty,2018-05-31T19:23:44.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002QYkvsAAD,Commercial,Placeholder,Commercial Placeholder,,Needs Assignment,Other,,,,Northpower Commercial,,Axonify,2019-02-07T15:22:01.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002Novl6AAB,Global Blue,Placeholder,Global Blue Placeholder,,Needs Assignment,Other,,,,Global Blue Group Asia,,Grant McNulty,2018-08-01T20:03:49.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030L00001wdK7qQAE,Jumeirah,Placeholder,Jumeirah Placeholder,,Needs Assignment,Other,,,,Jumeirah,,Axonify,2018-04-02T17:34:49.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M8qoPAAR,Mediclinic,Placeholder,Mediclinic Placeholder,,Needs Assignment,Other,,,,Mediclinic,,Axonify,2018-06-05T18:59:14.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M6x55AAB,Merck Japan,Placeholder,Merck Japan Placeholder,,Needs Assignment,Other,,,,Merck/MSD - Global Human Health (GHH) - Japan Sales,,Liz Davis,2018-04-26T20:47:06.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002TBOMMAA5,NZ Police,Placeholder,NZ Police Placeholder,,Needs Assignment,Other,,,,Royal New Zealand Police College,,Axonify,2019-05-30T17:08:56.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M7YoqAAF,Porsche,Placeholder,Porsche Placeholder,,Needs Assignment,Other,,,,Porsche Middle East,,Douglas Leonard,2018-05-17T19:24:52.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M6uxkAAB,Prudential Singapore,Placeholder,Prudential Singapore Placeholder,,Needs Assignment,Other,,,,Prudential Life Assurance UK,,Brian Smith,2018-04-25T21:07:38.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M8MkBAAV,Roche UK,Placeholder,Roche UK Placeholder,,Needs Assignment,Other,,,,Roche Diagnostics UK,,Grant McNulty,2018-05-31T19:35:04.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002T9hrrAAB,Sharaf Exchange,Placeholder,Sharaf Exchange Placeholder,,Needs Assignment,Other,,,,Sharaf Exchange,,Axonify,2019-04-30T18:21:53.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+0030h00002M7H7OAAV,Trip,Proper,Trip Proper,Internal Audit Innovation,Needs Assignment,Innovation,,,,Citi,,Axonify,2018-05-09T19:20:26.000+0000,,UNCONTACTABLE
+003E000000hZxmtIAC,Mario,Proulx,Mario Proulx,"Regional Manager, Loss Prevention",Manager/Team Lead,Other,,,,The TJX Companies,,Joe McCulla,2013-07-11T11:51:58.000+0000,,UNCONTACTABLE
+0030L00001vPAT5QAO,Darrin,Pulman,Darrin Pulman,,Needs Assignment,Other,,,,FirstRand - Holding Account,,Axonify,2018-02-13T14:34:42.000+0000,,UNCONTACTABLE
+0030h00002TBO85AAH,Wei Chieh,Pung,Wei Chieh Pung,,Needs Assignment,Other,,,,AstraZeneca SouthEast Asia,,Grant McNulty,2019-05-30T16:07:55.000+0000,,UNCONTACTABLE
+003E000000FPH6lIAH,Daniel,Rainey,Daniel Rainey,Regional Loss Prevention Mng,Needs Assignment,Other,,,,"Anna's Linens, Inc.",,Kelly Wasden,2012-06-25T17:15:15.000+0000,,UNCONTACTABLE
+0030h00002M7LaXAAV,Brian,Riley,Brian Riley,GM,Needs Assignment,Other,,,,FedEx Express,Operations,Jen Tolbert,2018-05-11T16:03:12.000+0000,,UNCONTACTABLE
+0030h00002Nnl1EAAR,Charlie,Rizzo,Charlie Rizzo,Rollover Education Specialist,Specialist,Other,,,,MLI - Manulife USA Division - John Hancock Life Insurance Co.,John Hancok,Ryan Flaherty,2018-07-12T19:01:54.000+0000,,UNCONTACTABLE
+0030L00001sWHcjQAG,Charlene,Robichaud,Charlene Robichaud,Web Design and App Dev,Needs Assignment,Other,,,,Bell Canada (Retail),Operations,Liz Davis,2017-09-26T14:16:33.000+0000,,UNCONTACTABLE
+003Mm00000XIO9NIAX,Andreas,Rohlfing,Andreas Rohlfing,,Needs Assignment,Other,,,,Aldi USA,,Jonathan Markle,2026-01-09T19:16:08.000+0000,,UNCONTACTABLE
+003E000000hbpooIAA,John,Rossler,John Rossler,NO LONGER WORKS HERE,Needs Assignment,Other,,,,Tuesday Morning,,Jen Tolbert,2013-07-17T19:40:24.000+0000,,UNCONTACTABLE
+0030h00002NnkzmAAB,John Hancock,RPS,John Hancock RPS,,Needs Assignment,Other,,,,MLI - Manulife Financial Inc. - PARENT,,Ryan Flaherty,2018-07-12T18:49:27.000+0000,,UNCONTACTABLE
+003E000000FPI4pIAH,Ryan,Rust,Ryan Rust,LP Manager Universities & Concessions - LIDS,Manager/Team Lead,Other,,,,Genesco Inc.,,Jen Tolbert,2012-06-25T18:51:02.000+0000,,UNCONTACTABLE
+003E000000FPHAHIA5,Jorge,Salazar,Jorge Salazar,Regional LP Investigator,Needs Assignment,Other,,,,A'GACI,,Jen Tolbert,2012-06-25T17:07:38.000+0000,,UNCONTACTABLE
+003Mm00000Sj0vjIAB,Eli,Saldivar,Eli Saldivar,,Needs Assignment,Other,,,,Pepsi Beverages Company,,Jen Tolbert,2025-09-22T17:06:34.000+0000,,UNCONTACTABLE
+0030L00001uXBviQAG,Snjezana,SamLovric,Snjezana SamLovric,Recruiting Specialist,Specialist,Other,,,,Starboard Cruise Services,,Jen Tolbert,2017-12-14T16:20:06.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003Mm00000SivPcIAJ,Sebastian,Sanchez,Sebastian Sanchez,,Needs Assignment,Other,,,,Auto Mercado S.A.,,Axonify,2025-09-22T16:16:35.000+0000,,UNCONTACTABLE
+0030L00001wdmsPQAQ,Keith,Sanders,Keith Sanders,"LOB LEADER - Reg Dir - Armenia, Belarus, Estonia, Latvia, Lithuania, Moldova, Poland, Russia and Ukraine",Manager/Team Lead,Other,,,,Coca-Cola Hellenic,,Grant McNulty,2018-04-05T12:15:46.000+0000,,UNCONTACTABLE
+003E000000FPHECIA5,Michael,Schwabe,Michael Schwabe,Corp Manager,Manager/Team Lead,Other,,,,Charming Shoppes,,Adam George,2012-06-25T18:09:16.000+0000,,UNCONTACTABLE
+003E000000PEuz7IAD,Robert,Serenson,Robert Serenson,NO LONGER WORKS HERE,Needs Assignment,Other,,,,Walmart Inc. - Holding Account,,Liz Davis,2012-10-11T18:50:12.000+0000,,UNCONTACTABLE
+003E000000FPIMFIA5,David,Shaffer,David Shaffer,Regional Loss Prevention Manager,Manager/Team Lead,Other,,,,"Dots, LLC",,Adam George,2012-06-25T18:28:26.000+0000,2024-02-14,UNCONTACTABLE
+003E000000FPIH8IAP,Charles,Shaner,Charles Shaner,Loss Prevention Manager,Manager/Team Lead,Other,,,,"Delhaize America, Inc.",,Jen Tolbert,2012-06-25T18:19:18.000+0000,,UNCONTACTABLE
+003E000000FPGAdIAP,Heather,Shanosky,Heather Shanosky,Regional Loss Prevention Mng,Needs Assignment,Other,,,,"Anna's Linens, Inc.",,Kelly Wasden,2012-06-25T17:16:58.000+0000,,UNCONTACTABLE
+003E000000PEdmuIAD,Art,Sheeler,Art Sheeler,Regional Loss Prevention Manager,Manager/Team Lead,Other,,,,"PETCO Animal Supplies, Inc.",,Kelly Wasden,2012-10-11T17:49:15.000+0000,,UNCONTACTABLE
+0030h00002M6tmNAAR,Mary,Signorino,Mary Signorino,Corporate Communications,Needs Assignment,Other,,,,Foot Locker Inc.,Corp Comms,Ryan Flaherty,2018-04-25T13:43:45.000+0000,2022-08-25,UNCONTACTABLE
+0030L00001vN3rlQAC,Amanda,Simpson,Amanda Simpson,Performance Coach,Needs Assignment,Other,,,,Webster National Bank,,Axonify,2018-01-29T19:43:04.000+0000,,UNCONTACTABLE
+0030L00001vOgKzQAK,Helen,Smith,Helen Smith,Project Manager,Manager/Team Lead,Other,,,,BT - Consumer,,Grant McNulty,2018-02-09T19:11:40.000+0000,,UNCONTACTABLE
+003E000000FPIPzIAP,Nesha,Smith,Nesha Smith,Area Loss Prevention Manager,Manager/Team Lead,Other,,,,HEB,,Jen Tolbert,2012-06-25T19:03:10.000+0000,,UNCONTACTABLE
+003E000000DJZcOIAX,Susan,Smith Nash,Susan Smith Nash,Blogger,Needs Assignment,Other,,,,Independent Bloggers,eLearning,Jen Tolbert,2012-05-02T19:50:21.000+0000,,JUNK_KEYWORD | UNCONTACTABLE
+003E000000FPICJIA5,Tom,Starr,Tom Starr,Regional Loss Prevention Manager,Manager/Team Lead,Other,,,,"Dots, LLC",,Adam George,2012-06-25T18:27:08.000+0000,,UNCONTACTABLE
+0030h00002VS1YtAAL,Jeremy,Stewart,Jeremy Stewart,,Needs Assignment,Other,,,,TradeTools,,Axonify,2019-07-10T18:38:19.000+0000,,UNCONTACTABLE
+003Mm00000RhWObIAN,Angie,Stone,Angie Stone,,Needs Assignment,Other,,,,Fresco Y Mas,,Emily Smith,2025-08-27T18:25:34.000+0000,,UNCONTACTABLE
+003Mm00000Sj0vkIAB,Kimberly,Sugden,Kimberly Sugden,Employee,Needs Assignment,Other,,,,Pepsi Beverages Company,,Jen Tolbert,2025-09-22T17:06:34.000+0000,,UNCONTACTABLE
+003E000000FPIJ6IAP,Lea,Tamarack,Lea Tamarack,NO LONGER WORKS HERE,Needs Assignment,Other,,,,Dollar General,,Brian Smith,2012-06-25T18:25:23.000+0000,,UNCONTACTABLE
+003Mm00000X740gIAB,Kentaro,Tanoue,Kentaro Tanoue,,Needs Assignment,Other,,,,Uniqlo,,Axonify,2026-01-05T23:41:48.000+0000,,UNCONTACTABLE
+003Mm00000VvaRWIAZ,Juan,Torres,Juan Torres,Ios Technician,Needs Assignment,Other,,,,Apple Inc.,,Joe McCulla,2025-12-04T17:58:04.000+0000,,UNCONTACTABLE
+003Mm00000Sj0vlIAB,Christine,Turner,Christine Turner,,Needs Assignment,Other,,,,Pepsi Beverages Company,,Jen Tolbert,2025-09-22T17:06:34.000+0000,,UNCONTACTABLE
+0030L00001mxbFKQAY,Jess,Valenzuela,Jess Valenzuela,Loss Prevention Analyst,Analyst,Other,,,,Roots Canada Ltd.,,Axonify,2017-02-07T15:10:17.000+0000,,UNCONTACTABLE
+0030L00001vNWiyQAG,Michel,Verwoest,Michel Verwoest,Member of the Executive Board,Needs Assignment,Other,,,,ASR Nederland,,Beth Houpis,2018-02-01T14:25:58.000+0000,,UNCONTACTABLE
+003E000001Q24qxIAB,Llibby,Vesty,Llibby Vesty,,Needs Assignment,Other,,,,Waste Management NZ,,Axonify,2015-10-09T17:13:47.000+0000,,UNCONTACTABLE
+003Mm00000T30u2IAB,Olivia,Wagner,Olivia Wagner,,Needs Assignment,Other,,,,"Axonify, Inc.",,Matthew Horsman,2025-09-30T19:57:04.000+0000,,UNCONTACTABLE
+003Mm00000T7RdvIAF,Olivia,Wagner,Olivia Wagner,,Needs Assignment,Other,,,,"Axonify, Inc.",,Matthew Horsman,2025-10-02T16:15:39.000+0000,,UNCONTACTABLE
+0030L00001vOWwiQAG,Daniel,Whitney,Daniel Whitney,NO LONGER WORKS HERE,Needs Assignment,Other,,,,Starbucks Coffee Company,,Joe McCulla,2018-02-01T17:53:16.000+0000,2018-02-05,UNCONTACTABLE
+003Mm00000WLvVcIAL,Chad,Workizer,Chad Workizer,,Needs Assignment,Other,,,,Sutherland Lumber Company,,Adam George,2025-12-15T09:30:17.000+0000,,UNCONTACTABLE

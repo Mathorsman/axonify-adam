@@ -1,0 +1,13 @@
+[server]
+# Automatically reload the app when sf_query_tool.py is saved.
+# The browser session stays open — you don't need to restart the terminal
+# or log in again (the OAuth token is cached in .sf_token_cache.json).
+runOnSave = true
+
+# Keeps the browser tab alive during a reload instead of showing
+# a "Please wait..." spinner that sometimes requires a manual refresh.
+headless = true
+
+[browser]
+# Suppress the "You can now view your Streamlit app" banner on reload.
+gatherUsageStats = false

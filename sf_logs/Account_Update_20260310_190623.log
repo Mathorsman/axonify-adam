@@ -1,0 +1,582 @@
+========================================================================
+SALESFORCE OPERATION LOG — Axonify
+========================================================================
+Timestamp:        2026-03-10 19:06:23
+Operation:        Update
+Object:           Account
+
+RECORD COUNTS
+  Records in query results:  573
+  Excluded via checkboxes:   0
+  Attempted (Update):       573
+  Succeeded:                 0
+  Failed:                    573
+
+BACKUP FILE
+  sf_backups/Account_Update_20260310_190616.csv
+
+SOURCE QUERY
+  -- Python strategy: account_hierarchy (no SOQL available)
+
+CHANGES APPLIED
+  Key_Account__c → 'True'
+
+AFFECTED RECORD IDs  (573 records)
+  0018a00001tESdnAAG
+  0018a00001tE84aAAC
+  001Mm00000TjxT6IAJ
+  0010h00001YagdOAAR
+  001E0000017srEOIAY
+  001E000000ShhG0IAJ
+  001Mm00000Egsf4IAB
+  001Mm00000EgvUtIAJ
+  001Mm00000EgmD6IAJ
+  001Mm00000EgnlrIAB
+  001Mm00000Egyu9IAB
+  001E000000ShhHMIAZ
+  001Mm00000DV1nhIAD
+  001Mm00000Egn5uIAB
+  0018a000020s1FVAAY
+  0018a00002JaZATAA3
+  0018a00002Gk0iCAAR
+  0018a00001tEURlAAO
+  001E000000ShhIsIAJ
+  0018a00001tEUxBAAW
+  001Mm00000EgkRNIAZ
+  001E000000Dai50IAB
+  001Mm00000DUwt7IAD
+  0010h00001ax7ouAAA
+  0010h00001YbCFsAAN
+  001E0000017srTKIAY
+  0018a00002GkC4xAAF
+  001E00000176dp8IAA
+  0018a00001tEVprAAG
+  0018a00001tEVmuAAG
+  001Mm00000BXcMlIAL
+  0018a00002Gk0kzAAB
+  001E000000ShhHNIAZ
+  001Mm00000ToTsYIAV
+  0010L00001kXEt8QAG
+  001E000001JHtn4IAD
+  0018a00001tEV1qAAG
+  001Mm00000ctIGIIA2
+  0010L00001jTRfjQAG
+  001E000001ds8t5IAA
+  0010h00001avsFSAAY
+  0010h00001cyGnlAAE
+  0010h00001aAJ5zAAG
+  0018a000026gJOWAA2
+  001Mm00000MKOq9IAH
+  001Mm00000DLo5TIAT
+  0010L00001kUtKxQAK
+  0010h00001ijfCbAAI
+  001E000000F1oIAIAZ
+  0018a00001tEV0cAAG
+  001E000001ds8syIAA
+  001E000000GPNIyIAP
+  001E000001ds8m8IAA
+  0010L00001rD7LsQAK
+  001E000001ds9Q6IAI
+  0010L00001jTX5MQAW
+  0010L00001jTRgdQAG
+  001Mm00000MKXhlIAH
+  0010h00001YrxVbAAJ
+  001E000000i0otiIAA
+  0010L00001nEvxeQAC
+  0010L00001rq437QAA
+  001Mm00000DUygoIAD
+  0010L00001kXSsxQAG
+  0018a00002FJ79dAAD
+  0010L00001kUtZnQAK
+  0018a00001lkyZfAAI
+  0010L00001oBO18QAG
+  001Mm00000DM3JqIAL
+  0010L00001nDR8AQAW
+  0010h00001j66IOAAY
+  0010h00001ax2uZAAQ
+  0010h00001j6sWMAAY
+  0010h00001XX43HAAT
+  0010L00001jTVyNQAW
+  001E000001M4JyfIAF
+  001E000000DzPFeIAN
+  0010h00001iy15SAAQ
+  001E000000F1oGAIAZ
+  001Mm00000cv7lKIAQ
+  001E000000cpOjrIAE
+  001E000000eRuczIAC
+  0010L00001jTcR8QAK
+  0010L00001jTUstQAG
+  0010L00001jTWcIQAW
+  0010L00001jTUr3QAG
+  001E000000i0nBuIAI
+  0010L00001jTYySQAW
+  0010L00001jTUrBQAW
+  0010h00001azDySAAU
+  0010h00001czcOLAAY
+  0010h00001Yb1N5AAJ
+  0010L00001jTVyIQAW
+  0018a00001tEVYoAAO
+  001Mm00000O8uVTIAZ
+  0010L00001jTbjuQAC
+  001E000000TJV31IAH
+  0010L00001jTSOiQAO
+  0010L00001qw2WXQAY
+  001E000000F1oEzIAJ
+  001E000000k6N4lIAE
+  0010L00001jTdZPQA0
+  0010L00001kUtYPQA0
+  001E000000eQDIaIAO
+  0010h00001ayx54AAA
+  0010L00001jTX5CQAW
+  0010L00001jTayaQAC
+  0018a00001tEW4aAAG
+  0010L00001nG1b9QAC
+  001E000000eQek1IAC
+  001Mm00000DUyd6IAD
+  0010L00001jTRCYQA4
+  0010L00001jTV4QQAW
+  0010L00001jTSFYQA4
+  001E000000F1oLlIAJ
+  0010L00001kUtYqQAK
+  0010L00001kUu4PQAS
+  0010L00001jTRxYQAW
+  0010h00001Zxu3VAAR
+  0010h00001j73oXAAQ
+  0010L00001jTbjVQAS
+  001E000000SD9f5IAD
+  001E000000eQdP1IAK
+  001E000001ds8sqIAA
+  0018a00001tEVpbAAG
+  001Mm00000DLvsxIAD
+  0010L00001kUu9iQAC
+  001E000001ds8srIAA
+  0010L00001jTaxfQAC
+  001E000001ds8swIAA
+  0010L00001jTRrvQAG
+  001E000000YqeuGIAR
+  0010L00001kUtwbQAC
+  001E000001ds8stIAA
+  0010L00001kUuAzQAK
+  0010L00001kUtY8QAK
+  001E000000F1oHtIAJ
+  0010L00001jTdORQA0
+  0010L00001jTXarQAG
+  0010L00001kUu99QAC
+  0010L00001kUuIHQA0
+  001Mm00000MKUsOIAX
+  0010L00001kUtd4QAC
+  0010L00001kUtXbQAK
+  0010L00001jTaxgQAC
+  001E000001fFFUWIA4
+  001E000000gviM3IAI
+  0010L00001kUtDOQA0
+  0010L00001kUtlrQAC
+  0010L00001jTeFhQAK
+  0010L00001kUtvGQAS
+  001E000000eQelNIAS
+  0010L00001jTbWKQA0
+  0010L00001jTdKVQA0
+  001Mm00000MKUsNIAX
+  0010L00001jTdPpQAK
+  001Mm00000MKUsMIAX
+  001E000001EA64fIAD
+  001Mm00000DUXh1IAH
+  001E000000ShhEaIAJ
+  0010L00001jTXGjQAO
+  001E000000TJUiTIAX
+  001E000000ShhL7IAJ
+  0010L00001kUtStQAK
+  001E000000ShibFIAR
+  001E000000ShhFxIAJ
+  0018a00001tEUzeAAG
+  001E000000ShhLbIAJ
+  0018a00001tEVtUAAW
+  001E000000ShhLdIAJ
+  0018a00002Gk0kxAAB
+  001E000000ShhGNIAZ
+  0010L00001kW6wzQAC
+  001E000000ShhLhIAJ
+  001E000000ShhGXIAZ
+  0018a00001tEVupAAG
+  001E000000ShhGmIAJ
+  001E000000ShhHjIAJ
+  001E000000ShhHkIAJ
+  001E000000ShhHwIAJ
+  001E000000ShhIIIAZ
+  001E000000TJUiUIAX
+  001E000000ShhJOIAZ
+  0010L00001jTatzQAC
+  0010L00001jTboAQAS
+  001E000000ShhLaIAJ
+  001E000000ShhLcIAJ
+  001E000000ShhLeIAJ
+  001E000000ShhLfIAJ
+  001E000000ShhLgIAJ
+  0010L00001jTcLuQAK
+  001E000000c5p0WIAQ
+  001E000000ShhIKIAZ
+  001E000000ShhIfIAJ
+  001E000000ShhKVIAZ
+  001E000001hJu3AIAS
+  0010L00001jTSVYQA4
+  0010L00001jTWMgQAO
+  0010L00001kUtq0QAC
+  0010L00001jTeG5QAK
+  001Mm00000chLpjIAE
+  001E000001QRKEuIAP
+  001E000000F1oD5IAJ
+  0010L00001jTRaGQAW
+  001E000000F1o8uIAB
+  0018a00001tESatAAG
+  001E000000F1oD6IAJ
+  0010h00001iy15QAAQ
+  001E000000F1oB0IAJ
+  0018a00001kvFnjAAE
+  0010L00001kUtSqQAK
+  0010L00001jTRUfQAO
+  001E000000F1o8QIAR
+  0010h00001iy15RAAQ
+  0010h00001dvZZTAA2
+  0010h00001dvZZnAAM
+  001E000000F1o8mIAB
+  0010L00001kUu89QAC
+  0010L00001kUtSSQA0
+  0018a00001tEWDsAAO
+  001Mm00000DUykCIAT
+  001E000001ds9OcIAI
+  0010h00001dvZb5AAE
+  001E000000DzPFEIA3
+  0010L00001kUtR2QAK
+  001E000000F1oCmIAJ
+  001E000000F1oJsIAJ
+  001Mm00000MKdqbIAD
+  001E000000F1o8oIAB
+  001E0000019L9UDIA0
+  0018a00001tEUmKAAW
+  0018a00002MUj01AAD
+  001E000000DzPFbIAN
+  0010L00001jTRv4QAG
+  0010h00001jV31xAAC
+  0018a00001tEVZcAAO
+  0010h00001Zxm3NAAR
+  001E000000F1o98IAB
+  0018a000020r6n4AAA
+  0010L00001kUuJYQA0
+  0010h00001YZ6JuAAL
+  0010L00001kUtZYQA0
+  0010L00001jTadBQAS
+  0010L00001jTbqUQAS
+  001E000000TJUiwIAH
+  0010L00001kUtTKQA0
+  0010L00001jTbqVQAS
+  0010L00001jTbqWQAS
+  0010L00001jTeP5QAK
+  0010L00001jTdQ7QAK
+  0018a00001tEUraAAG
+  0010L00001jTf1lQAC
+  0010L00001jTbl9QAC
+  0010L00001jTd5zQAC
+  0010L00001jTTqbQAG
+  0018a00001tEVQnAAO
+  0010L00001jTa4ZQAS
+  001E000000F1oE0IAJ
+  0010L00001kUtniQAC
+  0010L00001jTbqkQAC
+  001E000000F1oKvIAJ
+  0010L00001jTaTNQA0
+  001E000000F1oITIAZ
+  001E000000DzPFMIA3
+  0010h00001dvZA5AAM
+  001Mm00000NxOE1IAN
+  001E000000F1oMhIAJ
+  001E000000F1o9HIAR
+  0010h00001dvZOaAAM
+  001Mm00000DV1JtIAL
+  0018a00001lcLEeAAM
+  0010h00001dvZOzAAM
+  0010h00001a9Z2kAAE
+  0010L00001kUtbrQAC
+  0010h00001dvZQHAA2
+  0010h00001dvZR5AAM
+  0010h00001dvZPKAA2
+  0010h00001dvZShAAM
+  0010h00001dvZSNAA2
+  001E000000DzPF8IAN
+  001E000001ds8kxIAA
+  0010h00001dvZPsAAM
+  001E000001hJu22IAC
+  001E000000F1o8YIAR
+  001E000001ds9OdIAI
+  001Mm00000ZeMs6IAF
+  0010L00001jTTWUQA4
+  001E000000TKJAdIAP
+  001E000000PNpW4IAL
+  0010h00001iL3GBAA0
+  001E000000TKKCoIAP
+  0018a00001tEWJuAAO
+  0010L00001jTddtQAC
+  001E000001IEpD3IAL
+  001E000000ByahNIAR
+  001E000000Py59TIAR
+  0010L00001jTT8eQAG
+  001E000000i0nBOIAY
+  0010L00001kUtUOQA0
+  0010L00001jTaDNQA0
+  0018a00002Gk8cJAAR
+  001E000000TJUj4IAH
+  0018a00002Gk0hpAAB
+  001Mm000009lx7VIAQ
+  0010h00001cxuwbAAA
+  0018a00001tETwlAAG
+  001E000001ds8r0IAA
+  0010L00001jTdQ9QAK
+  001E000001KRoufIAD
+  0018a00002GkJ79AAF
+  001E000001ds8r9IAA
+  001E000001EAWj9IAH
+  0018a00001tEVkEAAW
+  001Mm00000FVxfuIAD
+  001Mm00000FVy7JIAT
+  001Mm00000FVwLeIAL
+  001Mm00000FVyDlIAL
+  001Mm00000FVxhVIAT
+  001Mm00000FVzkvIAD
+  0018a00001tEUwWAAW
+  001Mm00000FVyk1IAD
+  001Mm00000FVxzFIAT
+  001Mm00000FVwVOIA1
+  001Mm00000FVxuPIAT
+  001Mm00000FVrdjIAD
+  001Mm00000FpfOWIAZ
+  0010h00001cxuwBAAQ
+  0010h00001cxtnIAAQ
+  0010L00001kYUeKQAW
+  0010L00001kY3yPQAS
+  0010h00001cxtmZAAQ
+  0010L00001jTSsSQAW
+  0010L00001jTdHvQAK
+  0010h00001azPyvAAE
+  0018a000026ghnhAAA
+  0010h00001j74OaAAI
+  0018a000020rAcxAAE
+  0018a00001tETRSAA4
+  001E000000F1oMeIAJ
+  001E000000ShhHGIAZ
+  001E000000ShibEIAR
+  0018a00001tEW4sAAG
+  0010h00001cDPVdAAO
+  001E000000ShhFyIAJ
+  0018a00001tEW4mAAG
+  001E000000ShhLvIAJ
+  001E000000ShhLwIAJ
+  0018a00001tEUyXAAW
+  001Mm00000MKUs1IAH
+  0018a00001tEUARAA4
+  0018a00001tEUliAAG
+  0018a00002Gk0kXAAR
+  0018a00001tEUGqAAO
+  0018a00001tEVruAAG
+  001E000000ShhLrIAJ
+  001E000000ShhLxIAJ
+  001E000000ShhLyIAJ
+  001E000000ShhM0IAJ
+  0018a00001tEScZAAW
+  001Mm00000To4hFIAR
+  001Mm00000MKUs0IAH
+  0010L00001jTdFJQA0
+  001Mm00000ORu0NIAT
+  001E000000ShibHIAR
+  001E000000ShhM8IAJ
+  001Mm00000MKUs2IAH
+  001E000000ShhHAIAZ
+  0010L00001iVyimQAC
+  0018a00001tEUdLAAW
+  001Mm00000Hvvm9IAB
+  001Mm00000Hr8IdIAJ
+  001Mm00000MKRibIAH
+  001Mm00000MKRicIAH
+  001Mm00000HeHbTIAV
+  001E000001hJYBvIAO
+  0018a00001tEVacAAG
+  0018a00001tEUeeAAG
+  001Mm00000I4dlBIAR
+  001Mm00000I4bhlIAB
+  0010L00001jTaLoQAK
+  0018a00001tEUXnAAO
+  0018a00001tEVELAA4
+  0018a00001tEUyUAAW
+  001Mm00000TXC3JIAX
+  0018a00002MUqPeAAL
+  001Mm00000bmJklIAE
+  001E000001Ey1RlIAJ
+  0010L00001jTdExQAK
+  0010L00001jTco4QAC
+  0010h00001dvZJ6AAM
+  0010L00001pCGmLQAW
+  001E000000DxqLoIAJ
+  0010L00001rEuUBQA0
+  0010h00001aAKlJAAW
+  001Mm00000DLd91IAD
+  001Mm00000MKJUWIA5
+  0010L00001jTaK9QAK
+  0010L00001jTaWwQAK
+  0010L00001jTcMNQA0
+  0010h00001aBGoTAAW
+  001E000000F1oJ5IAJ
+  0010L00001jTSqAQAW
+  001E00000176fAdIAI
+  0010L00001jTdyFQAS
+  0010h00001ZnekWAAR
+  001Mm00000F1y4jIAB
+  0010h00001cyN0WAAU
+  0010L00001jTRCKQA4
+  0010L00001jTRnKQAW
+  0010L00001kUuF9QAK
+  0010L00001kUuATQA0
+  0010h00001Xy6cPAAR
+  001E000001DVRP5IAP
+  0018a00002Gk0mzAAB
+  0010L00001jTTwZQAW
+  0010L00001jTe2rQAC
+  0010L00001jTUZ6QAO
+  0010L00001jTapLQAS
+  0010L00001kUuJZQA0
+  0010L00001jTRqnQAG
+  0010L00001kUuFAQA0
+  001E000000TKKCqIAP
+  001E000000TKJAtIAP
+  0010L00001jTbPWQA0
+  0010L00001jTdweQAC
+  001E000000TKKDSIA5
+  0010h00001cxuNhAAI
+  001E000000F1oB7IAJ
+  0010L00001jTeO2QAK
+  0010L00001kUtkZQAS
+  001E000001A9CGxIAN
+  0018a00002FJ2WvAAL
+  001E000000GPs5fIAD
+  001E000001KTP8XIAX
+  0010L00001kVBKPQA4
+  001E000001KTWWnIAP
+  001E000001KTPYLIA5
+  0010L00001masxMQAQ
+  001E000000eRyQ3IAK
+  0010h00001YYuSdAAL
+  001E000001KTWVfIAP
+  001E000001KTWSLIA5
+  001E000001KTPFTIA5
+  001E000000i2DCPIA2
+  0010L00001jTRDqQAO
+  0010h00001jWKREAA4
+  001E000001KTPJpIAP
+  001E000001KTP5JIAX
+  001E000001KTPNDIA5
+  0010L00001jTVIwQAO
+  0010L00001kV1QvQAK
+  001E000001A6vwpIAB
+  001E000001KTP9kIAH
+  001E000001JHW85IAH
+  0010L00001jTeOTQA0
+  0010L00001jTW7hQAG
+  0010L00001jTTJAQA4
+  0010L00001jTSqlQAG
+  0010L00001jTSWPQA4
+  0010L00001jTbPLQA0
+  0018a00001tEW1FAAW
+  0018a00001mVjhqAAC
+  0010L00001jTSUrQAO
+  0010L00001jTcGsQAK
+  0010L00001kY6bdQAC
+  0010L00001jTdZCQA0
+  0010L00001jTXJ0QAO
+  0010L00001jTWCdQAO
+  0010L00001jTeL1QAK
+  0010L00001jTeNNQA0
+  0010L00001jTXWPQA4
+  0010L00001jTWO3QAO
+  0010L00001jTR8lQAG
+  0010L00001rEWSwQAO
+  001E000001ds8lPIAQ
+  001E000000F1oMTIAZ
+  0010h00001dvZg5AAE
+  0010h00001dvZg0AAE
+  001E000000F1oL9IAJ
+  0010h00001j65nLAAQ
+  001E000000k6q2MIAQ
+  0010L00001kUtLZQA0
+  001E000001duWJPIA2
+  001E000000CM58zIAD
+  0010h00001dvZdBAAU
+  001E000000eSTNtIAO
+  001Mm00000DLx9tIAD
+  001E000000TJV3eIAH
+  0010L00001kUtB6QAK
+  001E000000F1o8fIAB
+  0010h00001dvZcIAAU
+  001E000001ds8pMIAQ
+  001E000000F1o8hIAB
+  001E000000F1o8iIAB
+  0010L00001jTUnUQAW
+  0010L00001kUttXQAS
+  001E0000019LQSrIAO
+  001Mm00000TuTQ2IAN
+  001E000001KRqBCIA1
+  001Mm00000MKRyIIAX
+  ... and 73 more (see backup CSV for full list)
+
+ERRORS  (573 failures)
+  [1] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [2] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [3] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [4] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [5] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [6] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [7] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [8] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [9] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [10] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [11] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [12] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [13] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [14] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [15] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [16] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [17] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [18] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [19] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [20] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [21] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [22] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [23] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [24] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [25] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [26] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [27] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [28] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [29] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [30] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [31] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [32] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [33] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [34] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [35] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [36] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [37] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [38] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [39] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [40] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [41] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [42] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [43] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [44] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [45] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [46] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [47] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [48] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [49] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  [50] [{'statusCode': 'INVALID_FIELD', 'message': 'Unexpected JsonMappingException: Cannot deserialize instance of boolean from VALUE_STRING value True or request may be missing a required field\n at [Source: N/A; line: -1, column: -1]', 'fields': []}]
+  ... 523 more errors truncated
+
+========================================================================
+END OF LOG
+========================================================================

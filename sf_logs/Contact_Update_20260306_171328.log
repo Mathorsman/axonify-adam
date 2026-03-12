@@ -1,0 +1,582 @@
+========================================================================
+SALESFORCE OPERATION LOG — Axonify
+========================================================================
+Timestamp:        2026-03-06 17:13:28
+Operation:        Update
+Object:           Contact
+
+RECORD COUNTS
+  Records in query results:  381,761
+  Excluded via checkboxes:   0
+  Attempted (Update):       381,761
+  Succeeded:                 0
+  Failed:                    381,761
+
+BACKUP FILE
+  sf_backups/Contact_Update_20260306_171237.csv
+
+SOURCE QUERY
+  SELECT Id, Name, TriggerField__c FROM Contact
+
+CHANGES APPLIED
+  TriggerField__c → NULL (cleared)
+
+AFFECTED RECORD IDs  (381,761 records)
+  0030L00001jFLXIQA4
+  0030L00001jFLYkQAO
+  0030L00001jFNZrQAO
+  0030L00001jFNbEQAW
+  0030L00001jFNgxQAG
+  0030L00001jFO1zQAG
+  0030L00001jFO5wQAG
+  0030L00001jFOEtQAO
+  0030L00001jFOHiQAO
+  0030L00001jFOcAQAW
+  0030L00001jFPrPQAW
+  0030L00001jFQFbQAO
+  0030L00001jFSdGQAW
+  0030L00001jFTlcQAG
+  0030L00001jFTm1QAG
+  0030L00001jFUaZQAW
+  0030L00001jFUn9QAG
+  0030L00001jFVhmQAG
+  0030L00001jFVipQAG
+  0030L00001jFWbxQAG
+  0030L00001jFWnZQAW
+  0030L00001jFa0TQAS
+  0030L00001jFa2jQAC
+  0030L00001jFa3XQAS
+  0030L00001jFa41QAC
+  0030L00001jFaEoQAK
+  0030L00001jFaF8QAK
+  0030L00001jFaFSQA0
+  0030L00001jFaFrQAK
+  0030L00001jFaGBQA0
+  0030L00001jFaHYQA0
+  0030L00001jFaIMQA0
+  0030L00001jFaIRQA0
+  0030L00001jFaIgQAK
+  0030L00001jFaMJQA0
+  0030L00001jFaNMQA0
+  0030L00001jFaNlQAK
+  0030L00001jFaOeQAK
+  0030L00001jFaP3QAK
+  0030L00001jFaPNQA0
+  0030L00001jFaQGQA0
+  0030L00001jFaQfQAK
+  0030L00001jFaRnQAK
+  0030L00001jFamIQAS
+  0030L00001jFapWQAS
+  0030L00001jFavPQAS
+  0030L00001jFb5yQAC
+  0030L00001jFbkfQAC
+  0030L00001jFbqJQAS
+  0030L00001jFbs5QAC
+  0030L00001jFbsFQAS
+  0030L00001jFbw7QAC
+  0030L00001jFbxKQAS
+  0030L00001jFbxeQAC
+  0030L00001jFbz1QAC
+  0030L00001jFbzkQAC
+  0030L00001jFc2eQAC
+  0030L00001jFc6lQAC
+  0030L00001jFcEBQA0
+  0030L00001jFcL7QAK
+  0030L00001jFcPsQAK
+  0030L00001jFclcQAC
+  0030L00001jFcoMQAS
+  0030L00001jFcqhQAC
+  0030L00001jFcr1QAC
+  0030L00001jFcrVQAS
+  0030L00001jFcruQAC
+  0030L00001jFcsJQAS
+  0030L00001jFct7QAC
+  0030L00001jFcx9QAC
+  0030L00001jFd2TQAS
+  0030L00001jFd5hQAC
+  0030L00001jFd6kQAC
+  0030L00001jFdFJQA0
+  0030L00001jFi9YQAS
+  0030L00001jFiBtQAK
+  0030L00001jFiEdQAK
+  0030L00001jFiEsQAK
+  0030L00001jFiExQAK
+  0030L00001jFiGtQAK
+  0030L00001jFiKlQAK
+  0030L00001jFiLyQAK
+  0030L00001jFiNaQAK
+  0030L00001jFiOYQA0
+  0030L00001jFiQeQAK
+  0030L00001jFiSGQA0
+  0030L00001jFiSVQA0
+  0030L00001jFiT4QAK
+  0030L00001jFiUCQA0
+  0030L00001jFiUWQA0
+  0030L00001jFiUqQAK
+  0030L00001jFiVPQA0
+  0030L00001jFiVZQA0
+  0030L00001jFiVjQAK
+  0030L00001jFiWDQA0
+  0030L00001jFiWIQA0
+  0030L00001jFiWSQA0
+  0030L00001jFiWmQAK
+  0030L00001jFiWwQAK
+  0030L00001jFiXzQAK
+  0030L00001jFiYiQAK
+  0030L00001jFiZRQA0
+  0030L00001jFiaPQAS
+  0030L00001jFib3QAC
+  0030L00001jFibNQAS
+  0030L00001jFibXQAS
+  0030L00001jFibrQAC
+  0030L00001jFic6QAC
+  0030L00001jFicQQAS
+  0030L00001jFicpQAC
+  0030L00001jFid4QAC
+  0030L00001jFidsQAC
+  0030L00001jFieHQAS
+  0030L00001jFieqQAC
+  0030L00001jFifAQAS
+  0030L00001jFifeQAC
+  0030L00001jFigXQAS
+  0030L00001jFih1QAC
+  0030L00001jFihpQAC
+  0030L00001jFiiOQAS
+  0030L00001jFil3QAC
+  0030L00001jFilcQAC
+  0030L00001jFilwQAC
+  0030L00001jFimpQAC
+  0030L00001jFinTQAS
+  0030L00001jFipKQAS
+  0030L00001jFipoQAC
+  0030L00001jFiq8QAC
+  0030L00001jFiruQAC
+  0030L00001jFiuyQAC
+  0030L00001jFixTQAS
+  0030L00001jFiyWQAS
+  0030L00001jFj1aQAC
+  0030L00001jFj45QAC
+  0030L00001jFj6BQAS
+  0030L00001jFj79QAC
+  0030L00001jFj7dQAC
+  0030L00001jFj8CQAS
+  0030L00001jFj8RQAS
+  0030L00001jFj8lQAC
+  0030L00001jFjBGQA0
+  0030L00001jFjBuQAK
+  0030L00001jFjDCQA0
+  0030L00001jFjDMQA0
+  0030L00001jFjEAQA0
+  0030L00001jFjEKQA0
+  0030L00001jFjGBQA0
+  0030L00001jFjHJQA0
+  0030L00001jFjhSQAS
+  0030L00001jFk3YQAS
+  0030L00001jFk76QAC
+  0030L00001jFkBwQAK
+  0030L00001jFki2QAC
+  0030L00001jFkiCQAS
+  0030L00001jFkivQAC
+  0030L00001jFkjtQAC
+  0030L00001jFkkNQAS
+  0030L00001jFko0QAC
+  0030L00001jFkqQQAS
+  0030L00001jFksvQAC
+  0030L00001jFky5QAC
+  0030L00001jFl1EQAS
+  0030L00001jFl3AQAS
+  0030L00001jFl4mQAC
+  0030L00001jFl4wQAC
+  0030L00001jFl56QAC
+  0030L00001jFl5GQAS
+  0030L00001jFl5LQAS
+  0030L00001jFl5VQAS
+  0030L00001jFl5pQAC
+  0030L00001jFl5uQAC
+  0030L00001jFlApQAK
+  0030L00001jFlFCQA0
+  0030L00001jFlGyQAK
+  0030L00001jFnCGQA0
+  0030L00001jFoRkQAK
+  0030L00001jFoT2QAK
+  0030L00001jFoTMQA0
+  0030L00001jFoTlQAK
+  0030L00001jFoTqQAK
+  0030L00001jFoUKQA0
+  0030L00001jFoUjQAK
+  0030L00001jFoV8QAK
+  0030L00001jFoYSQA0
+  0030L00001jFocKQAS
+  0030L00001jFocZQAS
+  0030L00001jFocyQAC
+  0030L00001jFodwQAC
+  0030L00001jFoeLQAS
+  0030L00001jFoefQAC
+  0030L00001jFoepQAC
+  0030L00001jFoeuQAC
+  0030L00001jFohKQAS
+  0030L00001jFohjQAC
+  0030L00001jFokiQAC
+  0030L00001jFopOQAS
+  0030L00001jFouOQAS
+  0030L00001jFp0wQAC
+  0030L00001jFp4UQAS
+  0030L00001jFp53QAC
+  0030L00001jFp5SQAS
+  0030L00001jFp9tQAC
+  0030L00001jFpQLQA0
+  0030L00001jFpRhQAK
+  0030L00001jFpSaQAK
+  0030L00001jFpWhQAK
+  0030L00001jFpX6QAK
+  0030L00001jFpXaQAK
+  0030L00001jFpYnQAK
+  0030L00001jFpZHQA0
+  0030L00001jFpZlQAK
+  0030L00001jFpaAQAS
+  0030L00001jFpaoQAC
+  0030L00001jFpbcQAC
+  0030L00001jFpcLQAS
+  0030L00001jFpckQAC
+  0030L00001jFpeHQAS
+  0030L00001jFpegQAC
+  0030L00001jFpfoQAC
+  0030L00001jFpgcQAC
+  0030L00001jFph6QAC
+  0030L00001jFphaQAC
+  0030L00001jFphfQAC
+  0030L00001jFpjRQAS
+  0030L00001jFpk0QAC
+  0030L00001jFpl3QAC
+  0030L00001jFplNQAS
+  0030L00001jFpm1QAC
+  0030L00001jFpmGQAS
+  0030L00001jFpmfQAC
+  0030L00001jFq5xQAC
+  0030L00001jFqTQQA0
+  0030L00001jFqU9QAK
+  0030L00001jFqV7QAK
+  0030L00001jFqVgQAK
+  0030L00001jFqVqQAK
+  0030L00001jFqdaQAC
+  0030L00001jFqdfQAC
+  0030L00001jFqfWQAS
+  0030L00001jFqpgQAC
+  0030L00001jFr1UQAS
+  0030L00001jFr9nQAC
+  0030L00001jFrEYQA0
+  0030L00001jFrJAQA0
+  0030L00001jFrKDQA0
+  0030L00001jFrOKQA0
+  0030L00001jFrZwQAK
+  0030L00001jFtHWQA0
+  0030L00001jFtWCQA0
+  0030L00001jFxOSQA0
+  0030L00001jFxPGQA0
+  0030L00001jFxPQQA0
+  0030L00001jFxPuQAK
+  0030L00001jFxQiQAK
+  0030L00001jFxR2QAK
+  0030L00001jFxU6QAK
+  0030L00001jFxULQA0
+  0030L00001jFxUuQAK
+  0030L00001jFxVTQA0
+  0030L00001jFxYmQAK
+  0030L00001jFxaJQAS
+  0030L00001jFxaTQAS
+  0030L00001jFxb2QAC
+  0030L00001jFxbMQAS
+  0030L00001jFxf9QAC
+  0030L00001jFxgHQAS
+  0030L00001jFxglQAC
+  0030L00001jFxm5QAC
+  0030L00001jFxmAQAS
+  0030L00001jFxnNQAS
+  0030L00001jFxnXQAS
+  0030L00001jFxopQAC
+  0030L00001jFxp4QAC
+  0030L00001jFxqMQAS
+  0030L00001jFxqlQAC
+  0030L00001jFxqqQAC
+  0030L00001jFxr0QAC
+  0030L00001jFxreQAC
+  0030L00001jFxroQAC
+  0030L00001jFxs8QAC
+  0030L00001jFxsmQAC
+  0030L00001jFxsrQAC
+  0030L00001jFxuJQAS
+  0030L00001jFxuiQAC
+  0030L00001jFxvHQAS
+  0030L00001jFxz4QAC
+  0030L00001jFxzdQAC
+  0030L00001jFy0qQAC
+  0030L00001jFy1ZQAS
+  0030L00001jFy2IQAS
+  0030L00001jFy3QQAS
+  0030L00001jFy57QAC
+  0030L00001jFy5WQAS
+  0030L00001jFy5vQAC
+  0030L00001jFy6yQAC
+  0030L00001jFy8LQAS
+  0030L00001jFyB5QAK
+  0030L00001jFyBjQAK
+  0030L00001jFyByQAK
+  0030L00001jFyCrQAK
+  0030L00001jFyEnQAK
+  0030L00001jFyExQAK
+  0030L00001jFyIyQAK
+  0030L00001jFySjQAK
+  0030L00001jFyTmQAK
+  0030L00001jFyTwQAK
+  0030L00001jFyUGQA0
+  0030L00001jFyV9QAK
+  0030L00001jFyVdQAK
+  0030L00001jFyWCQA0
+  0030L00001jFyWgQAK
+  0030L00001jFyY8QAK
+  0030L00001jFyw6QAC
+  0030L00001jFzB6QAK
+  0030L00001jFzBLQA0
+  0030L00001jFzBzQAK
+  0030L00001jFzCYQA0
+  0030L00001jFzHiQAK
+  0030L00001jFzI7QAK
+  0030L00001jFzIqQAK
+  0030L00001jFzJZQA0
+  0030L00001jFzK3QAK
+  0030L00001jFzKNQA0
+  0030L00001jFzKwQAK
+  0030L00001jFzcYQAS
+  0030L00001jFze5QAC
+  0030L00001jFzilQAC
+  0030L00001jG01OQAS
+  0030L00001jG02bQAC
+  0030L00001jG05uQAC
+  0030L00001jG06JQAS
+  0030L00001jG06sQAC
+  0030L00001jG07MQAS
+  0030L00001jG07gQAC
+  0030L00001jG085QAC
+  0030L00001jG08ZQAS
+  0030L00001jG44iQAC
+  0030L00001jG4U7QAK
+  0030L00001jG5McQAK
+  0030L00001jG5VPQA0
+  0030L00001jG5kKQAS
+  0030L00001jG6EjQAK
+  0030L00001jG6LLQA0
+  0030L00001jG6LfQAK
+  0030L00001jG6NMQA0
+  0030L00001jG6VBQA0
+  0030L00001jGAPaQAO
+  0030L00001jGAg7QAG
+  0030L00001jGAhFQAW
+  0030L00001jGAkiQAG
+  0030L00001jGAvSQAW
+  0030L00001jGAwBQAW
+  0030L00001jGAxJQAW
+  0030L00001jGAxTQAW
+  0030L00001jGAyRQAW
+  0030L00001jGB0XQAW
+  0030L00001jGB1GQAW
+  0030L00001jGB1fQAG
+  0030L00001jGB1uQAG
+  0030L00001jGB2OQAW
+  0030L00001jGB32QAG
+  0030L00001jGB53QAG
+  0030L00001jGB5SQAW
+  0030L00001jGBIqQAO
+  0030L00001jGBizQAG
+  0030L00001jGBsGQAW
+  0030L00001jGBt4QAG
+  0030L00001jGBxVQAW
+  0030L00001jGC34QAG
+  0030L00001jGC39QAG
+  0030L00001jGCZAQA4
+  0030L00001jGCxTQAW
+  0030L00001jGJZRQA4
+  0030L00001jGJlcQAG
+  0030L00001jGLV4QAO
+  0030L00001jGMZ9QAO
+  0030L00001jGMkeQAG
+  0030L00001jGN0wQAG
+  0030L00001jGN2YQAW
+  0030L00001jGQ7uQAG
+  0030L00001jGQVsQAO
+  0030L00001jGQbqQAG
+  0030L00001jGQcjQAG
+  0030L00001jGQfTQAW
+  0030L00001jGQjzQAG
+  0030L00001jGQkOQAW
+  0030L00001jGQkiQAG
+  0030L00001jGQkxQAG
+  0030L00001jGQlWQAW
+  0030L00001jGQllQAG
+  0030L00001jGQm5QAG
+  0030L00001jGRJoQAO
+  0030L00001jGRV6QAO
+  0030L00001jGRhvQAG
+  0030L00001jGRnKQAW
+  0030L00001jGSWFQA4
+  0030L00001jGSYfQAO
+  0030L00001jGSZYQA4
+  0030L00001jGSalQAG
+  0030L00001jGSbjQAG
+  0030L00001jGSm8QAG
+  0030L00001jGbCMQA0
+  0030L00001jGcL9QAK
+  0030L00001jGcRHQA0
+  0030L00001jGccRQAS
+  0030L00001jGcj8QAC
+  0030L00001jGdDhQAK
+  0030L00001jGdKpQAK
+  0030L00001jGdNFQA0
+  0030L00001jGdlLQAS
+  0030L00001jGdmqQAC
+  0030L00001jGdqTQAS
+  0030L00001jGdtmQAC
+  0030L00001jGhw6QAC
+  0030L00001jGhwBQAS
+  0030L00001jGi08QAC
+  0030L00001jGievQAC
+  0030L00001jGijWQAS
+  0030L00001jGimfQAC
+  0030L00001jGimzQAC
+  0030L00001jGin9QAC
+  0030L00001jGiygQAC
+  0030L00001jGj0SQAS
+  0030L00001jGjLuQAK
+  0030L00001jGk40QAC
+  0030L00001jGkJtQAK
+  0030L00001jGkPhQAK
+  0030L00001jGkQzQAK
+  0030L00001jGkSlQAK
+  0030L00001jGlK8QAK
+  0030L00001jGlUSQA0
+  0030L00001jGla1QAC
+  0030L00001jGlapQAC
+  0030L00001jGlcvQAC
+  0030L00001jGlh7QAC
+  0030L00001jGlrqQAC
+  0030L00001jGlsFQAS
+  0030L00001jGlsjQAC
+  0030L00001jGluBQAS
+  0030L00001jGlvEQAS
+  0030L00001jGlvdQAC
+  0030L00001jGlxAQAS
+  0030L00001jGlzQQAS
+  0030L00001jGm0sQAC
+  0030L00001jGm1MQAS
+  0030L00001jGm1gQAC
+  0030L00001jGm20QAC
+  0030L00001jGm5LQAS
+  0030L00001jGm9DQAS
+  0030L00001jGmBXQA0
+  0030L00001jGmCpQAK
+  0030L00001jGmGwQAK
+  0030L00001jGmHLQA0
+  0030L00001jGmI4QAK
+  0030L00001jGmIJQA0
+  0030L00001jGmLmQAK
+  0030L00001jGmTMQA0
+  0030L00001jGpFhQAK
+  0030L00001jGpFrQAK
+  0030L00001jGpQkQAK
+  0030L00001jGpXHQA0
+  0030L00001jGpXqQAK
+  0030L00001jGpaVQAS
+  0030L00001jGpbsQAC
+  0030L00001jGpcgQAC
+  0030L00001jGpf1QAC
+  0030L00001jGpfaQAC
+  0030L00001jGpgJQAS
+  0030L00001jGphqQAC
+  0030L00001jGpitQAC
+  0030L00001jGq4GQAS
+  0030L00001jGqC6QAK
+  0030L00001jGqPjQAK
+  0030L00001jGqQ3QAK
+  0030L00001jGqQDQA0
+  0030L00001jGqRGQA0
+  0030L00001jGqV3QAK
+  0030L00001jGqZzQAK
+  0030L00001jGqa4QAC
+  0030L00001jGqeGQAS
+  0030L00001jGqeaQAC
+  0030L00001jGqjpQAC
+  0030L00001jGqnNQAS
+  0030L00001jGqoVQAS
+  0030L00001jGqpnQAC
+  0030L00001jGs6NQAS
+  0030L00001jGs84QAC
+  0030L00001jGs9HQAS
+  0030L00001jGsHBQA0
+  0030L00001jGsIsQAK
+  0030L00001jGsJqQAK
+  0030L00001jGsLSQA0
+  0030L00001jGsLrQAK
+  0030L00001jGsVrQAK
+  0030L00001jGsXYQA0
+  0030L00001jGsXnQAK
+  0030L00001jGsYlQAK
+  0030L00001jGsbfQAC
+  0030L00001jGscnQAC
+  0030L00001jGsctQAC
+  ... and 381,261 more (see backup CSV for full list)
+
+ERRORS  (381761 failures)
+  [1] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [2] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [3] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [4] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [5] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [6] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [7] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [8] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [9] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [10] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [11] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [12] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [13] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [14] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [15] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [16] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [17] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [18] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [19] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [20] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [21] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [22] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [23] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [24] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [25] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [26] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [27] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [28] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [29] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [30] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [31] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [32] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [33] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [34] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [35] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [36] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [37] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [38] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [39] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [40] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [41] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [42] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [43] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [44] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [45] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [46] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [47] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [48] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [49] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  [50] [{'statusCode': 'INVALID_TYPE_ON_FIELD_IN_RECORD', 'message': 'TriggerField: value not of required type: ', 'fields': ['TriggerField__c']}]
+  ... 381711 more errors truncated
+
+========================================================================
+END OF LOG
+========================================================================
