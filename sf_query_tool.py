@@ -12722,7 +12722,7 @@ def _load_automation_census() -> pd.DataFrame:
     # TriggerObjectOrEventApiName was added post-v59; use Label only in the REST query.
     flow_records: list[dict] = []
     flow_soql = (
-        "SELECT ApiName, MasterLabel, ProcessType, TriggerObjectOrEventLabel, IsActive, LastModifiedDate "
+        "SELECT ApiName, Label, ProcessType, TriggerObjectOrEventLabel, IsActive, LastModifiedDate "
         "FROM FlowDefinitionView LIMIT 2000"
     )
     try:
@@ -12813,7 +12813,7 @@ def _load_automation_census() -> pd.DataFrame:
             or _FALLBACK_NO_OBJECT_LABELS.get(process_type)
             or "No Object"
         )
-        _master_label = (r.get("MasterLabel") or "").strip()
+        _master_label = (r.get("Label") or r.get("MasterLabel") or "").strip()
         rows.append({
             "Object": obj, "Name": api_name,
             "Label": _master_label if _master_label and _master_label != api_name else "",
