@@ -1141,16 +1141,8 @@ def get_sf_connection() -> Salesforce:
     )
 
     st.markdown("## 🔐 Connect to Salesforce")
-    st.markdown("Click the button below to log in with your Salesforce credentials. Your browser will open the Salesforce login page where you can complete MFA as normal.")
-    st.markdown(f'''
-        <a href="{auth_url}" target="_self">
-            <button style="background:#017551;color:white;border:none;padding:14px 28px;
-                           font-size:16px;border-radius:6px;cursor:pointer;font-family:sans-serif;">
-                🔐 Log in to Salesforce
-            </button>
-        </a>
-    ''', unsafe_allow_html=True)
-    st.info("After logging in and completing MFA, you will be redirected back here automatically.")
+    st.markdown("Click the button below to log in with your Salesforce credentials. A new tab will open for Salesforce login — after completing MFA, you will be redirected back here automatically.")
+    st.link_button("🔐 Log in to Salesforce", auth_url)
     st.stop()
 
 
