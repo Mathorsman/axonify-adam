@@ -326,6 +326,10 @@ st.markdown("""
     --text-primary:   #f0f5f2;   /* headlines, labels        (13:1 on base) */
     --text-secondary: #b8ccbf;   /* body copy, descriptions   (7.2:1 on base) */
     --text-muted:     #6e8c7a;   /* timestamps, metadata only (3.9:1 — captions only) */
+    /* BORDERS — overridden per theme */
+    --border-subtle:  #1a2d22;
+    --nav-border:     #1a2d22;
+    --tab-border:     #1a2d22;
 }
 
 html, body, [class*="css"] {
@@ -355,12 +359,12 @@ html, body, [class*="css"] {
 }
 section[data-testid="stSidebar"] {
     background-color: var(--bg-surface) !important;
-    border-right: 1px solid #1a2d22;
+    border-right: 1px solid var(--border-subtle);
 }
 .stTabs [data-baseweb="tab-list"] {
     gap: 4px;
     background: var(--bg-base);
-    border-bottom: 1px solid #1a2d22;
+    border-bottom: 1px solid var(--tab-border);
     padding: 0 8px;
 }
 .stTabs [data-baseweb="tab"] {
@@ -436,7 +440,7 @@ section[data-testid="stSidebar"] {
 }
 .shortcut-card .sc-title { font-size:0.82rem; color:var(--text-secondary); font-weight:500; font-family:'IBM Plex Mono',monospace; }
 .shortcut-card .sc-desc  { font-size:0.72rem; color:var(--text-muted); margin-top:2px; }
-hr { border-color: #1a2d22 !important; }
+hr { border-color: var(--border-subtle) !important; }
 
 /* ── Sidebar navigation ──────────────────────────────────────────────────── */
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button,
@@ -465,6 +469,28 @@ section[data-testid="stSidebar"] div[data-testid="stBaseButton-secondary"] > but
     letter-spacing: 0.08em; text-transform: uppercase;
     padding: 8px 4px 4px 4px;
 }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Theme override — inject light-mode CSS variables and component overrides ──
+if st.session_state.get("theme_mode", "dark") == "light":
+    st.markdown("""
+<style>
+:root {
+    --bg-base:        #f4f9f6;
+    --bg-surface:     #ffffff;
+    --bg-raised:      #eaf5ee;
+    --bg-overlay:     #d4eddd;
+    --text-primary:   #0a1a10;
+    --text-secondary: #1e3828;
+    --text-muted:     #3d6650;
+    --border-subtle:  #c4ddd0;
+    --nav-border:     #b8d4c4;
+    --tab-border:     #c4ddd0;
+}
+.pill-active  { background: #d6f0e4; color: #017551; }
+.pill-retired { background: #fce4e0; color: #C0392B; }
+.safety-banner { background: #fff5e0; border-color: #FCBC68; color: #7a4f00; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -10865,6 +10891,16 @@ def render_sidebar_nav():
             help="Preview all changes before they execute. Strongly recommended for production.")
         auto_backup = st.toggle("Auto-Backup Before Changes", value=True, key="auto_backup",
             help="Saves affected records to CSV before any update or delete.")
+        light_mode = st.toggle(
+            "☀️ Light Mode" if st.session_state.get("theme_mode") == "dark" else "🌙 Dark Mode",
+            value=(st.session_state.get("theme_mode") == "light"),
+            key="theme_toggle",
+            help="Switch between dark and light interface themes.",
+        )
+        if light_mode:
+            st.session_state.theme_mode = "light"
+        else:
+            st.session_state.theme_mode = "dark"
 
         if not dry_run_mode:
             st.markdown('<div class="safety-banner">⚠️ Dry Run OFF — changes execute immediately.</div>', unsafe_allow_html=True)
@@ -21298,6 +21334,7 @@ def main():
         "ai_qa_request":       "",     # the request that triggered the current QA
         "excluded_ids":       set(),
         "page":               "dashboard",
+        "theme_mode":         "dark",
         # Dedupe tab state
         "dedupe_candidates":  None,
         "dedupe_review_idx":  0,
