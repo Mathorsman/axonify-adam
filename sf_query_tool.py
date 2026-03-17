@@ -532,6 +532,47 @@ PROTECTED_PREFIXES = [
 # ── Shared constants ──────────────────────────────────────────────────────────
 AI_MODEL      = "claude-sonnet-4-6"
 
+# Lightweight system prompt used ONLY for the pre-flight clarification check.
+# Intentionally separate from AI_SYSTEM_PROMPT so it stays small and fast.
+_AI_CLARIFY_SYSTEM_PROMPT = """\
+You are a SOQL query planner. Before generating a query, decide whether the user's
+request is specific enough, or whether one or two targeted questions would prevent a
+failed or wrong query.
+
+Ask a question ONLY when ALL of these are true:
+  • The missing info cannot be inferred from the schema or common sense.
+  • Without it the query would either fail or return clearly wrong results.
+  • The question is concrete and answerable in a sentence.
+
+NEVER ask about:
+  • Row limits / LIMIT clauses (handled by the UI toggle already)
+  • Formatting preferences or output style
+  • Things clearly stated in the request
+  • Standard well-known fields (Owner, Type, CreatedDate, etc.)
+
+Situations that DO warrant a question:
+  • User mentions a child/related object but doesn't say which fields to pull from it
+  • A filter value is genuinely ambiguous (e.g. "customers" when multiple Type values exist)
+  • A specific record name is mentioned but the exact spelling or ID is uncertain
+  • User asks to "compare" or "match" two things but the comparison field is unclear
+
+Return ONLY valid JSON — no other text:
+  {"ready": true, "questions": []}
+  OR
+  {
+    "ready": false,
+    "questions": [
+      {
+        "id":      "q1",
+        "text":    "Which fields from Tenant_ID__c do you want in the results?",
+        "type":    "text",
+        "hint":    "e.g. Tenant_ID__c, Status__c, Created_Date__c"
+      }
+    ]
+  }
+Maximum 2 questions. "type" is "text" for free-form or "choice" (include a "choices" list).
+"""
+
 COLOR_SUCCESS = "#00AA61"
 COLOR_ERROR   = "#F96041"
 COLOR_WARNING = "#FCBC68"
@@ -770,6 +811,63 @@ This rule applies to ALL queries, including multi-step queries. In FORMAT C quer
 both the child and parent step must include OwnerId (or equivalent) so the merge and
 python_filter can compare IDs directly rather than names.
 
+=== LOOKUP FIELD TRAVERSAL — ALWAYS USE THE TRAVERSE HINT ===
+The Available Fields list marks every reference field with a TRAVERSE hint, e.g.:
+  Customer_Success_Manager__c (reference → User) — Customer Success Manager
+      TRAVERSE: Customer_Success_Manager__r.{Name, Email, IsActive}
+
+Rules:
+1. ALWAYS use the exact relationship name shown in TRAVERSE — never guess it.
+   The relationship name is NOT always the field name minus "__c" plus "__r".
+   e.g.  ReportsToId         → ReportsTo.Name    (not ReportsToId__r.Name)
+         OwnerId             → Owner.Name         (not OwnerId__r.Name)
+         Customer_Success_Manager__c → Customer_Success_Manager__r.Name
+2. When the user asks to "show the name" for a lookup field, add both the ID field
+   AND the relationship traversal in the SELECT:
+   ✅ SELECT Id, Customer_Success_Manager__c, Customer_Success_Manager__r.Name FROM Account
+   ❌ SELECT Id, Customer_Success_Manager__c.Name FROM Account  (invalid syntax)
+   ❌ SELECT Id, Customer_Success_Manager__r.Name FROM Account  (missing the ID)
+3. If no TRAVERSE hint is shown for a reference field, the relationship is not
+   queryable via dot notation. Use the ID only, or use a two-step query.
+4. User says "show me the owner name" → use Owner.Name (standard; always available).
+   User says "show me the CSM name"   → use Customer_Success_Manager__r.Name.
+   User says "show me the username"   → OwnerId → Owner.Name or Owner.Username.
+
+=== CHILD OBJECT / RELATED RECORDS — SOQL SUBQUERIES ===
+When the user asks for data "from" a related child object (e.g. "show TenantIDs associated
+with each account", "include related contacts", "show open opportunities"), use a SOQL
+subquery — NOT a separate query and NOT a refusal.
+
+The user prompt will list available child relationships under "Child relationships on this
+object". Each line looks like:
+  Tenant_IDs__r → Tenant_ID__c (lookup field on child: Account__c)
+
+Subquery syntax — include child records inline:
+  SELECT Id, Name, (SELECT Id, Tenant_ID__c FROM Tenant_IDs__r) FROM Account
+
+Rules:
+1. Use the EXACT relationship name from the child relationships list — never guess it.
+2. Put the subquery inside the parent SELECT, in parentheses, BEFORE the FROM clause.
+3. In the subquery SELECT, choose the fields the user actually needs from the child object.
+   If you don't know the child object's fields, select Id plus any field whose API name
+   matches the user's request (e.g. user says "TenantID" → look for Tenant_ID__c or
+   similar on the child).
+4. SOQL subqueries support WHERE, ORDER BY, and LIMIT inside the subquery parentheses.
+5. NEVER say "the field doesn't exist" or "I couldn't find it" when a matching child
+   relationship IS listed — write the subquery instead.
+6. If no matching child relationship is listed, explain clearly in the explanation field
+   that the data is in a child object whose relationship name is not yet known, and
+   suggest the user check the object's related lists in Salesforce Setup.
+
+Example — correct:
+  SELECT Id, Name, Industry,
+    (SELECT Id, Tenant_ID__c, Status__c FROM Tenant_IDs__r)
+  FROM Account
+  WHERE Type = 'Customer'
+
+Example — incorrect (flat join attempt, not valid SOQL):
+  SELECT a.Id, a.Name, t.Tenant_ID__c FROM Account a, Tenant_ID__c t WHERE ...
+
 === SALESFORCE PERMISSIONS DATA MODEL ===
 Permissions are NOT stored on the User object. Use these objects instead:
 
@@ -820,7 +918,34 @@ CRITICAL SOQL LIMITATIONS — THESE CAUSE MALFORMED_QUERY AND MUST NEVER BE GENE
      Step 2: In Python, compare Contact.OwnerId to Account.OwnerId from the Account query
    OR: tell the user this comparison requires a formula field in Salesforce Setup.
 
-2. MULTI-LEVEL RELATIONSHIPS IN IN SUBQUERIES
+2. NOT OPERATOR — ONLY NEGATES A SINGLE CONDITION
+   In SOQL, NOT is a prefix that negates exactly one filter condition.
+   It CANNOT be placed before a compound expression or an OR/AND group.
+   ❌ (NOT Owner.Name LIKE '%Axonify%' OR Customer_Success_Manager__c = null)
+      — "unexpected token: 'OR'" error because NOT only covers the first condition
+   ❌ NOT (Type = 'Customer' OR Type = 'Prospect')
+      — same error; SOQL does not support NOT (group)
+
+   CORRECT APPROACH:
+   • To negate a LIKE, use NOT LIKE:
+       ✅ Owner.Name NOT LIKE '%Axonify%'
+   • To combine a negation with OR/AND, expand using De Morgan's law:
+       NOT (A OR B)  →  (NOT A AND NOT B)  →  write each condition separately
+       NOT (A AND B) →  (NOT A OR NOT B)
+   • To express "Owner doesn't contain 'Axonify' OR CSM is null":
+       ✅ (Owner.Name NOT LIKE '%Axonify%' OR Customer_Success_Manager__c = null)
+   • To negate an equality, use != or NOT LIKE instead of NOT field = value:
+       ✅ Status != 'Active'   (not:  NOT Status = 'Active')
+
+3. DUPLICATE FIELDS IN SELECT
+   Salesforce rejects queries where the same field appears more than once in SELECT.
+   ❌ SELECT Id, Name, Customer_Success_Manager__c, Customer_Success_Manager__c FROM Account
+      — "duplicate field selected: Customer_Success_Manager__c" INVALID_FIELD error
+   This commonly happens when a WHERE filter field is also added to SELECT separately.
+   RULE: Before finalising any SELECT list, deduplicate it. Each field must appear at most once.
+   ✅ SELECT Id, Name, Customer_Success_Manager__c FROM Account
+
+4. MULTI-LEVEL RELATIONSHIPS IN IN SUBQUERIES
    ❌ WHERE PermissionSet.Id IN (SELECT ...)   — "more than one level of relationships" error
    ❌ WHERE Assignee.ProfileId IN (SELECT ...) — same error
 
@@ -1174,6 +1299,7 @@ def get_object_fields(object_name: str) -> list[dict]:
     Returns field metadata for a Salesforce object.
     Cached for 5 minutes to avoid repeated describe() API calls.
     Each dict has: name, label, type, updateable, filterable.
+    For reference fields, also includes: relationshipName, referenceTo.
     """
     sf = get_sf_connection()
     try:
@@ -1194,11 +1320,49 @@ def get_object_fields(object_name: str) -> list[dict]:
                 entry["picklist"] = [
                     pv["value"] for pv in f["picklistValues"] if pv.get("active")
                 ]
+            # Capture relationship traversal info for lookup/master-detail fields
+            # so the AI knows the correct __r.Name syntax without guessing.
+            if f["type"] in ("reference",) and f.get("relationshipName"):
+                entry["relationshipName"] = f["relationshipName"]
+                ref_to = f.get("referenceTo") or []
+                if ref_to:
+                    entry["referenceTo"] = list(ref_to)
             fields.append(entry)
         return fields
     except Exception as e:
         st.error(f"Could not describe {object_name}: {e}")
         return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_object_child_relationships(object_name: str) -> list[dict]:
+    """
+    Returns child relationship metadata for a Salesforce object.
+    Cached for 5 minutes alongside get_object_fields().
+    Each dict has: relationshipName, childSObject, field.
+      relationshipName — the name used in SOQL subqueries  (e.g. 'Tenant_IDs__r')
+      childSObject     — the API name of the child object  (e.g. 'Tenant_ID__c')
+      field            — the lookup field on the child that points back to the parent
+    Rows where relationshipName is None are not queryable and are excluded.
+    """
+    sf = get_sf_connection()
+    try:
+        desc = getattr(sf, object_name).describe()
+        results = []
+        for cr in desc.get("childRelationships", []):
+            rel_name = cr.get("relationshipName")
+            if not rel_name:          # un-named relationships can't be subqueried
+                continue
+            if cr.get("deprecatedAndHidden"):
+                continue
+            results.append({
+                "relationshipName": rel_name,
+                "childSObject":     cr.get("childSObject", ""),
+                "field":            cr.get("field", ""),
+            })
+        return results
+    except Exception:
+        return []   # non-fatal — fall back to field-only guidance
 
 
 def run_soql(soql: str) -> pd.DataFrame:
@@ -1219,6 +1383,26 @@ def run_soql(soql: str) -> pd.DataFrame:
     """
     import urllib.parse
     sf = get_sf_connection()
+
+    # ── Deduplicate SELECT fields ──────────────────────────────────────────────
+    # Salesforce returns INVALID_FIELD "duplicate field selected" if the same
+    # field appears more than once in the SELECT list.  Strip duplicates while
+    # preserving order so the query still works even if the LLM emitted extras.
+    _select_match = re.match(
+        r"(?i)(SELECT\s+)(.+?)(\s+FROM\s+)",
+        soql,
+        flags=re.DOTALL,
+    )
+    if _select_match:
+        _pre, _fields_str, _post = _select_match.group(1), _select_match.group(2), _select_match.group(3)
+        _seen: dict[str, None] = {}
+        _deduped = []
+        for _f in [f.strip() for f in _fields_str.split(",")]:
+            _key = _f.lower()
+            if _key not in _seen:
+                _seen[_key] = None
+                _deduped.append(_f)
+        soql = _pre + ", ".join(_deduped) + _post + soql[_select_match.end():]
 
     # Salesforce hard limit is ~16,383 chars for the full URL.
     # The base URL (instance + /services/data/vXX.0/query?q=) is ~70 chars.
@@ -1899,6 +2083,7 @@ def generate_soql_from_natural_language(
     object_name: str,
     available_fields: list[dict],
     row_limit: int | None = None,
+    child_relationships: list[dict] | None = None,
 ) -> tuple[str, str, list[str], list[dict]]:
     """
     Sends a plain-English request to Claude and returns:
@@ -1934,7 +2119,22 @@ def generate_soql_from_natural_language(
 
     field_lines = []
     for f in ordered[:CAP]:
-        line = f"  {f['name']} ({f['type']}) — {f['label']}"
+        type_str = f["type"]
+        rel_name  = f.get("relationshipName")
+        ref_to    = f.get("referenceTo", [])
+        # For reference fields show the referenced object so the AI knows what
+        # it can traverse, e.g. "(reference → User)"
+        if rel_name and ref_to:
+            type_str = f"reference → {', '.join(ref_to)}"
+        line = f"  {f['name']} ({type_str}) — {f['label']}"
+        # Show the exact traversal syntax so the AI never has to guess __r names
+        if rel_name:
+            common_fields = "Name"
+            if "User" in ref_to:
+                common_fields = "Name, Email, IsActive"
+            elif "Account" in ref_to:
+                common_fields = "Name, Type, OwnerId"
+            line += f"\n      TRAVERSE: {rel_name}.{{{common_fields}}}"
         if f.get('picklist'):
             values = " | ".join(f['picklist'])
             line += f"\n      VALUES: {values}"
@@ -1964,8 +2164,45 @@ def generate_soql_from_natural_language(
             f"Available fields for {object_name}:\n{field_summary}"
         )
 
+    # Build a child-relationship hint block so the AI knows what subqueries are
+    # available without having to guess relationship names.
+    child_block = ""
+    if child_relationships:
+        req_lower = user_request.lower()
+        # Surface relationships whose child object or relationship name appears
+        # in the user request — always include them even if cap is hit.
+        matched_rels, other_rels = [], []
+        for cr in child_relationships:
+            child_api  = cr["childSObject"].lower()
+            rel_name   = cr["relationshipName"].lower()
+            child_bare = child_api.replace("__c", "").replace("_", " ")
+            rel_bare   = rel_name.replace("__r", "").replace("_", " ")
+            if (child_api in req_lower or rel_name in req_lower
+                    or child_bare in req_lower or rel_bare in req_lower):
+                matched_rels.append(cr)
+            else:
+                other_rels.append(cr)
+        # Always show matched ones; show up to 40 others as general reference
+        display_rels = matched_rels + other_rels[:40]
+        if display_rels:
+            lines = [
+                f"  {cr['relationshipName']} → {cr['childSObject']} "
+                f"(lookup field on child: {cr['field']})"
+                for cr in display_rels
+            ]
+            note = (f"Showing {len(display_rels)} of {len(child_relationships)} "
+                    "child relationships — all matches to your request are included.")
+            child_block = (
+                f"\n\nChild relationships on this object ({note}):\n"
+                + "\n".join(lines)
+                + "\n\nTo include child records in the query use a SOQL subquery:\n"
+                "  SELECT Id, Name, (SELECT Id, Field1__c FROM RelationshipName__r) FROM ParentObject\n"
+                "If the user asks for data 'from' a child/related object by name, use the matching "
+                "relationship above in a subquery rather than saying the data is unavailable."
+            )
+
     user_prompt = (
-        f"{object_context}\n\n"
+        f"{object_context}{child_block}\n\n"
         f"{limit_instruction}\n\n"
         f"User request: {user_request}\n\n"
         f"Return ONLY the JSON object. No explanation text before or after it."
@@ -2019,6 +2256,59 @@ def generate_soql_from_natural_language(
         parsed.get("safety_notes", []),
         fixed_steps,   # multi-step plan, empty list = single query
     )
+
+
+def analyze_query_intent(
+    user_request: str,
+    available_fields: list[dict],
+    child_relationships: list[dict] | None = None,
+) -> dict:
+    """
+    Fast pre-flight check that runs BEFORE generate_soql_from_natural_language.
+    Returns {"ready": bool, "questions": [...]}.
+    If ready=False the UI shows the questions so the user can fill them in before
+    the full generation call is made.
+    Uses a compact field/child list to keep the call fast (low max_tokens).
+    """
+    # Compact field list — names and types only, no picklist values
+    field_lines = [f"  {f['name']} ({f['type']})" for f in available_fields[:150]]
+    field_summary = "\n".join(field_lines)
+
+    child_lines = []
+    if child_relationships:
+        child_lines = [
+            f"  {cr['relationshipName']} → {cr['childSObject']}"
+            for cr in child_relationships[:60]
+        ]
+    child_summary = "\n".join(child_lines) if child_lines else "  (none)"
+
+    user_msg = (
+        f"User request: {user_request}\n\n"
+        f"Available fields (sample):\n{field_summary}\n\n"
+        f"Child relationships:\n{child_summary}\n\n"
+        "Is this specific enough to generate correct SOQL without guessing? "
+        "Return JSON only."
+    )
+
+    try:
+        resp = get_anthropic_client().messages.create(
+            model=AI_MODEL,
+            max_tokens=350,
+            system=_AI_CLARIFY_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw = resp.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?", "", raw).strip()
+        raw = re.sub(r"```$",          "", raw).strip()
+        if not raw:
+            return {"ready": True, "questions": []}
+        result = json.loads(raw)
+        if not isinstance(result.get("questions"), list):
+            result["questions"] = []
+        return result
+    except Exception:
+        # Any failure in the pre-flight check — just proceed to generation
+        return {"ready": True, "questions": []}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -10626,8 +10916,19 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
             "active tools, retired tools, and protected Axonify business fields."
         )
 
+        # ai_last_request is the source of truth for the text area content.
+        # We do NOT use key="ai_request" because Streamlit's behaviour when
+        # a keyed widget is not rendered (navigation away) is inconsistent
+        # across versions — it may delete the key, set it to "", or leave it
+        # unchanged, all of which break a simple "restore if absent" check.
+        # Without a key, Streamlit assigns an auto-key based on widget position:
+        #   • First render after navigation back → auto-key absent → value= used → ✓
+        #   • Reruns on the same page (button clicks) → auto-key present → value= ignored,
+        #     user's typed text preserved → ✓
+        #   • ai_last_request is a plain session-state entry, never auto-cleared → ✓
         ai_request = st.text_area(
             "What do you want to find?",
+            value=st.session_state.get("ai_last_request", ""),
             placeholder=(
                 "Examples:\n"
                 "• Show me all Accounts where InsideView ID is still populated\n"
@@ -10637,8 +10938,10 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                 "• Show me the full account hierarchy for Acme Corp"
             ),
             height=120,
-            key="ai_request",
         )
+        # Persist to backup key whenever the box has content.
+        if ai_request:
+            st.session_state["ai_last_request"] = ai_request
 
         limit_col, btn_col = st.columns([3, 1])
         with limit_col:
@@ -10654,30 +10957,122 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
         with btn_col:
             generate_btn = st.button("🤖  Generate Results", type="primary", key="gen_soql")
 
+        # Reset Q&A state whenever the user changes the request text
+        if ai_request.strip() != st.session_state.get("ai_qa_request", ""):
+            st.session_state.ai_qa_state     = None
+            st.session_state.ai_qa_questions = []
+            st.session_state.ai_qa_answers   = {}
+
+        # ── Local helper: run the full SOQL generation call ──────────────────
+        def _do_generate(request_text: str):
+            fields     = get_object_fields("Account")
+            child_rels = get_object_child_relationships("Account")
+            st.session_state.ai_generated_soql  = ""
+            st.session_state.ai_steps           = []
+            st.session_state.ai_explanation     = ""
+            st.session_state.ai_safety_notes    = []
+            st.session_state.ai_python_strategy = None
+            try:
+                soql, explanation, safety_notes, steps = generate_soql_from_natural_language(
+                    request_text, "Auto", fields,
+                    row_limit=ai_row_limit,
+                    child_relationships=child_rels,
+                )
+                st.session_state.ai_generated_soql = soql
+                st.session_state.ai_steps          = steps
+                st.session_state.ai_explanation    = explanation
+                st.session_state.ai_safety_notes   = safety_notes
+                st.session_state.ai_gen_count     += 1
+            except Exception as e:
+                st.error(f"AI generation failed: {e}")
+
         if generate_btn:
             if not ai_request.strip():
                 st.warning("Please describe what you want to find.")
+            elif st.session_state.ai_qa_state == "ready":
+                # Answers already collected — go straight to generation
+                with st.spinner("Generating query..."):
+                    _do_generate(st.session_state.get("_ai_enriched_request", ai_request))
             else:
-                with st.spinner("Thinking..."):
-                    # Use Account fields as context; AI will detect the right object
-                    fields = get_object_fields("Account")
-                    # Clear previous state so the UI re-renders cleanly
-                    st.session_state.ai_generated_soql = ""
-                    st.session_state.ai_steps          = []
-                    st.session_state.ai_explanation    = ""
-                    st.session_state.ai_safety_notes   = []
-                    st.session_state.ai_python_strategy = None
-                    try:
-                        soql, explanation, safety_notes, steps = generate_soql_from_natural_language(
-                            ai_request, "Auto", fields, row_limit=ai_row_limit
+                # Pre-flight: ask the AI whether it needs more info first
+                with st.spinner("Analyzing your request..."):
+                    fields     = get_object_fields("Account")
+                    child_rels = get_object_child_relationships("Account")
+                    clarify    = analyze_query_intent(ai_request, fields, child_rels)
+
+                if clarify.get("ready", True) or not clarify.get("questions"):
+                    # No clarification needed — generate immediately
+                    st.session_state.ai_qa_state   = "ready"
+                    st.session_state.ai_qa_request = ai_request.strip()
+                    with st.spinner("Generating query..."):
+                        _do_generate(ai_request)
+                else:
+                    # Store questions and show Q&A form on next render
+                    st.session_state.ai_qa_state     = "questioning"
+                    st.session_state.ai_qa_questions = clarify["questions"]
+                    st.session_state.ai_qa_request   = ai_request.strip()
+
+        # ── Q&A clarification form ────────────────────────────────────────────
+        if (st.session_state.get("ai_qa_state") == "questioning"
+                and st.session_state.get("ai_qa_questions")):
+            st.markdown("---")
+            st.markdown("### 💬 A couple of quick questions before I generate")
+            st.caption(
+                "Your answers help me write a more accurate query. "
+                "Leave blank to let the AI make a reasonable default choice."
+            )
+
+            questions = st.session_state.ai_qa_questions
+            with st.form("ai_qa_form"):
+                for q in questions:
+                    qid = q.get("id", "q")
+                    if q.get("type") == "choice" and q.get("choices"):
+                        st.radio(
+                            q["text"],
+                            options=q["choices"],
+                            key=f"qa_{qid}",
                         )
-                        st.session_state.ai_generated_soql = soql
-                        st.session_state.ai_steps          = steps
-                        st.session_state.ai_explanation    = explanation
-                        st.session_state.ai_safety_notes   = safety_notes
-                        st.session_state.ai_gen_count     += 1
-                    except Exception as e:
-                        st.error(f"AI generation failed: {e}")
+                    else:
+                        st.text_input(
+                            q["text"],
+                            placeholder=q.get("hint", ""),
+                            key=f"qa_{qid}",
+                        )
+
+                col_go, col_skip = st.columns([2, 1])
+                with col_go:
+                    qa_submit = st.form_submit_button(
+                        "Generate with context →", type="primary"
+                    )
+                with col_skip:
+                    qa_skip = st.form_submit_button(
+                        "Skip — generate anyway",
+                        help="Generate the query without answering — may be less precise.",
+                    )
+
+            if qa_submit or qa_skip:
+                # Collect answers (empty string if skipped)
+                answers = {}
+                if qa_submit:
+                    answers = {
+                        q.get("id", "q"): st.session_state.get(f"qa_{q.get('id','q')}", "")
+                        for q in questions
+                    }
+                st.session_state.ai_qa_answers = answers
+                st.session_state.ai_qa_state   = "ready"
+
+                # Build enriched request by appending the Q&A context
+                enriched = ai_request.strip()
+                answered = [(q, answers.get(q.get("id","q"),"").strip()) for q in questions]
+                answered = [(q, a) for q, a in answered if a]
+                if answered:
+                    enriched += "\n\nAdditional context:\n" + "\n".join(
+                        f"- {q['text']}\n  Answer: {a}" for q, a in answered
+                    )
+                st.session_state["_ai_enriched_request"] = enriched
+
+                with st.spinner("Generating query..."):
+                    _do_generate(enriched)
 
         # ── Case 1: AI could not produce any query ────────────────────────────
         if (st.session_state.ai_explanation
@@ -11212,7 +11607,7 @@ OBJECT BEING UPDATED: {object_name}
 
 AXONIFY PROTECTED FIELDS — NEVER update these:
 - Any field starting with: Axonify_, bizible2__, Ruby__, Gong__, X6sense, Zendesk_, Spiff_, Clay_, Mutiny_
-- Revenue/ARR fields, Customer_Success_Manager__c, Account_Health_ fields
+- Revenue/ARR fields (e.g. ARR__c, Net_ARR__c), Account_Health_ fields
 
 === CRITICAL: IDs vs NAMES ===
 Salesforce stores lookup/owner fields as IDs (e.g. OwnerId, AccountId), NOT as names.
@@ -11234,6 +11629,18 @@ RULES:
 4. Never update protected fields.
 5. Return ONLY valid JSON — no markdown, no explanation outside the JSON.
 6. In your explanation, say which column you are copying FROM so the user can verify.
+7. MULTI-OPERATION REQUESTS: If the user asks to update more than one field (e.g. "set Owner to X AND clear CSM"),
+   include ALL fields in the updates array. Each entry in the array handles one field. Never return an empty
+   response — always produce a valid JSON plan.
+8. CLEARING A FIELD: To set a field to null/blank, use value_source "fixed" and fixed_value null (JSON null,
+   not the string "null").
+9. CONDITIONAL UPDATES ("only where X"): This tool applies the update to ALL records in the result set.
+   If the user says "only update records where [condition]" and the condition column IS in the result set,
+   note in the explanation that the update will be applied to all 278 rows and suggest the user re-run
+   the query with that filter first to narrow the set. Set update_field to "" and put the advice in
+   explanation. If the condition column IS NOT in the result set at all (e.g. "where ultimate parent type
+   is X" but no parent-type column exists), return update_field "" and explain that the user needs to
+   add that field to their query first.
 
 === SAFETY NOTES — KEEP THESE MINIMAL ===
 The tool generates its own data-driven warnings after you respond (record counts, value
@@ -11253,25 +11660,31 @@ If none of the above apply, return: "safety_notes": []
 
 RESPONSE FORMAT:
 {{
-  "update_field": "ApiFieldName__c",
-  "update_object": "{object_name}",
-  "value_source": "column" | "fixed",
-  "value_column": "ColumnNameFromResults",
-  "fixed_value": "value",
-  "explanation": "Plain English summary, e.g. 'Will copy Account OwnerId into OwnerId on each Contact'",
+  "updates": [
+    {{
+      "update_field": "ApiFieldName__c",
+      "value_source": "column" or "fixed",
+      "value_column": "ColumnNameFromResults or null",
+      "fixed_value": "value or null",
+      "explanation": "Plain English summary of this specific field change"
+    }}
+  ],
+  "explanation": "Overall plain English summary of all changes combined",
   "safety_notes": []
 }}
 
-If the request is ambiguous or unsafe, return:
+Always return an "updates" array even if there is only one field to update.
+
+If the request is ambiguous or unsafe return:
 {{
-  "update_field": "",
+  "updates": [],
   "explanation": "Reason you cannot proceed",
   "safety_notes": ["explain the issue"]
 }}"""
                             try:
                                 resp = get_anthropic_client().messages.create(
                                     model=AI_MODEL,
-                                    max_tokens=600,
+                                    max_tokens=900,
                                     messages=[{
                                         "role": "user",
                                         "content": (
@@ -11282,9 +11695,59 @@ If the request is ambiguous or unsafe, return:
                                     system=update_system_prompt,
                                 )
                                 raw = resp.content[0].text.strip()
-                                raw = re.sub(r"^```(?:json)?", "", raw).strip().rstrip("```").strip()
-                                plan = json.loads(raw)
+                                # Robustly extract the first complete JSON object from the response,
+                                # ignoring any surrounding markdown fences or explanatory text.
+                                first_brace = raw.find("{")
+                                if first_brace == -1:
+                                    raise ValueError(
+                                        "Claude did not return a JSON response. Raw response: " + raw[:300]
+                                    )
+                                depth = 0
+                                end_pos = -1
+                                in_string = False
+                                escape_next = False
+                                for i, ch in enumerate(raw[first_brace:], start=first_brace):
+                                    if escape_next:
+                                        escape_next = False
+                                        continue
+                                    if ch == "\\" and in_string:
+                                        escape_next = True
+                                        continue
+                                    if ch == '"':
+                                        in_string = not in_string
+                                        continue
+                                    if in_string:
+                                        continue
+                                    if ch == "{":
+                                        depth += 1
+                                    elif ch == "}":
+                                        depth -= 1
+                                        if depth == 0:
+                                            end_pos = i
+                                            break
+                                candidate = raw[first_brace:end_pos + 1] if end_pos > first_brace else raw[first_brace:]
+                                plan = json.loads(candidate)
+                                # Normalise: if Claude returns the old single-field format, wrap it in
+                                # the new updates array so the rest of the code only handles one shape.
+                                if "updates" not in plan and "update_field" in plan:
+                                    plan = {
+                                        "updates": [{
+                                            "update_field": plan.get("update_field", ""),
+                                            "value_source": plan.get("value_source", "fixed"),
+                                            "value_column": plan.get("value_column"),
+                                            "fixed_value":  plan.get("fixed_value"),
+                                            "explanation":  plan.get("explanation", ""),
+                                        }],
+                                        "explanation":  plan.get("explanation", ""),
+                                        "safety_notes": plan.get("safety_notes", []),
+                                    }
                                 st.session_state.ai_update_plan = plan
+                            except json.JSONDecodeError:
+                                st.error(
+                                    "AI update planning failed: the response wasn't valid JSON. "
+                                    "Try rephrasing your request."
+                                )
+                                st.session_state.ai_update_plan = None
                             except Exception as e:
                                 st.error(f"AI update planning failed: {e}")
                                 st.session_state.ai_update_plan = None
@@ -11299,180 +11762,166 @@ If the request is ambiguous or unsafe, return:
                     for note in plan.get("safety_notes", []):
                         st.markdown(f'<div class="safety-banner">⚠️ {note}</div>', unsafe_allow_html=True)
 
-                    update_field  = plan.get("update_field", "")
-                    value_source  = plan.get("value_source", "fixed")
-                    value_column  = plan.get("value_column", "")
-                    fixed_value   = plan.get("fixed_value", "")
+                    updates = plan.get("updates", [])
+                    valid_updates = [u for u in updates if u.get("update_field")]
 
-                    # ── Data-driven warnings computed from the full result set ──
-                    # These are accurate because they use all rows, not just the AI's 5-row sample.
-                    if update_field and value_source == "column" and value_column and value_column in df.columns:
-                        total_rows  = len(df)
-
-                        # How many records will actually change (new value ≠ current value)?
-                        current_col = None
-                        for candidate in [update_field, update_field + "_x"]:
-                            if candidate in df.columns:
-                                current_col = candidate
-                                break
-                        if current_col:
-                            changing = df[df[current_col] != df[value_column]]
-                            unchanged = total_rows - len(changing)
-                            if unchanged > 0:
-                                st.markdown(
-                                    f'<div class="safety-banner" style="background:#0a3022;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
-                                    f'ℹ️ {len(changing):,} of {total_rows:,} records will change. '
-                                    f'{unchanged:,} already match and will be skipped.</div>',
-                                    unsafe_allow_html=True,
-                                )
-
-                        # How many distinct values will be written?
-                        distinct_new = df[value_column].nunique()
-                        if distinct_new == 1:
-                            single_val = df[value_column].iloc[0]
-                            # Look up a human-readable name for the ID if available
-                            name_col = None
-                            if value_column.endswith("Id") or "Id" in value_column:
-                                base = value_column.replace("Id", "").replace("_", " ").strip()
-                                for c in df.columns:
-                                    if "name" in c.lower() and base.lower().split()[-1] in c.lower():
-                                        name_col = c
-                                        break
-                            label = f"{df[name_col].iloc[0]} ({single_val})" if name_col else single_val
-                            st.markdown(
-                                f'<div class="safety-banner">⚠️ All {total_rows:,} records will be assigned '
-                                f'the same value: <strong>{label}</strong>. Verify this is intended.</div>',
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            st.markdown(
-                                f'<div class="safety-banner" style="background:#0a3022;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
-                                f'ℹ️ {distinct_new} distinct values will be written across {total_rows:,} records '
-                                f'(each record gets its own value from <strong>{value_column}</strong>).</div>',
-                                unsafe_allow_html=True,
-                            )
-
-                    if not update_field:
+                    if not valid_updates:
                         st.error("The AI could not determine a safe update. Revise your request.")
                     else:
-                        # ── ID column safety check ────────────────────────
-                        # If the AI picked a .Name relationship column instead of the
-                        # corresponding ID column, auto-correct and warn the user.
-                        if value_source == "column" and value_column:
-                            # Check if this looks like a name field when an ID exists
-                            if value_column.endswith(".Name") or value_column.endswith("_Name"):
-                                # e.g. "Owner.Name" → try "OwnerId" or "OwnerId_y"
-                                base = value_column.replace(".Name", "").replace("_Name", "")
-                                id_candidates = [
-                                    f"{base}Id",
-                                    f"{base}Id_x",
-                                    f"{base}Id_y",
-                                    f"{base}_Id",
-                                ]
-                                found_id = next((c for c in id_candidates if c in df.columns), None)
-                                if found_id:
-                                    st.warning(
-                                        f"⚠️ The AI selected `{value_column}` (a name field) but Salesforce "
-                                        f"requires an ID to update `{update_field}`. "
-                                        f"Auto-corrected to use `{found_id}` instead."
-                                    )
-                                    value_column = found_id
-                                else:
-                                    st.error(
-                                        f"🚫 `{value_column}` is a name field and cannot be written to "
-                                        f"`{update_field}`. Re-run your query to also include the "
-                                        f"corresponding ID column (e.g. `{base}Id`)."
-                                    )
-                                    st.stop()
-
-                        # Build the per-record payload and a preview DataFrame
-                        payload      = []
-                        preview_rows = []
-
                         # ── Current value lookup helper ────────────────────────────
-                        # Defined once here (not inside the loop) for efficiency.
-                        # Searches broadly because rename_columns may have changed
-                        # OwnerId_x → "Contact Owner" etc. by the time we get here.
                         def _find_current(row, field):
                             row_dict = row.to_dict() if hasattr(row, "to_dict") else dict(row)
                             cols = list(row_dict.keys())
-
-                            # 1. Exact match
                             if field in row_dict and pd.notna(row_dict[field]):
                                 return row_dict[field]
-
-                            # 2. _x suffix (pre-rename Contact side of merge)
                             x_key = field + "_x"
                             if x_key in row_dict and pd.notna(row_dict[x_key]):
                                 return row_dict[x_key]
-
-                            # 3. Case-insensitive exact match
                             field_lower = field.lower()
                             for c in cols:
                                 if c.lower() == field_lower and pd.notna(row_dict[c]):
                                     return row_dict[c]
-
-                            # 4. Strip "Id" suffix and look for any column whose name
-                            #    contains the base word — e.g. OwnerId → finds
-                            #    "Contact Owner", "Contact.OwnerId", "Owner Name" etc.
                             if field.endswith("Id"):
-                                base = field[:-2].lower()  # "owner", "account", etc.
+                                base = field[:-2].lower()
                                 for c in cols:
                                     if base in c.lower() and pd.notna(row_dict[c]):
                                         return row_dict[c]
-
-                            # 5. Direct name equivalent: OwnerId → Owner.Name
                             if field.endswith("Id"):
                                 for suffix in [".Name", "_Name", " Name"]:
                                     name_key = field[:-2] + suffix
                                     if name_key in row_dict and pd.notna(row_dict[name_key]):
                                         return row_dict[name_key]
-
                             return "(not in results)"
 
-                        for _, row in df.iterrows():
-                            record_id = row.get("Id")
-                            if value_source == "column" and value_column and value_column in row:
-                                new_val = row[value_column]
-                                # If it's still a dict (nested relationship object), extract Id
-                                if isinstance(new_val, dict):
-                                    new_val = new_val.get("Id") or new_val.get("id") or str(new_val)
-                            else:
-                                new_val = fixed_value if fixed_value else None
+                        # ── Per-update safety checks and resolved values ───────────
+                        resolved = []   # list of (update_field, value_source, value_column, fixed_value) after checks
+                        skip_render = False
+                        for upd in valid_updates:
+                            update_field = upd.get("update_field", "")
+                            value_source = upd.get("value_source", "fixed")
+                            value_column = upd.get("value_column") or ""
+                            fixed_value  = upd.get("fixed_value")
+                            upd_explain  = upd.get("explanation", "")
 
-                            payload.append({"Id": record_id, update_field: new_val})
+                            if len(valid_updates) > 1:
+                                st.markdown(f"**Field: `{update_field}`** — {upd_explain}")
 
-                            preview_rows.append({
-                                "Id":              record_id,
-                                "Field to Update": update_field,
-                                "Current Value":   _find_current(row, update_field),
-                                "→ New Value":     new_val,
-                            })
+                            # Data-driven warnings
+                            if value_source == "column" and value_column and value_column in df.columns:
+                                total_rows = len(df)
+                                current_col = next(
+                                    (c for c in [update_field, update_field + "_x"] if c in df.columns), None
+                                )
+                                if current_col:
+                                    changing = df[df[current_col] != df[value_column]]
+                                    unchanged = total_rows - len(changing)
+                                    if unchanged > 0:
+                                        st.markdown(
+                                            f'<div class="safety-banner" style="background:#0a3022;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                                            f'ℹ️ {len(changing):,} of {total_rows:,} records will change. '
+                                            f'{unchanged:,} already match and will be skipped.</div>',
+                                            unsafe_allow_html=True,
+                                        )
+                                distinct_new = df[value_column].nunique()
+                                if distinct_new == 1:
+                                    single_val = df[value_column].iloc[0]
+                                    name_col = None
+                                    if value_column.endswith("Id") or "Id" in value_column:
+                                        base = value_column.replace("Id", "").replace("_", " ").strip()
+                                        for c in df.columns:
+                                            if "name" in c.lower() and base.lower().split()[-1] in c.lower():
+                                                name_col = c
+                                                break
+                                    label = f"{df[name_col].iloc[0]} ({single_val})" if name_col else single_val
+                                    st.markdown(
+                                        f'<div class="safety-banner">⚠️ All {total_rows:,} records will be assigned '
+                                        f'the same value: <strong>{label}</strong>. Verify this is intended.</div>',
+                                        unsafe_allow_html=True,
+                                    )
+                                else:
+                                    st.markdown(
+                                        f'<div class="safety-banner" style="background:#0a3022;border-color:{COLOR_SUCCESS};color:{COLOR_SUCCESS};">'
+                                        f'ℹ️ {distinct_new} distinct values will be written across {total_rows:,} records '
+                                        f'(each record gets its own value from <strong>{value_column}</strong>).</div>',
+                                        unsafe_allow_html=True,
+                                    )
 
-                        preview_df = pd.DataFrame(preview_rows)
+                            # ID column safety check
+                            if value_source == "column" and value_column:
+                                if value_column.endswith(".Name") or value_column.endswith("_Name"):
+                                    base = value_column.replace(".Name", "").replace("_Name", "")
+                                    id_candidates = [f"{base}Id", f"{base}Id_x", f"{base}Id_y", f"{base}_Id"]
+                                    found_id = next((c for c in id_candidates if c in df.columns), None)
+                                    if found_id:
+                                        st.warning(
+                                            f"⚠️ The AI selected `{value_column}` (a name field) but Salesforce "
+                                            f"requires an ID to update `{update_field}`. "
+                                            f"Auto-corrected to use `{found_id}` instead."
+                                        )
+                                        value_column = found_id
+                                    else:
+                                        st.error(
+                                            f"🚫 `{value_column}` is a name field and cannot be written to "
+                                            f"`{update_field}`. Re-run your query to also include the "
+                                            f"corresponding ID column (e.g. `{base}Id`)."
+                                        )
+                                        skip_render = True
+                                        break
 
-                        # Show a sample so the user can verify before confirming
-                        st.markdown(f"**Preview — first 10 of {len(payload):,} records:**")
-                        st.dataframe(preview_df.head(10), width="stretch", hide_index=True)
+                            resolved.append((update_field, value_source, value_column, fixed_value))
 
-                        col1, col2 = st.columns([2, 1])
-                        with col1:
-                            if st.button(
-                                f"🔍  Confirm and Queue Dry Run ({len(payload):,} records)",
-                                type="primary",
-                                key="confirm_ai_update"
-                            ):
-                                st.session_state.dry_run_pending = {
-                                    "operation": "Update",
-                                    "df":        preview_df,
-                                    "payload":   payload,
-                                    "object":    object_name,
-                                }
-                                st.session_state.ai_update_plan = None
-                        with col2:
-                            if st.button("✏️  Edit request", key="edit_ai_update"):
-                                st.session_state.ai_update_plan = None
-                                st.rerun()
+                        if not skip_render and resolved:
+                            # ── Build combined payload and preview ─────────────────
+                            # payload: one dict per record with Id + all update fields
+                            payload_map = {}   # record_id → {Id, field1: val1, field2: val2, ...}
+                            preview_cols = {"Id": []}  # col_name → list of values for preview df
+                            for upd_field, _, _, _ in resolved:
+                                preview_cols[f"→ {upd_field}"] = []
+
+                            for _, row in df.iterrows():
+                                record_id = row.get("Id")
+                                rec = payload_map.setdefault(record_id, {"Id": record_id})
+                                for upd_field, upd_source, upd_col, upd_fixed in resolved:
+                                    if upd_source == "column" and upd_col and upd_col in row:
+                                        new_val = row[upd_col]
+                                        if isinstance(new_val, dict):
+                                            new_val = new_val.get("Id") or new_val.get("id") or str(new_val)
+                                    else:
+                                        new_val = upd_fixed if upd_fixed is not None else None
+                                    rec[upd_field] = new_val
+
+                            payload = list(payload_map.values())
+
+                            # Build preview df: one row per record, one column per updated field
+                            preview_rows = []
+                            for rec in payload:
+                                row_preview = {"Id": rec["Id"]}
+                                for upd_field, _, _, _ in resolved:
+                                    row_preview[f"→ {upd_field}"] = rec.get(upd_field)
+                                preview_rows.append(row_preview)
+                            preview_df = pd.DataFrame(preview_rows)
+
+                            st.markdown(f"**Preview — first 10 of {len(payload):,} records:**")
+                            st.dataframe(preview_df.head(10), width="stretch", hide_index=True)
+
+                            col1, col2 = st.columns([2, 1])
+                            with col1:
+                                if st.button(
+                                    f"🔍  Confirm and Queue Dry Run ({len(payload):,} records)",
+                                    type="primary",
+                                    key="confirm_ai_update"
+                                ):
+                                    st.session_state.dry_run_pending = {
+                                        "operation": "Update",
+                                        "df":        preview_df,
+                                        "payload":   payload,
+                                        "object":    object_name,
+                                    }
+                                    st.session_state.ai_update_plan = None
+                            with col2:
+                                if st.button("✏️  Edit request", key="edit_ai_update"):
+                                    st.session_state.ai_update_plan = None
+                                    st.rerun()
 
             # ── MANUAL UPDATE ─────────────────────────────────────────────
             elif action_type == "✏️  Update a field value":
@@ -19964,7 +20413,7 @@ def _purge_classify_dirty(
 
     def _has_junk(v):
         lower = v.lower().strip()
-        return any(kw in lower for kw in junk_keywords)
+        return any(_re.search(r'\b' + _re.escape(kw) + r'\b', lower) for kw in junk_keywords)
 
     def _is_all_caps(v):
         v = v.strip()
@@ -20837,6 +21286,16 @@ def main():
         "ai_gen_count":        0,
         "ai_python_strategy":  None,
         "ai_detected_object":  "Account",
+        # Persists the plain-English query text across page navigation.
+        # st.session_state["ai_request"] (the widget key) is cleared by Streamlit
+        # whenever the text area is not rendered (i.e. while on the Results page).
+        # This backup key is a regular session state entry — never auto-cleared.
+        "ai_last_request":     "",
+        # Q&A clarification state for the query builder
+        "ai_qa_state":         None,   # None | "questioning" | "ready"
+        "ai_qa_questions":     [],     # list of {id, text, type, hint/choices}
+        "ai_qa_answers":       {},     # {question_id: answer_string}
+        "ai_qa_request":       "",     # the request that triggered the current QA
         "excluded_ids":       set(),
         "page":               "dashboard",
         # Dedupe tab state
