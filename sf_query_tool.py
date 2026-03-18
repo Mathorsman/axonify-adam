@@ -100,10 +100,14 @@ def _get_db_connection():
     """Returns a persistent psycopg2 connection to Supabase. Returns None if not configured."""
     url = _get_secret("SUPABASE_DB_URL")
     if not url:
+        st.session_state["_db_error"] = "SUPABASE_DB_URL secret not found"
         return None
     try:
-        return psycopg2.connect(url)
-    except Exception:
+        conn = psycopg2.connect(url)
+        st.session_state.pop("_db_error", None)
+        return conn
+    except Exception as e:
+        st.session_state["_db_error"] = f"psycopg2 connect failed: {e}"
         return None
 
 
@@ -13371,7 +13375,9 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
                 else:
                     st.error("Snapshot failed — check Supabase connection.")
         else:
-            st.caption("Supabase not configured — snapshots unavailable.")
+            _db_err = st.session_state.get("_db_error", "SUPABASE_DB_URL not set or connection failed")
+            st.caption(f"Supabase not configured — snapshots unavailable.")
+            st.error(f"DB diagnostic: {_db_err}")
     with col_autsnap:
         if _supabase_live:
             _new_auto = st.toggle(
