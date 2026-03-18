@@ -653,6 +653,42 @@ if st.session_state.get("theme_mode", "dark") == "light":
     --nav-border:     #b8d4c4;
     --tab-border:     #c4ddd0;
 }
+/* Override Streamlit's config.toml dark base for all major containers */
+html, body, [class*="css"],
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="block-container"],
+.main, .block-container {
+    background-color: var(--bg-base) !important;
+    color: var(--text-secondary) !important;
+}
+[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div:first-child {
+    background-color: var(--bg-surface) !important;
+    color: var(--text-secondary) !important;
+}
+[data-testid="stHeader"] {
+    background-color: var(--bg-base) !important;
+}
+/* Inputs, selects, textareas */
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stSelectbox"] > div,
+[data-testid="stMultiSelect"] > div {
+    background-color: var(--bg-raised) !important;
+    color: var(--text-primary) !important;
+}
+/* Metrics, expanders, cards */
+[data-testid="stMetric"],
+[data-testid="stExpander"],
+[data-testid="stDataFrame"] {
+    background-color: var(--bg-surface) !important;
+    color: var(--text-secondary) !important;
+}
+/* Tab panels */
+.stTabs [data-baseweb="tab-list"] { background: var(--bg-base) !important; }
+.stTabs [data-baseweb="tab-panel"] { background: var(--bg-base) !important; }
 .pill-active  { background: #d6f0e4; color: #017551; }
 .pill-retired { background: #fce4e0; color: #C0392B; }
 .safety-banner { background: #fff5e0; border-color: #FCBC68; color: #7a4f00; }
