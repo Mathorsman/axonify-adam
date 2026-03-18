@@ -425,6 +425,26 @@ def db_save_runbook_run(runbook_id: int, status: str,
         return False
 
 
+def db_get_operation_logs(n: int = 30) -> list[dict]:
+    """Fetch the last N rows from operation_logs."""
+    conn = _get_db_connection()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT sf_user, operation, object_name, record_count,
+                          succeeded, failed, created_at
+                     FROM operation_logs
+                    ORDER BY created_at DESC
+                    LIMIT %s""",
+                (n,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
 def db_get_runbook_runs(runbook_id: "int | None" = None, limit: int = 50) -> list[dict]:
     """Fetch runbook run history, optionally filtered to a single runbook."""
     conn = _get_db_connection()
@@ -3055,6 +3075,19 @@ def render_dry_run_panel(df: pd.DataFrame, operation: str, object_name: str):
     """
     record_count = len(df)
     icon = "🔴" if operation == "Delete" else "🟡"
+
+    # ── AI plain-language impact preview (cached per unique call) ─────────────
+    _impact_key = f"_impact_{operation}_{object_name}_{record_count}"
+    if _impact_key not in st.session_state:
+        _q = (
+            f"In one sentence, describe in plain English what it means to "
+            f"{operation.lower()} {record_count:,} {object_name} records in Salesforce. "
+            f"In a second sentence, state the rollback path if something goes wrong."
+        )
+        st.session_state[_impact_key] = ask_adam(_q)
+    _impact = st.session_state.get(_impact_key, "")
+    if _impact:
+        st.info(f"**In plain terms:** {_impact}")
 
     st.markdown("---")
     st.subheader(f"{icon} Dry Run Preview — {operation}")
@@ -19288,124 +19321,169 @@ def render_change_log_page(dry_run_mode: bool, auto_backup: bool):
         "AI-formatted release notes. SetupAuditTrail retains 180 days of history."
     )
 
-    col_start, col_end, col_load = st.columns([2, 2, 1])
-    import datetime as _dt
-    today = _dt.date.today()
-    week_ago = today - _dt.timedelta(days=7)
+    tab_audit, tab_stakeholder = st.tabs(["Audit Trail", "Stakeholder Summary"])
 
-    with col_start:
-        start_date = st.date_input("Start date", value=week_ago, key="cl_start_date")
-    with col_end:
-        end_date = st.date_input("End date", value=today, key="cl_end_date")
-    with col_load:
-        st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
-        load_clicked = st.button("Load Changes", key="cl_load_btn")
-
-    if start_date > end_date:
-        st.error("Start date must be before end date.")
-        return
-
-    days_range = (end_date - start_date).days
-    if days_range > 180:
-        st.warning("SetupAuditTrail retains only 180 days. Results before that will be empty.")
-
-    if load_clicked:
-        with st.spinner("Fetching audit trail…"):
-            try:
-                rows = _fetch_audit_trail_range(
-                    start_date.isoformat(), end_date.isoformat()
-                )
-                st.session_state["_cl_rows"] = rows
-                if len(rows) >= 2000:
-                    st.warning("Result capped at 2,000 rows. Narrow the date range for complete results.")
-            except Exception as exc:
-                st.error(f"SetupAuditTrail unavailable: {exc}")
-                return
-
-    rows = st.session_state.get("_cl_rows")
-    if rows is None:
-        st.info("Select a date range and click **Load Changes**.")
-        return
-
-    if not rows:
-        st.info("No audit trail entries found for the selected date range.")
-        return
-
-    st.markdown(f"**{len(rows):,} entries loaded.**")
-
-    # ── Noise filter ──────────────────────────────────────────────────────────
-    cl_show_all = st.toggle(
-        "Show all entries (include logins, report runs, etc.)",
-        value=False,
-        key="cl_show_all",
-    )
-    df = pd.DataFrame([{
-        "_row_idx": i,
-        "Date":    (r.get("CreatedDate") or "")[:16].replace("T", " "),
-        "User":    (r.get("CreatedBy") or {}).get("Name", "Unknown"),
-        "Section": r.get("Section", ""),
-        "Action":  r.get("Action", ""),
-        "Display": r.get("Display", ""),
-    } for i, r in enumerate(rows)])
-
-    df_signal = filter_audit_trail(df, signal_only=not cl_show_all)
-    cl_filtered = len(df) - len(df_signal)
-    if not cl_show_all:
+    with tab_stakeholder:
+        st.subheader("Stakeholder Summary")
         st.caption(
-            f"Showing {len(df_signal):,} of {len(df):,} entries "
-            f"({cl_filtered:,} filtered)"
+            "Pulls your recent A.D.A.M. operations from Supabase and generates a "
+            "plain-English summary ready to paste into a Slack message or email."
         )
+        if _get_db_connection() is None:
+            st.info("Stakeholder summaries require Supabase to be configured.")
+        else:
+            col_n, col_btn = st.columns([2, 1])
+            with col_n:
+                n_ops = st.number_input(
+                    "Number of recent operations to include",
+                    min_value=5, max_value=200, value=30, step=5,
+                    key="sh_n_ops",
+                )
+            with col_btn:
+                st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+                gen_summary_btn = st.button("🤖  Generate Summary", key="sh_gen_btn", type="primary")
 
-    # ── Filters ───────────────────────────────────────────────────────────────
-    col_f1, col_f2 = st.columns(2)
-    with col_f1:
-        sections = ["All"] + sorted(df_signal["Section"].dropna().unique().tolist())
-        sel_section = st.selectbox("Filter by Section", sections, key="cl_section_filter")
-    with col_f2:
-        users = ["All"] + sorted(df_signal["User"].dropna().unique().tolist())
-        sel_user = st.selectbox("Filter by User", users, key="cl_user_filter")
+            if gen_summary_btn:
+                ops = db_get_operation_logs(n=int(n_ops))
+                if not ops:
+                    st.info("No operations found in Supabase yet. Run some updates or deletes first.")
+                else:
+                    from collections import defaultdict as _dd
+                    grouped = _dd(list)
+                    for op in ops:
+                        k = f"{op.get('operation','?')} on {op.get('object_name','?')}"
+                        grouped[k].append(op)
+                    group_lines = [
+                        f"- {k}: {len(v)} operation(s), "
+                        f"{sum(o.get('record_count', 0) or 0 for o in v):,} records total, "
+                        f"{sum(o.get('succeeded', 0) or 0 for o in v):,} succeeded"
+                        for k, v in grouped.items()
+                    ]
+                    question = (
+                        f"I am an Axonify Salesforce admin. Here are the last {len(ops)} data "
+                        f"operations I ran in A.D.A.M.:\n\n"
+                        + "\n".join(group_lines)
+                        + "\n\nWrite a plain-English summary suitable for my non-technical manager. "
+                        "Describe what changed, the scale of the changes, and whether they look "
+                        "successful. Keep it to 3-5 sentences. No technical jargon."
+                    )
+                    with st.spinner("Generating summary…"):
+                        st.session_state["_sh_summary"] = ask_adam(question)
 
-    view = df_signal.copy()
-    if sel_section != "All":
-        view = view[view["Section"] == sel_section]
-    if sel_user != "All":
-        view = view[view["User"] == sel_user]
+            summary = st.session_state.get("_sh_summary")
+            if summary:
+                st.markdown("**Summary ready to share:**")
+                st.text_area(
+                    "Copy and paste into Slack or email:",
+                    value=summary, height=200, key="sh_summary_out",
+                )
 
-    st.dataframe(
-        view[["Date", "User", "Section", "Display"]],
-        use_container_width=True,
-        hide_index=True,
-    )
+    with tab_audit:
+        import datetime as _dt
+        today = _dt.date.today()
+        week_ago = today - _dt.timedelta(days=7)
 
-    st.markdown("---")
+        col_start, col_end, col_load = st.columns([2, 2, 1])
+        with col_start:
+            start_date = st.date_input("Start date", value=week_ago, key="cl_start_date")
+        with col_end:
+            end_date = st.date_input("End date", value=today, key="cl_end_date")
+        with col_load:
+            st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+            load_clicked = st.button("Load Changes", key="cl_load_btn")
 
-    # ── AI Release Notes ──────────────────────────────────────────────────────
-    st.subheader("Generate Release Notes")
-    if st.button("🤖  Generate with AI", key="cl_gen_btn"):
-        with st.spinner("Generating release notes with Claude…"):
-            try:
-                # Pass only signal rows so the AI doesn't waste tokens on noise.
-                signal_indices = set(df_signal["_row_idx"].tolist())
-                signal_rows = [r for i, r in enumerate(rows) if i in signal_indices]
-                notes = _generate_release_notes(signal_rows)
-                st.session_state["_cl_notes"] = notes
-            except Exception as exc:
-                st.error(f"AI generation failed: {exc}")
+        if start_date > end_date:
+            st.error("Start date must be before end date.")
+        else:
+            days_range = (end_date - start_date).days
+            if days_range > 180:
+                st.warning("SetupAuditTrail retains only 180 days. Results before that will be empty.")
 
-    notes = st.session_state.get("_cl_notes")
-    if notes:
-        st.markdown(notes)
-        st.markdown("---")
+            if load_clicked:
+                with st.spinner("Fetching audit trail…"):
+                    try:
+                        rows = _fetch_audit_trail_range(
+                            start_date.isoformat(), end_date.isoformat()
+                        )
+                        st.session_state["_cl_rows"] = rows
+                        if len(rows) >= 2000:
+                            st.warning("Result capped at 2,000 rows. Narrow the date range for complete results.")
+                    except Exception as exc:
+                        st.error(f"SetupAuditTrail unavailable: {exc}")
 
-        col_md, _ = st.columns([2, 3])
-        with col_md:
-            st.download_button(
-                "📥  Export as Markdown",
-                data=notes.encode("utf-8"),
-                file_name=f"release_notes_{start_date}_{end_date}.md",
-                mime="text/markdown",
-                key="cl_export_md",
-            )
+            rows = st.session_state.get("_cl_rows")
+            if rows is None:
+                st.info("Select a date range and click **Load Changes**.")
+            elif not rows:
+                st.info("No audit trail entries found for the selected date range.")
+            else:
+                st.markdown(f"**{len(rows):,} entries loaded.**")
+
+                cl_show_all = st.toggle(
+                    "Show all entries (include logins, report runs, etc.)",
+                    value=False, key="cl_show_all",
+                )
+                df = pd.DataFrame([{
+                    "_row_idx": i,
+                    "Date":    (r.get("CreatedDate") or "")[:16].replace("T", " "),
+                    "User":    (r.get("CreatedBy") or {}).get("Name", "Unknown"),
+                    "Section": r.get("Section", ""),
+                    "Action":  r.get("Action", ""),
+                    "Display": r.get("Display", ""),
+                } for i, r in enumerate(rows)])
+
+                df_signal = filter_audit_trail(df, signal_only=not cl_show_all)
+                cl_filtered = len(df) - len(df_signal)
+                if not cl_show_all:
+                    st.caption(
+                        f"Showing {len(df_signal):,} of {len(df):,} entries "
+                        f"({cl_filtered:,} filtered)"
+                    )
+
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    sections = ["All"] + sorted(df_signal["Section"].dropna().unique().tolist())
+                    sel_section = st.selectbox("Filter by Section", sections, key="cl_section_filter")
+                with col_f2:
+                    users = ["All"] + sorted(df_signal["User"].dropna().unique().tolist())
+                    sel_user = st.selectbox("Filter by User", users, key="cl_user_filter")
+
+                view = df_signal.copy()
+                if sel_section != "All":
+                    view = view[view["Section"] == sel_section]
+                if sel_user != "All":
+                    view = view[view["User"] == sel_user]
+
+                st.dataframe(
+                    view[["Date", "User", "Section", "Display"]],
+                    use_container_width=True, hide_index=True,
+                )
+
+                st.markdown("---")
+                st.subheader("Generate Release Notes")
+                if st.button("🤖  Generate with AI", key="cl_gen_btn"):
+                    with st.spinner("Generating release notes with Claude…"):
+                        try:
+                            signal_indices = set(df_signal["_row_idx"].tolist())
+                            signal_rows = [r for i, r in enumerate(rows) if i in signal_indices]
+                            notes = _generate_release_notes(signal_rows)
+                            st.session_state["_cl_notes"] = notes
+                        except Exception as exc:
+                            st.error(f"AI generation failed: {exc}")
+
+                notes = st.session_state.get("_cl_notes")
+                if notes:
+                    st.markdown(notes)
+                    st.markdown("---")
+                    col_md, _ = st.columns([2, 3])
+                    with col_md:
+                        st.download_button(
+                            "📥  Export as Markdown",
+                            data=notes.encode("utf-8"),
+                            file_name=f"release_notes_{start_date}_{end_date}.md",
+                            mime="text/markdown",
+                            key="cl_export_md",
+                        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -19874,6 +19952,33 @@ The script reads `digest_schedule.json` for configuration. No arguments required
 
             lines = ["## A.D.A.M. Org Health Digest\n"]
             thresholds = cfg.get("thresholds", _DIGEST_DEFAULTS["thresholds"])
+
+            # AI plain-language summary at the top when enabled
+            if cfg.get("include_ai"):
+                _ops = db_get_operation_logs(n=30)
+                if _ops:
+                    from collections import defaultdict as _dd2
+                    _grp = _dd2(list)
+                    for _op in _ops:
+                        _k = f"{_op.get('operation','?')} on {_op.get('object_name','?')}"
+                        _grp[_k].append(_op)
+                    _gl = [
+                        f"- {k}: {len(v)} ops, "
+                        f"{sum(o.get('record_count',0) or 0 for o in v):,} records"
+                        for k, v in _grp.items()
+                    ]
+                    _q = (
+                        "Write a 2-3 sentence 'This Week in A.D.A.M.' section for a "
+                        "non-technical manager. Describe what data operations happened "
+                        "recently. Keep it brief and jargon-free.\n\nOperations:\n"
+                        + "\n".join(_gl)
+                    )
+                    with st.spinner("Generating AI summary…"):
+                        _ai_summary = ask_adam(_q)
+                    lines.insert(1,
+                        f"### This Week in A.D.A.M. — Auto-generated summary\n\n"
+                        f"{_ai_summary}\n\n---"
+                    )
 
             if cfg["checks"].get("api_usage") and limits:
                 pct = _limit_pct("DailyApiRequests")
