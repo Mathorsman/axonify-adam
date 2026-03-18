@@ -33,6 +33,8 @@ Setup:
        SF_CLIENT_SECRET   = your Connected App consumer secret
        ANTHROPIC_API_KEY  = your Anthropic API key
        SF_DOMAIN          = "login" for production, "test" for sandbox
+       REDIRECT_URI       = OAuth callback URL (e.g. https://axonify-adam.streamlit.app/callback)
+                            Set in Streamlit Cloud secrets for Cloud; omit locally (auto-detected)
        
        Note: Username/password are NOT needed. The tool uses OAuth 2.0 web
        flow — you log in via browser including MFA, just like normal.
@@ -1419,7 +1421,7 @@ def _exchange_code_for_token(code: str) -> dict:
         "code":          code,
         "client_id":     _get_secret("SF_CLIENT_ID"),
         "client_secret": _get_secret("SF_CLIENT_SECRET"),
-        "redirect_uri":  f"{_get_base_url()}/callback",
+        "redirect_uri":  _get_secret("REDIRECT_URI", _get_base_url() + "/callback"),
     }).encode()
     req  = urllib.request.Request(token_url, data=payload, method="POST")
     resp = urllib.request.urlopen(req)
@@ -1488,13 +1490,18 @@ def get_sf_connection() -> Salesforce:
         f"https://{domain}.salesforce.com/services/oauth2/authorize"
         f"?response_type=code"
         f"&client_id={urllib.parse.quote(client_id)}"
-        f"&redirect_uri={urllib.parse.quote(_get_base_url() + '/callback')}"
+        f"&redirect_uri={urllib.parse.quote(_get_secret('REDIRECT_URI', _get_base_url() + '/callback'))}"
         f"&prompt=login"
     )
 
     st.markdown("## 🔐 Connect to Salesforce")
-    st.markdown("Click the button below to log in with your Salesforce credentials. A new tab will open for Salesforce login — after completing MFA, you will be redirected back here automatically.")
-    st.link_button("🔐 Log in to Salesforce", auth_url)
+    st.markdown("Click the button below to log in with your Salesforce credentials. After completing MFA, you will be redirected back here automatically.")
+    st.markdown(
+        f'<a href="{auth_url}" target="_top" style="display:inline-block;padding:10px 20px;'
+        f'background:#017551;color:#ffffff;border-radius:6px;text-decoration:none;font-weight:600;">'
+        f'🔐 Log in to Salesforce</a>',
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 
