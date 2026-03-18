@@ -13379,14 +13379,20 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
                     st.error("Snapshot failed — check Supabase connection.")
         else:
             st.caption("Supabase not configured — snapshots unavailable.")
-            _db_err = _DB_CONN_ERROR or "unknown (cache_resource may not have run yet — try rebooting the app)"
-            st.error(f"DB diagnostic: {_db_err}")
-            # Show all secret keys present (not values) to help debug missing secrets
-            try:
-                _secret_keys = list(st.secrets.keys())
-            except Exception:
-                _secret_keys = ["(could not read st.secrets)"]
-            st.caption(f"Secrets found: {_secret_keys}")
+            # Bypass cache: attempt a fresh connection right here to get the real error
+            _diag_url = _get_secret("SUPABASE_DB_URL")
+            if not _diag_url:
+                st.error("DB diagnostic: SUPABASE_DB_URL secret not found")
+            else:
+                try:
+                    import psycopg2 as _pg2
+                    _diag_conn = _pg2.connect(_diag_url, connect_timeout=10)
+                    _diag_conn.close()
+                    st.success("DB diagnostic: connection succeeded — clearing cache and reloading")
+                    _get_db_connection.clear()
+                    st.rerun()
+                except Exception as _diag_exc:
+                    st.error(f"DB diagnostic: psycopg2.connect() failed: {_diag_exc}")
     with col_autsnap:
         if _supabase_live:
             _new_auto = st.toggle(
