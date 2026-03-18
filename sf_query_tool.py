@@ -52,8 +52,7 @@ import re
 import urllib.parse
 import urllib.request
 import time
-import psycopg2
-import psycopg2.extras
+from supabase import create_client as _sb_create_client
 
 import pandas as pd
 import streamlit as st
@@ -94,107 +93,78 @@ def _get_base_url() -> str:
     return "http://localhost:8501"
 
 
-# ── Supabase database connection ───────────────────────────────────────────────
-_DB_CONN_ERROR: str | None = None  # module-level; set during first connect attempt
+# ── Supabase client (uses HTTPS REST API — works on free tier) ─────────────────
 
 @st.cache_resource
 def _get_db_connection():
-    """Returns a persistent psycopg2 connection to Supabase. Returns None if not configured."""
-    global _DB_CONN_ERROR
-    url = _get_secret("SUPABASE_DB_URL")
-    if not url:
-        _DB_CONN_ERROR = "SUPABASE_DB_URL secret not found (checked st.secrets + os.environ)"
+    """Returns a Supabase client. Returns None if secrets are not configured."""
+    url = _get_secret("SUPABASE_URL")
+    key = _get_secret("SUPABASE_KEY")
+    if not url or not key:
         return None
     try:
-        conn = psycopg2.connect(url, connect_timeout=10)
-        _DB_CONN_ERROR = None
-        return conn
-    except Exception as e:
-        _DB_CONN_ERROR = f"psycopg2.connect() failed: {e}"
+        return _sb_create_client(url, key)
+    except Exception:
         return None
 
 
-# ── Database CRUD helpers ──────────────────────────────────────────────────────
+# ── Database CRUD helpers (Supabase REST client) ───────────────────────────────
 
 def db_save_query(sf_user: str, sf_instance: str, object_name: str, soql: str,
                   row_count: int, result_data: list) -> str | None:
-    """Insert a completed query into query_history. Returns the UUID or None."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return None
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO query_history
-                     (sf_user, sf_instance, object_name, soql, row_count,
-                      rows_stored, result_data)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
-                   RETURNING id""",
-                (sf_user, sf_instance, object_name, soql, row_count,
-                 min(row_count, 1000), psycopg2.extras.Json(result_data[:1000])),
-            )
-            conn.commit()
-            return str(cur.fetchone()[0])
+        res = sb.table("query_history").insert({
+            "sf_user": sf_user, "sf_instance": sf_instance,
+            "object_name": object_name, "soql": soql,
+            "row_count": row_count, "rows_stored": min(row_count, 1000),
+            "result_data": result_data[:1000],
+        }).execute()
+        return str(res.data[0]["id"]) if res.data else None
     except Exception as e:
-        conn.rollback()
         st.warning(f"Could not save query to database: {e}")
         return None
 
 
 def db_get_history(sf_user: str, all_users: bool = False) -> list[dict]:
-    """Fetch up to 50 recent query_history rows. Filters by sf_user unless all_users=True."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return []
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            if all_users:
-                cur.execute(
-                    "SELECT * FROM query_history ORDER BY run_at DESC LIMIT 50"
-                )
-            else:
-                cur.execute(
-                    "SELECT * FROM query_history WHERE sf_user = %s ORDER BY run_at DESC LIMIT 50",
-                    (sf_user,),
-                )
-            return [dict(r) for r in cur.fetchall()]
+        q = sb.table("query_history").select("*").order("run_at", desc=True).limit(50)
+        if not all_users:
+            q = q.eq("sf_user", sf_user)
+        return q.execute().data or []
     except Exception:
         return []
 
 
 def db_save_backup(sf_user: str, operation: str, object_name: str,
                    record_count: int, csv_text: str) -> str | None:
-    """Insert a backup CSV into the backups table. Returns the UUID or None."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return None
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO backups
-                     (sf_user, operation, object_name, record_count, csv_data)
-                   VALUES (%s, %s, %s, %s, %s)
-                   RETURNING id""",
-                (sf_user, operation, object_name, record_count, csv_text),
-            )
-            conn.commit()
-            return str(cur.fetchone()[0])
+        res = sb.table("backups").insert({
+            "sf_user": sf_user, "operation": operation,
+            "object_name": object_name, "record_count": record_count,
+            "csv_data": csv_text,
+        }).execute()
+        return str(res.data[0]["id"]) if res.data else None
     except Exception as e:
-        conn.rollback()
         st.warning(f"Could not save backup to database: {e}")
         return None
 
 
 def db_get_backup(backup_id: str) -> str | None:
-    """Retrieve csv_data by backup UUID. Returns the CSV string or None."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return None
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT csv_data FROM backups WHERE id = %s", (backup_id,))
-            row = cur.fetchone()
-            return row[0] if row else None
+        res = sb.table("backups").select("csv_data").eq("id", backup_id).execute()
+        return res.data[0]["csv_data"] if res.data else None
     except Exception:
         return None
 
@@ -203,149 +173,109 @@ def db_save_operation_log(sf_user: str, operation: str, object_name: str,
                           soql: str, payload: list, result: dict,
                           backup_id: str | None, excluded_count: int,
                           log_text: str) -> str | None:
-    """Insert a structured operation log row. Returns the UUID or None."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return None
     try:
         succeeded = result.get("success", 0)
         failed    = result.get("failed", 0)
         errors    = result.get("errors", [])
         if operation == "Update" and payload and isinstance(payload[0], dict):
-            changes   = psycopg2.extras.Json({k: v for k, v in payload[0].items() if k != "Id"})
+            changes    = {k: v for k, v in payload[0].items() if k != "Id"}
             record_ids = [r.get("Id", "") for r in payload if isinstance(r, dict)]
         else:
-            changes   = psycopg2.extras.Json({})
-            record_ids = payload if payload and isinstance(payload[0], str) else [r.get("Id", "") for r in payload if isinstance(r, dict)]
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO operation_logs
-                     (sf_user, operation, object_name, soql, record_count,
-                      succeeded, failed, excluded, backup_id, changes,
-                      record_ids, errors, log_text)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   RETURNING id""",
-                (sf_user, operation, object_name, soql, len(payload),
-                 succeeded, failed, excluded_count,
-                 backup_id, changes, record_ids,
-                 psycopg2.extras.Json(errors), log_text),
-            )
-            conn.commit()
-            return str(cur.fetchone()[0])
+            changes    = {}
+            record_ids = (payload if payload and isinstance(payload[0], str)
+                          else [r.get("Id", "") for r in payload if isinstance(r, dict)])
+        res = sb.table("operation_logs").insert({
+            "sf_user": sf_user, "operation": operation, "object_name": object_name,
+            "soql": soql, "record_count": len(payload),
+            "succeeded": succeeded, "failed": failed, "excluded": excluded_count,
+            "backup_id": backup_id, "changes": changes,
+            "record_ids": record_ids, "errors": errors, "log_text": log_text,
+        }).execute()
+        return str(res.data[0]["id"]) if res.data else None
     except Exception as e:
-        conn.rollback()
         st.warning(f"Could not save operation log to database: {e}")
         return None
 
 
 def db_save_merge_log(sf_user: str, object_name: str, results_log: list[dict],
                       backup_id: str | None, log_text: str) -> str | None:
-    """Insert a BulkMerge log row. Returns the UUID or None."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return None
     try:
         succeeded = sum(1 for r in results_log if r.get("Status", "").startswith("✅"))
         failed    = sum(1 for r in results_log if r.get("Status", "").startswith("❌"))
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO operation_logs
-                     (sf_user, operation, object_name, record_count,
-                      succeeded, failed, backup_id, errors, log_text)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   RETURNING id""",
-                (sf_user, "BulkMerge", object_name, len(results_log),
-                 succeeded, failed, backup_id,
-                 psycopg2.extras.Json(results_log), log_text),
-            )
-            conn.commit()
-            return str(cur.fetchone()[0])
+        res = sb.table("operation_logs").insert({
+            "sf_user": sf_user, "operation": "BulkMerge", "object_name": object_name,
+            "record_count": len(results_log), "succeeded": succeeded, "failed": failed,
+            "backup_id": backup_id, "errors": results_log, "log_text": log_text,
+        }).execute()
+        return str(res.data[0]["id"]) if res.data else None
     except Exception as e:
-        conn.rollback()
         st.warning(f"Could not save merge log to database: {e}")
         return None
 
 
 def db_get_config(config_key: str) -> dict | list | None:
-    """Read a config value from app_config by key. Returns parsed JSON or None."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return None
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT config_value FROM app_config WHERE config_key = %s",
-                (config_key,),
-            )
-            row = cur.fetchone()
-            return row[0] if row else None
+        res = sb.table("app_config").select("config_value").eq("config_key", config_key).execute()
+        return res.data[0]["config_value"] if res.data else None
     except Exception:
         return None
 
 
 def db_save_config(config_key: str, config_value: dict | list, updated_by: str = "unknown") -> bool:
-    """Upsert a config value into app_config. Returns True on success."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return False
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO app_config (config_key, config_value, updated_by)
-                   VALUES (%s, %s, %s)
-                   ON CONFLICT (config_key) DO UPDATE
-                     SET config_value = EXCLUDED.config_value,
-                         updated_at   = now(),
-                         updated_by   = EXCLUDED.updated_by""",
-                (config_key, psycopg2.extras.Json(config_value), updated_by),
-            )
-            conn.commit()
-            return True
+        sb.table("app_config").upsert(
+            {"config_key": config_key, "config_value": config_value, "updated_by": updated_by},
+            on_conflict="config_key",
+        ).execute()
+        return True
     except Exception as e:
-        conn.rollback()
         st.warning(f"Could not save config to database: {e}")
         return False
 
 
 def db_save_health_snapshot(metrics: list[dict]) -> bool:
-    """Insert one row per metric into org_health_snapshots. Returns True on success."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return False
     try:
-        with conn.cursor() as cur:
-            for m in metrics:
-                if m.get("value", -1) < 0:
-                    continue  # skip unavailable metrics
-                cur.execute(
-                    """INSERT INTO org_health_snapshots
-                         (metric_key, metric_label, value, category)
-                       VALUES (%s, %s, %s, %s)""",
-                    (m["metric_key"], m["metric_label"], m["value"], m["category"]),
-                )
-            conn.commit()
+        rows = [
+            {"metric_key": m["metric_key"], "metric_label": m["metric_label"],
+             "value": m["value"], "category": m["category"]}
+            for m in metrics if m.get("value", -1) >= 0
+        ]
+        if rows:
+            sb.table("org_health_snapshots").insert(rows).execute()
         return True
     except Exception as e:
-        conn.rollback()
         st.warning(f"Could not save health snapshot: {e}")
         return False
 
 
 def db_get_health_snapshots(days: int = 60) -> list[dict]:
-    """Fetch all health snapshot rows from the last `days` days."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return []
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """SELECT snapshot_at, metric_key, metric_label, value, category
-                     FROM org_health_snapshots
-                    WHERE snapshot_at >= now() - (%s * INTERVAL '1 day')
-                    ORDER BY snapshot_at ASC""",
-                (days,),
-            )
-            return [dict(r) for r in cur.fetchall()]
+        import datetime as _dt
+        cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=days)).isoformat()
+        res = (sb.table("org_health_snapshots")
+               .select("snapshot_at,metric_key,metric_label,value,category")
+               .gte("snapshot_at", cutoff)
+               .order("snapshot_at")
+               .execute())
+        return res.data or []
     except Exception:
         return []
 
@@ -353,127 +283,86 @@ def db_get_health_snapshots(days: int = 60) -> list[dict]:
 # ── Runbook db helpers ────────────────────────────────────────────────────────
 
 def db_get_runbooks() -> list[dict]:
-    """Fetch all runbooks ordered by creation date."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return []
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM runbooks ORDER BY created_at DESC")
-            return [dict(r) for r in cur.fetchall()]
+        return sb.table("runbooks").select("*").order("created_at", desc=True).execute().data or []
     except Exception:
         return []
 
 
 def db_save_runbook(runbook: dict) -> "int | None":
-    """Insert a new runbook. Returns new id or None on failure."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return None
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO runbooks (name, description, schedule, steps, is_active)
-                   VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-                (
-                    runbook.get("name", ""),
-                    runbook.get("description", ""),
-                    runbook.get("schedule", "manual"),
-                    psycopg2.extras.Json(runbook.get("steps", [])),
-                    runbook.get("is_active", True),
-                ),
-            )
-            new_id = cur.fetchone()[0]
-            conn.commit()
-            return new_id
+        res = sb.table("runbooks").insert({
+            "name": runbook.get("name", ""),
+            "description": runbook.get("description", ""),
+            "schedule": runbook.get("schedule", "manual"),
+            "steps": runbook.get("steps", []),
+            "is_active": runbook.get("is_active", True),
+        }).execute()
+        return res.data[0]["id"] if res.data else None
     except Exception:
-        conn.rollback()
         return None
 
 
 def db_update_runbook(runbook_id: int, updates: dict) -> bool:
-    """Update specified fields on an existing runbook."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return False
     try:
-        with conn.cursor() as cur:
-            safe = {}
-            for k, v in updates.items():
-                safe[k] = psycopg2.extras.Json(v) if k == "steps" else v
-            set_clause = ", ".join(f"{k} = %s" for k in safe)
-            values = list(safe.values()) + [runbook_id]
-            cur.execute(f"UPDATE runbooks SET {set_clause} WHERE id = %s", values)
-            conn.commit()
+        sb.table("runbooks").update(updates).eq("id", runbook_id).execute()
         return True
     except Exception:
-        conn.rollback()
         return False
 
 
 def db_save_runbook_run(runbook_id: int, status: str,
                         step_results: list, triggered_by: str = "manual") -> bool:
-    """Record the result of a runbook execution."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return False
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO runbook_runs (runbook_id, status, step_results, triggered_by)
-                   VALUES (%s, %s, %s, %s)""",
-                (runbook_id, status,
-                 psycopg2.extras.Json(step_results), triggered_by),
-            )
-            conn.commit()
+        sb.table("runbook_runs").insert({
+            "runbook_id": runbook_id, "status": status,
+            "step_results": step_results, "triggered_by": triggered_by,
+        }).execute()
         return True
     except Exception:
-        conn.rollback()
         return False
 
 
 def db_get_operation_logs(n: int = 30) -> list[dict]:
-    """Fetch the last N rows from operation_logs."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return []
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """SELECT sf_user, operation, object_name, record_count,
-                          succeeded, failed, created_at
-                     FROM operation_logs
-                    ORDER BY created_at DESC
-                    LIMIT %s""",
-                (n,),
-            )
-            return [dict(r) for r in cur.fetchall()]
+        res = (sb.table("operation_logs")
+               .select("sf_user,operation,object_name,record_count,succeeded,failed,created_at")
+               .order("created_at", desc=True)
+               .limit(n)
+               .execute())
+        return res.data or []
     except Exception:
         return []
 
 
 def db_get_runbook_runs(runbook_id: "int | None" = None, limit: int = 50) -> list[dict]:
-    """Fetch runbook run history, optionally filtered to a single runbook."""
-    conn = _get_db_connection()
-    if conn is None:
+    sb = _get_db_connection()
+    if sb is None:
         return []
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            if runbook_id is not None:
-                cur.execute(
-                    "SELECT * FROM runbook_runs WHERE runbook_id = %s "
-                    "ORDER BY run_at DESC LIMIT %s",
-                    (runbook_id, limit),
-                )
-            else:
-                cur.execute(
-                    """SELECT rr.*, rb.name AS runbook_name
-                         FROM runbook_runs rr
-                    LEFT JOIN runbooks rb ON rr.runbook_id = rb.id
-                        ORDER BY rr.run_at DESC LIMIT %s""",
-                    (limit,),
-                )
-            return [dict(r) for r in cur.fetchall()]
+        if runbook_id is not None:
+            res = (sb.table("runbook_runs").select("*")
+                   .eq("runbook_id", runbook_id)
+                   .order("run_at", desc=True).limit(limit).execute())
+        else:
+            res = (sb.table("runbook_runs").select("*, runbooks(name)")
+                   .order("run_at", desc=True).limit(limit).execute())
+        return res.data or []
     except Exception:
         return []
 
@@ -13378,21 +13267,7 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
                 else:
                     st.error("Snapshot failed — check Supabase connection.")
         else:
-            st.caption("Supabase not configured — snapshots unavailable.")
-            # Bypass cache: attempt a fresh connection right here to get the real error
-            _diag_url = _get_secret("SUPABASE_DB_URL")
-            if not _diag_url:
-                st.error("DB diagnostic: SUPABASE_DB_URL secret not found")
-            else:
-                try:
-                    import psycopg2 as _pg2
-                    _diag_conn = _pg2.connect(_diag_url, connect_timeout=10)
-                    _diag_conn.close()
-                    st.success("DB diagnostic: connection succeeded — clearing cache and reloading")
-                    _get_db_connection.clear()
-                    st.rerun()
-                except Exception as _diag_exc:
-                    st.error(f"DB diagnostic: psycopg2.connect() failed: {_diag_exc}")
+            st.caption("Supabase not configured — add SUPABASE_URL and SUPABASE_KEY to Streamlit secrets.")
     with col_autsnap:
         if _supabase_live:
             _new_auto = st.toggle(
