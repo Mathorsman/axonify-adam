@@ -1496,11 +1496,15 @@ def get_sf_connection() -> Salesforce:
 
     st.markdown("## 🔐 Connect to Salesforce")
     st.markdown("Click the button below to log in with your Salesforce credentials. After completing MFA, you will be redirected back here automatically.")
-    st.markdown(
-        f'<a href="{auth_url}" target="_top" style="display:inline-block;padding:10px 20px;'
-        f'background:#017551;color:#ffffff;border-radius:6px;text-decoration:none;font-weight:600;">'
-        f'🔐 Log in to Salesforce</a>',
-        unsafe_allow_html=True,
+    import streamlit.components.v1 as _stc
+    _stc.html(
+        f"""<a href="{auth_url}" target="_top"
+               style="display:inline-block;padding:10px 22px;background:#017551;
+                      color:#ffffff;border-radius:6px;text-decoration:none;
+                      font-family:'IBM Plex Sans',sans-serif;font-weight:600;font-size:15px;">
+             🔐 Log in to Salesforce
+           </a>""",
+        height=55,
     )
     st.stop()
 
