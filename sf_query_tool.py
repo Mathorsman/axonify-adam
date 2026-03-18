@@ -21943,6 +21943,63 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = val
 
+    # ── Header ────────────────────────────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div class="app-header">
+      <h1>⚡ A.D.A.M.</h1>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v7.0</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Sidebar ────────────────────────────────────────────────────────────────────────────────
+    with st.sidebar:
+        dry_run_mode, auto_backup = render_sidebar_nav()
+
+    # ── Page routing ──────────────────────────────────────────────────────────────────────────
+    page = st.session_state.page
+    if page == "dashboard":
+        render_dashboard_page(dry_run_mode, auto_backup)
+    elif page == "query":
+        render_query_page(dry_run_mode, auto_backup)
+    elif page == "results":
+        render_results_page(dry_run_mode, auto_backup)
+    elif page == "csv_loader":
+        render_csv_loader_page(dry_run_mode, auto_backup)
+    elif page == "force_update":
+        render_force_update_page(dry_run_mode, auto_backup)
+    elif page == "dedupe":
+        render_dedupe_page(dry_run_mode, auto_backup)
+    elif page == "contact_purge":
+        render_contact_purge_page(dry_run_mode, auto_backup)
+    elif page == "website_cleanup":
+        render_website_cleanup_page(dry_run_mode, auto_backup)
+    elif page == "archival":
+        render_archival_page(dry_run_mode, auto_backup)
+    elif page == "territory":
+        render_territory_tab()
+    elif page == "permissions":
+        render_permissions_page(dry_run_mode, auto_backup)
+    elif page == "automation_inventory":
+        render_automation_inventory_page(dry_run_mode, auto_backup)
+    elif page == "schema_explorer":
+        render_schema_explorer_page(dry_run_mode, auto_backup)
+    elif page == "report_scanner":
+        render_report_scanner_page(dry_run_mode, auto_backup)
+    elif page == "ownership_transfer":
+        render_ownership_transfer_page(dry_run_mode, auto_backup)
+    elif page == "history":
+        render_history_page()
+    elif page == "change_log":
+        render_change_log_page(dry_run_mode, auto_backup)
+    elif page == "shortcuts":
+        render_shortcuts_page(dry_run_mode, auto_backup)
+    elif page == "digest_config":
+        render_digest_config_page(dry_run_mode, auto_backup)
+    elif page == "runbooks":
+        render_runbooks_page(dry_run_mode, auto_backup)
+    else:
+        render_dashboard_page(dry_run_mode, auto_backup)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ADMIN RUNBOOKS  (page = "runbooks")  — Feature 4
