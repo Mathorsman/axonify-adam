@@ -497,9 +497,9 @@ st.markdown("""
     --tab-border:     #1a2d22;
 }
 
-html, body, [class*="css"] {
+html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="block-container"], .main, .block-container {
     font-family: 'IBM Plex Sans', sans-serif;
-    background-color: var(--bg-base);
+    background-color: var(--bg-base) !important;
     color: var(--text-secondary);
 }
 .app-header {

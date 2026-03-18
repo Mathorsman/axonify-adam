@@ -1,3 +1,11 @@
+[theme]
+base = "dark"
+primaryColor = "#00AA61"
+backgroundColor = "#0f1a15"
+secondaryBackgroundColor = "#142420"
+textColor = "#b8ccbf"
+font = "sans serif"
+
 [server]
 # Automatically reload the app when sf_query_tool.py is saved.
 # The browser session stays open — you don't need to restart the terminal
