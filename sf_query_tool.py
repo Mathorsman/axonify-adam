@@ -343,6 +343,114 @@ def db_get_health_snapshots(days: int = 60) -> list[dict]:
         return []
 
 
+# ── Runbook db helpers ────────────────────────────────────────────────────────
+
+def db_get_runbooks() -> list[dict]:
+    """Fetch all runbooks ordered by creation date."""
+    conn = _get_db_connection()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM runbooks ORDER BY created_at DESC")
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def db_save_runbook(runbook: dict) -> "int | None":
+    """Insert a new runbook. Returns new id or None on failure."""
+    conn = _get_db_connection()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO runbooks (name, description, schedule, steps, is_active)
+                   VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                (
+                    runbook.get("name", ""),
+                    runbook.get("description", ""),
+                    runbook.get("schedule", "manual"),
+                    psycopg2.extras.Json(runbook.get("steps", [])),
+                    runbook.get("is_active", True),
+                ),
+            )
+            new_id = cur.fetchone()[0]
+            conn.commit()
+            return new_id
+    except Exception:
+        conn.rollback()
+        return None
+
+
+def db_update_runbook(runbook_id: int, updates: dict) -> bool:
+    """Update specified fields on an existing runbook."""
+    conn = _get_db_connection()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            safe = {}
+            for k, v in updates.items():
+                safe[k] = psycopg2.extras.Json(v) if k == "steps" else v
+            set_clause = ", ".join(f"{k} = %s" for k in safe)
+            values = list(safe.values()) + [runbook_id]
+            cur.execute(f"UPDATE runbooks SET {set_clause} WHERE id = %s", values)
+            conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+
+
+def db_save_runbook_run(runbook_id: int, status: str,
+                        step_results: list, triggered_by: str = "manual") -> bool:
+    """Record the result of a runbook execution."""
+    conn = _get_db_connection()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO runbook_runs (runbook_id, status, step_results, triggered_by)
+                   VALUES (%s, %s, %s, %s)""",
+                (runbook_id, status,
+                 psycopg2.extras.Json(step_results), triggered_by),
+            )
+            conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+
+
+def db_get_runbook_runs(runbook_id: "int | None" = None, limit: int = 50) -> list[dict]:
+    """Fetch runbook run history, optionally filtered to a single runbook."""
+    conn = _get_db_connection()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if runbook_id is not None:
+                cur.execute(
+                    "SELECT * FROM runbook_runs WHERE runbook_id = %s "
+                    "ORDER BY run_at DESC LIMIT %s",
+                    (runbook_id, limit),
+                )
+            else:
+                cur.execute(
+                    """SELECT rr.*, rb.name AS runbook_name
+                         FROM runbook_runs rr
+                    LEFT JOIN runbooks rb ON rr.runbook_id = rb.id
+                        ORDER BY rr.run_at DESC LIMIT %s""",
+                    (limit,),
+                )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FEATURE 3 — AI Context Layer
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11034,6 +11142,7 @@ def render_sidebar_nav():
         _nav_btn("🗓️  Change Log Generator", "change_log")
         _nav_btn("🗂️  Cleanup Shortcuts", "shortcuts")
         _nav_btn("📧  Digest & Alerts", "digest_config")
+        _nav_btn("📋  Runbooks", "runbooks")
 
     # ── SAFETY ────────────────────────────────────────────────────────────────────────
     with st.expander("🛡️  Safety", expanded=True):
@@ -21694,6 +21803,7 @@ def main():
         "theme_mode":              "dark",
         "last_auto_snapshot_date": None,
         "org_context_cache":       None,
+        "rb_steps":                [],
         # Dedupe tab state
         "dedupe_candidates":  None,
         "dedupe_review_idx":  0,
@@ -21727,6 +21837,275 @@ def main():
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: ADMIN RUNBOOKS  (page = "runbooks")  — Feature 4
+# ══════════════════════════════════════════════════════════════════════════════
+
+_STARTER_RUNBOOKS = [
+    {
+        "name": "Monthly Data Health Check",
+        "description": "Tracks core data quality issues. Run on the first Monday of each month.",
+        "schedule": "monthly",
+        "steps": [
+            {"name": "Orphaned Contacts",       "soql": "SELECT COUNT() FROM Contact WHERE AccountId = null",                        "threshold_type": "max_count", "threshold_value": 10},
+            {"name": "Accounts missing Industry","soql": "SELECT COUNT() FROM Account WHERE Industry = null AND Type = 'Customer'",   "threshold_type": "max_count", "threshold_value": 50},
+            {"name": "Contacts missing Email",   "soql": "SELECT COUNT() FROM Contact WHERE Email = null AND Account.Type = 'Customer'","threshold_type": "max_count", "threshold_value": 25},
+        ],
+    },
+    {
+        "name": "Weekly Automation Watch",
+        "description": "Monitors active automation counts for unexpected changes. Run every Monday.",
+        "schedule": "weekly",
+        "steps": [
+            {"name": "Active Flows",          "soql": "SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true",                   "threshold_type": "any_result", "threshold_value": 0},
+            {"name": "Temp/Test Flows in Prod","soql": "SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true AND (Label LIKE '%test%' OR Label LIKE '%temp%' OR Label LIKE '%delete%')", "threshold_type": "max_count", "threshold_value": 0},
+        ],
+    },
+    {
+        "name": "Quarterly Permissions Review",
+        "description": "Flags over-permissioned users and inactive accounts. Run on the first day of each quarter.",
+        "schedule": "quarterly",
+        "steps": [
+            {"name": "Users with Modify All Data", "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true", "threshold_type": "any_result", "threshold_value": 0},
+            {"name": "Active users — no login 90d", "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:90 AND UserType = 'Standard'",               "threshold_type": "max_count", "threshold_value": 5},
+        ],
+    },
+]
+
+
+def _execute_runbook(runbook: dict) -> "tuple[str, list]":
+    """
+    Execute all steps in a runbook. Returns (overall_status, step_results).
+    overall_status is 'pass', 'warn', or 'fail'.
+    """
+    sf = get_sf_connection()
+    step_results = []
+    overall = "pass"
+
+    for step in runbook.get("steps", []):
+        soql            = step.get("soql", "")
+        threshold_type  = step.get("threshold_type", "any_result")
+        threshold_value = step.get("threshold_value", 0)
+        try:
+            count  = sf.query(soql).get("totalSize", 0)
+            error  = None
+            if threshold_type == "max_count":
+                status = "pass" if count <= threshold_value else "fail"
+            elif threshold_type == "min_count":
+                status = "pass" if count >= threshold_value else "fail"
+            else:  # any_result
+                status = "warn" if count > 0 else "pass"
+        except Exception as e:
+            count, error, status = -1, str(e), "fail"
+
+        step_results.append({
+            "step_name":       step.get("name", "Step"),
+            "soql":            soql,
+            "result_count":    count,
+            "threshold_type":  threshold_type,
+            "threshold_value": threshold_value,
+            "status":          status,
+            "error":           error,
+        })
+        if status == "fail":
+            overall = "fail"
+        elif status == "warn" and overall != "fail":
+            overall = "warn"
+
+    return overall, step_results
+
+
+def _status_icon(status: str) -> str:
+    return {"pass": "✅", "warn": "⚠️", "fail": "❌"}.get(status, "❓")
+
+
+def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
+    st.header("📋  Admin Runbooks")
+
+    if _get_db_connection() is None:
+        st.warning("Runbooks require Supabase to be configured.")
+        return
+
+    tab_list, tab_build, tab_history = st.tabs(
+        ["My Runbooks", "Build a Runbook", "Run History"]
+    )
+
+    # ── Tab 1: My Runbooks ────────────────────────────────────────────────────
+    with tab_list:
+        runbooks = db_get_runbooks()
+
+        if not runbooks:
+            st.info("No runbooks yet. Use the **Build a Runbook** tab to create one.")
+            if st.button("🌱  Seed starter runbooks", key="rb_seed"):
+                for rb in _STARTER_RUNBOOKS:
+                    db_save_runbook(rb)
+                st.success("3 starter runbooks created.")
+                st.rerun()
+        else:
+            # Offer seed only if fewer than 3 runbooks exist (first-time setup)
+            if len(runbooks) < 3:
+                if st.button("🌱  Add starter runbooks", key="rb_seed_partial"):
+                    existing_names = {r["name"] for r in runbooks}
+                    for rb in _STARTER_RUNBOOKS:
+                        if rb["name"] not in existing_names:
+                            db_save_runbook(rb)
+                    st.success("Starter runbooks added.")
+                    st.rerun()
+
+            for rb in runbooks:
+                rb_id    = rb["id"]
+                is_active = rb.get("is_active", True)
+
+                # Last run info
+                runs = db_get_runbook_runs(runbook_id=rb_id, limit=1)
+                last_run = runs[0] if runs else None
+                last_status = last_run["status"] if last_run else "never"
+                last_ts     = str(last_run["run_at"])[:16].replace("T", " ") if last_run else "—"
+
+                status_icon = _status_icon(last_status) if last_run else "—"
+                active_label = "🟢 Active" if is_active else "⏸ Paused"
+
+                with st.expander(
+                    f"{status_icon}  **{rb['name']}** · {active_label} · Last run: {last_ts}",
+                    expanded=False,
+                ):
+                    if rb.get("description"):
+                        st.caption(rb["description"])
+                    st.caption(f"Schedule: {rb.get('schedule', 'manual')} · {len(rb.get('steps') or [])} steps")
+
+                    col_run, col_pause, _ = st.columns([1, 1, 4])
+                    with col_run:
+                        if st.button("▶️  Run Now", key=f"rb_run_{rb_id}"):
+                            with st.spinner(f"Running {rb['name']}…"):
+                                status, step_results = _execute_runbook(rb)
+                            db_save_runbook_run(rb_id, status, step_results, "manual")
+                            st.success(f"Done — {_status_icon(status)} {status.upper()}")
+                            for sr in step_results:
+                                icon = _status_icon(sr["status"])
+                                st.markdown(
+                                    f"{icon} **{sr['step_name']}** — {sr['result_count']:,} records"
+                                    + (f" *(error: {sr['error']})*" if sr.get("error") else "")
+                                )
+                            st.rerun()
+                    with col_pause:
+                        pause_label = "▶️  Resume" if not is_active else "⏸  Pause"
+                        if st.button(pause_label, key=f"rb_pause_{rb_id}"):
+                            db_update_runbook(rb_id, {"is_active": not is_active})
+                            st.rerun()
+
+    # ── Tab 2: Build a Runbook ────────────────────────────────────────────────
+    with tab_build:
+        st.subheader("New Runbook")
+
+        if "rb_steps" not in st.session_state:
+            st.session_state.rb_steps = []
+
+        rb_name = st.text_input("Name", placeholder="e.g. Weekly Data Health Check", key="rb_name")
+        rb_desc = st.text_area("Description (optional)", height=60, key="rb_desc")
+        rb_sched = st.selectbox(
+            "Schedule",
+            ["manual", "daily", "weekly", "monthly", "quarterly"],
+            key="rb_schedule",
+        )
+
+        st.markdown("---")
+        st.markdown("**Steps**")
+
+        steps = st.session_state.rb_steps
+        updated_steps = []
+        for i, step in enumerate(steps):
+            with st.expander(f"Step {i+1}: {step.get('name') or '(unnamed)'}", expanded=True):
+                s_name = st.text_input("Step name", value=step.get("name", ""), key=f"rb_s_name_{i}")
+                s_soql = st.text_area("SOQL", value=step.get("soql", ""),
+                                      placeholder="SELECT COUNT() FROM Contact WHERE AccountId = null",
+                                      height=70, key=f"rb_s_soql_{i}")
+                col_tt, col_tv = st.columns(2)
+                with col_tt:
+                    s_thresh_type = st.selectbox(
+                        "Pass condition",
+                        ["max_count", "min_count", "any_result"],
+                        index=["max_count", "min_count", "any_result"].index(
+                            step.get("threshold_type", "max_count")
+                        ),
+                        key=f"rb_s_tt_{i}",
+                        help="max_count: pass if count ≤ value · min_count: pass if count ≥ value · any_result: warn if count > 0",
+                    )
+                with col_tv:
+                    s_thresh_val = st.number_input(
+                        "Threshold value",
+                        min_value=0,
+                        value=int(step.get("threshold_value", 0)),
+                        key=f"rb_s_tv_{i}",
+                    )
+                col_keep, col_del = st.columns([4, 1])
+                with col_del:
+                    remove = st.button("🗑️", key=f"rb_s_del_{i}", help="Remove step")
+                if not remove:
+                    updated_steps.append({
+                        "name":            s_name,
+                        "soql":            s_soql,
+                        "threshold_type":  s_thresh_type,
+                        "threshold_value": s_thresh_val,
+                    })
+
+        st.session_state.rb_steps = updated_steps
+
+        col_add, col_save = st.columns([1, 2])
+        with col_add:
+            if st.button("➕  Add Step", key="rb_add_step"):
+                st.session_state.rb_steps.append(
+                    {"name": "", "soql": "", "threshold_type": "max_count", "threshold_value": 0}
+                )
+                st.rerun()
+        with col_save:
+            if st.button("💾  Save Runbook", type="primary", key="rb_save"):
+                if not rb_name.strip():
+                    st.warning("Please enter a runbook name.")
+                elif not st.session_state.rb_steps:
+                    st.warning("Add at least one step.")
+                else:
+                    new_id = db_save_runbook({
+                        "name":        rb_name.strip(),
+                        "description": rb_desc.strip(),
+                        "schedule":    rb_sched,
+                        "steps":       st.session_state.rb_steps,
+                        "is_active":   True,
+                    })
+                    if new_id:
+                        st.success(f"Runbook saved (id {new_id}).")
+                        st.session_state.rb_steps = []
+                        st.rerun()
+                    else:
+                        st.error("Could not save runbook — check Supabase connection.")
+
+    # ── Tab 3: Run History ────────────────────────────────────────────────────
+    with tab_history:
+        runs = db_get_runbook_runs(limit=100)
+        if not runs:
+            st.caption("No runs recorded yet.")
+        else:
+            for run in runs:
+                icon    = _status_icon(run["status"])
+                ts      = str(run.get("run_at", ""))[:16].replace("T", " ")
+                rb_name_disp = run.get("runbook_name", f"Runbook #{run.get('runbook_id', '?')}")
+                with st.expander(
+                    f"{icon}  {rb_name_disp} · {ts} · triggered by {run.get('triggered_by','?')}",
+                    expanded=False,
+                ):
+                    step_results = run.get("step_results") or []
+                    if step_results:
+                        for sr in step_results:
+                            sr_icon = _status_icon(sr.get("status", ""))
+                            count = sr.get("result_count", -1)
+                            count_str = f"{count:,}" if count >= 0 else "error"
+                            st.markdown(
+                                f"{sr_icon} **{sr.get('step_name', 'Step')}** — {count_str} records"
+                                + (f"\n\n`{sr.get('soql','')}`" if sr.get("soql") else "")
+                            )
+                    else:
+                        st.caption("No step detail recorded.")
 
     # ── Header ────────────────────────────────────────────────────────────────────────────────
     st.markdown(f"""
@@ -21780,6 +22159,8 @@ def main():
         render_shortcuts_page(dry_run_mode, auto_backup)
     elif page == "digest_config":
         render_digest_config_page(dry_run_mode, auto_backup)
+    elif page == "runbooks":
+        render_runbooks_page(dry_run_mode, auto_backup)
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
 
