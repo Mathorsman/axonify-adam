@@ -342,6 +342,104 @@ def db_get_health_snapshots(days: int = 60) -> list[dict]:
     except Exception:
         return []
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FEATURE 3 — AI Context Layer
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_org_context() -> str:
+    """
+    Assemble a live org context string for injection into AI system prompts.
+    Caches in session state for 60 minutes to limit API calls.
+    """
+    import datetime as _dt
+
+    cache = st.session_state.get("org_context_cache")
+    if cache:
+        cached_at = cache.get("timestamp")
+        if cached_at and (_dt.datetime.utcnow() - cached_at).total_seconds() < 3600:
+            return cache["text"]
+
+    sf = get_sf_connection()
+    lines = []
+
+    lines.append(f"Org instance: {sf.sf_instance}")
+    lines.append(f"Context assembled: {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+
+    def _count(soql: str):
+        try:
+            n = sf.query(soql).get("totalSize", 0)
+            return f"{n:,}"
+        except Exception:
+            return "unknown"
+
+    lines.append(f"Total Accounts: {_count('SELECT COUNT() FROM Account')}")
+    lines.append(f"Total Contacts: {_count('SELECT COUNT() FROM Contact')}")
+    lines.append(f"Total Opportunities: {_count('SELECT COUNT() FROM Opportunity')}")
+
+    try:
+        fc = sf.query("SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true").get("totalSize", 0)
+        lines.append(f"Active Flows: {fc:,}")
+    except Exception:
+        pass
+
+    try:
+        wfr = _run_tooling_query("SELECT Id FROM WorkflowRule LIMIT 2000")
+        lines.append(f"Active Workflow Rules: {len(wfr)}")
+    except Exception:
+        pass
+
+    snap_rows = db_get_health_snapshots(days=7)
+    if snap_rows:
+        # Most recent value per metric
+        latest: dict = {}
+        for row in snap_rows:
+            latest[row["metric_key"]] = row
+        lines.append("Latest health snapshot metrics:")
+        for row in latest.values():
+            lines.append(f"  - {row['metric_label']}: {row['value']}")
+
+    lines.append(f"Active tools: {', '.join(ACTIVE_TOOLS.keys())}")
+    lines.append(f"Retired tools (cleanup candidates): {', '.join(RETIRED_TOOLS.keys())}")
+
+    ctx = "\n".join(lines)
+    st.session_state["org_context_cache"] = {
+        "text":      ctx,
+        "timestamp": _dt.datetime.utcnow(),
+    }
+    return ctx
+
+
+def ask_adam(question: str) -> str:
+    """
+    Ask a plain-English question about the Axonify Salesforce org.
+    Returns a plain-English answer using live org context. Not for SOQL generation.
+    """
+    import datetime as _dt
+
+    ctx = get_org_context()
+    ts  = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    system = (
+        "You are A.D.A.M. (Axonify Data & Administration Manager), an AI assistant "
+        "embedded in a Salesforce admin console for Axonify.\n"
+        "Answer the user's question in plain English. Be concise and practical.\n"
+        "Do not generate SOQL — this is a conversational advice channel.\n"
+        "If you don't know something, say so honestly.\n\n"
+        f"=== LIVE ORG CONTEXT (as of {ts}) ===\n"
+        f"{ctx}\n"
+        "=== END LIVE CONTEXT ==="
+    )
+    try:
+        resp = get_anthropic_client().messages.create(
+            model=AI_MODEL,
+            max_tokens=600,
+            system=system,
+            messages=[{"role": "user", "content": question}],
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        return f"Could not get a response: {e}"
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG  (must be the first Streamlit call)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2277,10 +2375,19 @@ def generate_soql_from_natural_language(
         f"Return ONLY the JSON object. No explanation text before or after it."
     )
 
+    import datetime as _dt
+    _org_ctx = get_org_context()
+    _ctx_ts  = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    _system_with_ctx = (
+        AI_SYSTEM_PROMPT
+        + f"\n\n=== LIVE ORG CONTEXT (as of {_ctx_ts}) ===\n"
+        + _org_ctx
+        + "\n=== END LIVE CONTEXT ==="
+    )
     response = get_anthropic_client().messages.create(
         model=AI_MODEL,
         max_tokens=2000,
-        system=AI_SYSTEM_PROMPT,
+        system=_system_with_ctx,
         messages=[{"role": "user", "content": user_prompt}],
     )
 
@@ -11397,6 +11504,28 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                     except (ValueError, RuntimeError) as e:
                         st.error(str(e))
 
+
+        # ── Ask about the org ────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Ask about the org")
+        st.caption(
+            "Not looking for a query — just need advice? Ask anything about the org, "
+            "field safety, automation impact, or recent changes."
+        )
+        adam_question = st.text_input(
+            "Your question",
+            placeholder="Is it safe to delete the InsideView ID field on Account? What automations might break?",
+            key="adam_question_input",
+        )
+        if st.button("💬  Ask A.D.A.M.", key="ask_adam_btn"):
+            if adam_question.strip():
+                _cache_key = f"adam_answer_{hash(adam_question)}"
+                if _cache_key not in st.session_state:
+                    with st.spinner("Thinking…"):
+                        st.session_state[_cache_key] = ask_adam(adam_question)
+                st.info(st.session_state[_cache_key])
+            else:
+                st.warning("Please enter a question.")
 
     # ── Visual mode ─────────────────────────────────────────────────────────────────────────────
     elif query_mode == "🔧  Visual":
@@ -21564,6 +21693,7 @@ def main():
         "page":               "dashboard",
         "theme_mode":              "dark",
         "last_auto_snapshot_date": None,
+        "org_context_cache":       None,
         # Dedupe tab state
         "dedupe_candidates":  None,
         "dedupe_review_idx":  0,
