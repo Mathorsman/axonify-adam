@@ -1678,6 +1678,183 @@ def run_soql(soql: str) -> pd.DataFrame:
         raise RuntimeError(f"SOQL error: {e}")
 
 
+# ── SOQL error parser / renderer ──────────────────────────────────────────────
+
+def parse_soql_error(raw_error: str) -> dict:
+    """
+    Parse a raw Salesforce / SOQL exception string into a structured plain-English dict.
+
+    Returns keys: title, explanation, bad_fields, suggestions, raw
+    """
+    import re as _re
+
+    # Strip any embedded URL (long encoded query strings make errors unreadable)
+    cleaned = _re.sub(r"https?://\S+", "", raw_error).strip()
+
+    result = {
+        "title": "",
+        "explanation": "",
+        "bad_fields": [],
+        "suggestions": [],
+        "raw": cleaned,
+    }
+
+    _TOOLING_ALTERNATIVES = {
+        "Flow": "Use FlowDefinitionView instead, which is queryable via the standard API.",
+        "ProcessDefinition": "Use FlowDefinitionView with ProcessType = 'Workflow' to find Process Builder automations.",
+        "WorkflowRule": "WorkflowRule is only available via the Tooling API. Try querying Flow for active automations instead.",
+        "SetupEntityAccess": "SetupEntityAccess requires a WHERE clause filtering on SetupEntityType.",
+        "FlowElement": "FlowElement is a Tooling API object. Use FlowDefinitionView for queryable flow metadata.",
+    }
+
+    # PATTERN 1 — INVALID_TYPE (object not queryable)
+    if "INVALID_TYPE" in raw_error or "sObject type" in raw_error:
+        obj_match = _re.search(r"sObject type '([^']+)'", raw_error)
+        obj_name = obj_match.group(1) if obj_match else "this object"
+        result["title"] = "Object not available for standard queries"
+        result["explanation"] = (
+            f"The object '{obj_name}' cannot be queried using the standard Salesforce API. "
+            "Some internal Salesforce objects (like Flow, ProcessDefinition, and SetupEntityAccess) "
+            "are only available through the Tooling API or have a different queryable name."
+        )
+        result["bad_fields"] = [obj_name]
+        if obj_name in _TOOLING_ALTERNATIVES:
+            result["suggestions"].append(_TOOLING_ALTERNATIVES[obj_name])
+        else:
+            result["suggestions"].append(
+                "Check the object API name is correct and that it is exposed in your org's schema."
+            )
+        result["suggestions"].append(
+            "If you used the AI Query Builder, try rephrasing your question and running again — "
+            "the AI will generate a corrected query."
+        )
+        return result
+
+    # PATTERN 2 — INVALID_FIELD (field doesn't exist)
+    if "INVALID_FIELD" in raw_error:
+        field_match = (
+            _re.search(r"No such column '([^']+)'", raw_error, _re.IGNORECASE)
+            or _re.search(r"invalid field[:\s]+([A-Za-z0-9_.]+)", raw_error, _re.IGNORECASE)
+        )
+        field_name = field_match.group(1) if field_match else "the specified field"
+        result["title"] = "Field not found"
+        result["explanation"] = (
+            f"The field '{field_name}' does not exist on this object, or you do not have permission "
+            "to query it. This can happen when a field was deleted, renamed, or belongs to a package "
+            "that is not installed."
+        )
+        result["bad_fields"] = [field_name]
+        result["suggestions"] = [
+            "Check the field API name — custom fields must end in __c (e.g. My_Field__c).",
+            "Open Salesforce Setup → Object Manager → [object] → Fields to confirm the field exists.",
+            "If this field is from an integration (e.g. Bizible, Gong, Clay), the package may need "
+            "reinstalling or the field prefix may have changed.",
+            "If you used the AI Query Builder, try rephrasing and the AI will regenerate without this field.",
+        ]
+        return result
+
+    # PATTERN 3 — MALFORMED_QUERY (syntax error)
+    if "MALFORMED_QUERY" in raw_error or "unexpected token" in raw_error.lower():
+        pos_match = _re.search(r"Row:(\d+):Column:(\d+)", raw_error) or \
+                    _re.search(r"line (\d+)[,\s]+col(?:umn)?\s*(\d+)", raw_error, _re.IGNORECASE)
+        result["title"] = "Query syntax error"
+        result["explanation"] = (
+            "The query contains a syntax error. This usually means a missing quote, bracket, "
+            "or keyword is in the wrong place."
+        )
+        result["bad_fields"] = []
+        result["suggestions"] = [
+            "Check for unmatched single quotes around text values — every opening quote needs a closing one.",
+            "Make sure all parentheses and brackets are balanced.",
+            "SOQL uses single quotes for string values, not double quotes.",
+        ]
+        if pos_match:
+            result["suggestions"].append(
+                f"The error is near position {pos_match.group(1)}:{pos_match.group(2)} in the query."
+            )
+        result["suggestions"].append(
+            "If you used the AI Query Builder, try rephrasing your question and the AI will rebuild the query."
+        )
+        return result
+
+    # PATTERN 4 — INVALID_CROSS_REFERENCE_KEY (bad record ID)
+    if "INVALID_CROSS_REFERENCE_KEY" in raw_error:
+        result["title"] = "Invalid record ID"
+        result["explanation"] = (
+            "One of the ID values in the query is not a valid Salesforce record ID. "
+            "Salesforce IDs are 15 or 18 characters long and contain only letters and numbers."
+        )
+        result["bad_fields"] = []
+        result["suggestions"] = [
+            "Check any ID values in your WHERE clause — they should be 15 or 18 alphanumeric characters.",
+            "Do not include quotes around numeric values like 1, 0, true, or false.",
+        ]
+        return result
+
+    # PATTERN 5 — FIELD_INTEGRITY_EXCEPTION / REQUIRED_FIELD_MISSING
+    if "FIELD_INTEGRITY_EXCEPTION" in raw_error or "REQUIRED_FIELD_MISSING" in raw_error:
+        result["title"] = "Field value error"
+        result["explanation"] = (
+            "A required field is missing or a field value does not match the expected format."
+        )
+        result["bad_fields"] = []
+        result["suggestions"] = [
+            "Check that all required fields are included in your operation.",
+            "Verify picklist values match exactly — they are case-sensitive.",
+        ]
+        return result
+
+    # PATTERN 6 — Fallback
+    result["title"] = "Query failed"
+    result["explanation"] = "Salesforce returned an error. The technical details are shown below."
+    result["bad_fields"] = []
+    result["suggestions"] = [
+        "Copy the technical detail below and paste it into A.D.A.M.'s chat for help diagnosing the issue."
+    ]
+    return result
+
+
+def render_soql_error(raw_error: str) -> None:
+    """
+    Render a styled, user-friendly SOQL error card using parse_soql_error().
+    Replaces st.error() for query execution failures.
+    """
+    parsed = parse_soql_error(raw_error)
+
+    # Build inline code pills for bad fields
+    pills_html = ""
+    if parsed["bad_fields"]:
+        pills = " ".join(
+            f'<code style="background:#3a1010;color:#f08080;border-radius:4px;'
+            f'padding:2px 7px;font-size:0.85rem;font-family:monospace;">'
+            f'{f}</code>'
+            for f in parsed["bad_fields"]
+        )
+        pills_html = (
+            f'<div style="margin-top:0.5rem;">'
+            f'<span style="color:#c0a0a0;font-size:0.8rem;">Problem field / object: </span>'
+            f'{pills}</div>'
+        )
+
+    st.markdown(
+        f'<div style="border:1.5px solid #c0392b;border-radius:8px;'
+        f'padding:1rem 1.2rem;background:#1e0a0a;margin-bottom:0.5rem;">'
+        f'<div style="font-weight:700;color:#e74c3c;font-size:1rem;margin-bottom:0.4rem;">'
+        f'⚠️ {parsed["title"]}</div>'
+        f'<div style="color:#d4b8b8;font-size:0.9rem;line-height:1.5;">{parsed["explanation"]}</div>'
+        f'{pills_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if parsed["suggestions"]:
+        st.markdown("**What you can do:**")
+        for s in parsed["suggestions"]:
+            st.markdown(f"- {s}")
+
+    with st.expander("Technical detail (for support)", expanded=False):
+        st.code(parsed["raw"], language=None)
+
 
 def _fix_soql_apostrophes(soql: str) -> str:
     """
@@ -11336,7 +11513,7 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                         add_to_history(edited_soql, st.session_state.ai_detected_object, len(df))
                         nav_to("results")
                     except RuntimeError as e:
-                        st.error(str(e))
+                        render_soql_error(str(e))
 
         # ── Case 3: Multi-step query plan ─────────────────────────────────────
         elif st.session_state.ai_steps:
@@ -11437,7 +11614,7 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                     try:
                         result_df, summaries = run_query_plan(steps, status_cb=_render_status)
                     except RuntimeError as e:
-                        st.error(str(e))
+                        render_soql_error(str(e))
                         result_df = None
 
                 if result_df is not None and not result_df.empty:
@@ -11633,7 +11810,7 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                             add_to_history(vq_soql, vq_object, len(df))
                             nav_to("results")
                         except RuntimeError as e:
-                            st.error(str(e))
+                            render_soql_error(str(e))
             with col2:
                 if st.button("🤖  Explain Query", key="explain_vq"):
                     with st.spinner("Explaining..."):
@@ -11671,7 +11848,7 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                             add_to_history(raw_soql, obj, len(df))
                             nav_to("results")
                         except RuntimeError as e:
-                            st.error(str(e))
+                            render_soql_error(str(e))
                 else:
                     st.warning("Please enter a SOQL query.")
         with col2:
