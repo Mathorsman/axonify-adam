@@ -95,19 +95,22 @@ def _get_base_url() -> str:
 
 
 # ── Supabase database connection ───────────────────────────────────────────────
+_DB_CONN_ERROR: str | None = None  # module-level; set during first connect attempt
+
 @st.cache_resource
 def _get_db_connection():
     """Returns a persistent psycopg2 connection to Supabase. Returns None if not configured."""
+    global _DB_CONN_ERROR
     url = _get_secret("SUPABASE_DB_URL")
     if not url:
-        st.session_state["_db_error"] = "SUPABASE_DB_URL secret not found"
+        _DB_CONN_ERROR = "SUPABASE_DB_URL secret not found (checked st.secrets + os.environ)"
         return None
     try:
-        conn = psycopg2.connect(url)
-        st.session_state.pop("_db_error", None)
+        conn = psycopg2.connect(url, connect_timeout=10)
+        _DB_CONN_ERROR = None
         return conn
     except Exception as e:
-        st.session_state["_db_error"] = f"psycopg2 connect failed: {e}"
+        _DB_CONN_ERROR = f"psycopg2.connect() failed: {e}"
         return None
 
 
@@ -13375,9 +13378,15 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
                 else:
                     st.error("Snapshot failed — check Supabase connection.")
         else:
-            _db_err = st.session_state.get("_db_error", "SUPABASE_DB_URL not set or connection failed")
-            st.caption(f"Supabase not configured — snapshots unavailable.")
+            st.caption("Supabase not configured — snapshots unavailable.")
+            _db_err = _DB_CONN_ERROR or "unknown (cache_resource may not have run yet — try rebooting the app)"
             st.error(f"DB diagnostic: {_db_err}")
+            # Show all secret keys present (not values) to help debug missing secrets
+            try:
+                _secret_keys = list(st.secrets.keys())
+            except Exception:
+                _secret_keys = ["(could not read st.secrets)"]
+            st.caption(f"Secrets found: {_secret_keys}")
     with col_autsnap:
         if _supabase_live:
             _new_auto = st.toggle(
