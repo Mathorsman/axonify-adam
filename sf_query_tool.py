@@ -299,6 +299,49 @@ def db_save_config(config_key: str, config_value: dict | list, updated_by: str =
         st.warning(f"Could not save config to database: {e}")
         return False
 
+
+def db_save_health_snapshot(metrics: list[dict]) -> bool:
+    """Insert one row per metric into org_health_snapshots. Returns True on success."""
+    conn = _get_db_connection()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            for m in metrics:
+                if m.get("value", -1) < 0:
+                    continue  # skip unavailable metrics
+                cur.execute(
+                    """INSERT INTO org_health_snapshots
+                         (metric_key, metric_label, value, category)
+                       VALUES (%s, %s, %s, %s)""",
+                    (m["metric_key"], m["metric_label"], m["value"], m["category"]),
+                )
+            conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        st.warning(f"Could not save health snapshot: {e}")
+        return False
+
+
+def db_get_health_snapshots(days: int = 60) -> list[dict]:
+    """Fetch all health snapshot rows from the last `days` days."""
+    conn = _get_db_connection()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT snapshot_at, metric_key, metric_label, value, category
+                     FROM org_health_snapshots
+                    WHERE snapshot_at >= now() - (%s * INTERVAL '1 day')
+                    ORDER BY snapshot_at ASC""",
+                (days,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG  (must be the first Streamlit call)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -12940,10 +12983,104 @@ def _gauge_html(label: str, used: int, max_val: int) -> str:
     )
 
 
+def _collect_health_metrics() -> list[dict]:
+    """
+    Run all tracked Org Health metrics and return a list of dicts:
+    {metric_key, metric_label, category, value}
+    value is -1 if the metric could not be collected.
+    """
+    sf = get_sf_connection()
+
+    def _count(soql: str) -> int:
+        try:
+            return sf.query(soql).get("totalSize", 0)
+        except Exception:
+            return -1
+
+    metrics = []
+
+    # ── data_quality ──────────────────────────────────────────────────────────
+    metrics.append({
+        "metric_key":   "account_missing_industry",
+        "metric_label": "Accounts missing Industry",
+        "category":     "data_quality",
+        "value":        _count("SELECT COUNT() FROM Account WHERE Industry = null"),
+    })
+    metrics.append({
+        "metric_key":   "orphaned_contacts",
+        "metric_label": "Orphaned Contacts (no Account)",
+        "category":     "data_quality",
+        "value":        _count("SELECT COUNT() FROM Contact WHERE AccountId = null"),
+    })
+    metrics.append({
+        "metric_key":   "contacts_missing_email",
+        "metric_label": "Contacts missing Email",
+        "category":     "data_quality",
+        "value":        _count("SELECT COUNT() FROM Contact WHERE Email = null"),
+    })
+
+    # ── automation ────────────────────────────────────────────────────────────
+    metrics.append({
+        "metric_key":   "active_flow_count",
+        "metric_label": "Active Flows",
+        "category":     "automation",
+        "value":        _count("SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true"),
+    })
+    try:
+        wfr_records = _run_tooling_query("SELECT Id FROM WorkflowRule LIMIT 2000")
+        wfr_value = len(wfr_records)
+    except Exception:
+        wfr_value = -1
+    metrics.append({
+        "metric_key":   "active_wfr_count",
+        "metric_label": "Active Workflow Rules",
+        "category":     "automation",
+        "value":        wfr_value,
+    })
+
+    # ── schema: accounts still holding retired-tool data ─────────────────────
+    try:
+        retired_prefixes = [p.lower() for prefixes in RETIRED_TOOLS.values() for p in prefixes]
+        account_fields = get_object_fields("Account")
+        retired_field_names = [
+            f["name"] for f in account_fields
+            if f.get("filterable")
+            and any(f["name"].lower().startswith(p) for p in retired_prefixes)
+        ][:20]  # cap to keep WHERE clause short
+        if retired_field_names:
+            where_clause = " OR ".join(f"{fn} != null" for fn in retired_field_names)
+            retired_value = _count(f"SELECT COUNT() FROM Account WHERE {where_clause}")
+        else:
+            retired_value = 0
+    except Exception:
+        retired_value = -1
+    metrics.append({
+        "metric_key":   "retired_fields_populated",
+        "metric_label": "Accounts with retired-tool data",
+        "category":     "schema",
+        "value":        retired_value,
+    })
+
+    # ── adoption: Nue CPQ ─────────────────────────────────────────────────────
+    metrics.append({
+        "metric_key":   "nue_cpq_adoption",
+        "metric_label": "Accounts with Nue CPQ data (Ruby__)",
+        "category":     "adoption",
+        "value":        _count("SELECT COUNT() FROM Account WHERE Ruby__Billing_Account__c != null"),
+    })
+
+    return metrics
+
+
 def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
     st.header("📊  Org Health Dashboard")
 
-    col_refresh, _ = st.columns([1, 6])
+    # ── Snapshot controls ──────────────────────────────────────────────────────
+    _supabase_live = _get_db_connection() is not None
+    _snap_cfg = db_get_config("auto_snapshot_enabled") or {}
+    _auto_snap = _snap_cfg.get("enabled", False) if isinstance(_snap_cfg, dict) else False
+
+    col_refresh, col_snap, col_autsnap, _ = st.columns([1, 2, 2, 3])
     with col_refresh:
         if st.button("🔄  Refresh", key="dash_refresh"):
             _fetch_org_limits.clear()
@@ -12951,6 +13088,46 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
             _fetch_flow_errors_7d.clear()
             _fetch_audit_trail_7d.clear()
             st.rerun()
+    with col_snap:
+        if _supabase_live:
+            if st.button("📸  Save Snapshot", key="dash_save_snapshot",
+                         help="Run all health metrics now and save to history."):
+                with st.spinner("Collecting metrics…"):
+                    _snap_metrics = _collect_health_metrics()
+                ok = db_save_health_snapshot(_snap_metrics)
+                if ok:
+                    st.success("Snapshot saved.")
+                else:
+                    st.error("Snapshot failed — check Supabase connection.")
+        else:
+            st.caption("Supabase not configured — snapshots unavailable.")
+    with col_autsnap:
+        if _supabase_live:
+            _new_auto = st.toggle(
+                "Auto-snapshot on load",
+                value=_auto_snap,
+                key="dash_auto_snapshot",
+                help="Saves one snapshot per calendar day when the dashboard loads.",
+            )
+            if _new_auto != _auto_snap:
+                db_save_config("auto_snapshot_enabled", {"enabled": _new_auto}, "dashboard")
+                _auto_snap = _new_auto
+
+    # Auto-snapshot: save once per calendar day
+    if _supabase_live and _auto_snap:
+        import datetime as _dt
+        _today_str = str(_dt.date.today())
+        if st.session_state.get("last_auto_snapshot_date") != _today_str:
+            _snap_metrics = _collect_health_metrics()
+            if db_save_health_snapshot(_snap_metrics):
+                st.session_state.last_auto_snapshot_date = _today_str
+
+    # Show last snapshot timestamp
+    if _supabase_live:
+        _recent = db_get_health_snapshots(days=1)
+        if _recent:
+            _last_ts = str(_recent[-1].get("snapshot_at", ""))[:16].replace("T", " ")
+            st.caption(f"Last snapshot: {_last_ts} UTC")
 
     limits = _fetch_org_limits()
 
@@ -13121,7 +13298,58 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
 
     st.markdown("")
 
-    # ── Section 4: Quick Navigation Cards ─────────────────────────────────────
+    # ── Section 4: Org Health Trends ───────────────────────────────────────────
+    st.subheader("Org Health Trends")
+    if not _supabase_live:
+        st.info("Historical tracking requires Supabase to be configured.")
+    else:
+        _snap_rows = db_get_health_snapshots(days=60)
+        if not _snap_rows:
+            st.caption("No snapshots yet — click 📸 Save Snapshot above to start tracking.")
+        else:
+            _snap_df = pd.DataFrame(_snap_rows)
+            _snap_df["snapshot_at"] = pd.to_datetime(_snap_df["snapshot_at"], utc=True)
+            _theme = st.session_state.get("theme_mode", "dark")
+            _line_color = "#00AA61" if _theme == "dark" else "#017551"
+            _bg = "rgba(0,0,0,0)" if _theme == "dark" else "rgba(255,255,255,0)"
+            _font_color = "#b8ccbf" if _theme == "dark" else "#1e3828"
+
+            _categories = [
+                ("data_quality", "Data Quality"),
+                ("automation",   "Automation"),
+                ("schema",       "Schema"),
+                ("adoption",     "Adoption"),
+            ]
+            for cat_key, cat_label in _categories:
+                cat_df = _snap_df[_snap_df["category"] == cat_key]
+                if cat_df.empty:
+                    continue
+                st.markdown(f"**{cat_label}**")
+                fig = go.Figure()
+                for metric_key, grp in cat_df.groupby("metric_key"):
+                    label = grp["metric_label"].iloc[0]
+                    fig.add_trace(go.Scatter(
+                        x=grp["snapshot_at"],
+                        y=grp["value"],
+                        mode="lines+markers",
+                        name=label,
+                        line=dict(width=2),
+                    ))
+                fig.update_layout(
+                    height=220,
+                    margin=dict(l=0, r=0, t=8, b=8),
+                    paper_bgcolor=_bg,
+                    plot_bgcolor=_bg,
+                    font=dict(color=_font_color, size=11),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(showgrid=True, gridcolor="rgba(128,128,128,0.15)"),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("")
+
+    # ── Section 5: Quick Navigation Cards ─────────────────────────────────────
     st.subheader("Quick Actions")
     cards = [
         ("🔍", "Run a Query",        "SOQL builder with AI assist",        "query"),
@@ -21334,7 +21562,8 @@ def main():
         "ai_qa_request":       "",     # the request that triggered the current QA
         "excluded_ids":       set(),
         "page":               "dashboard",
-        "theme_mode":         "dark",
+        "theme_mode":              "dark",
+        "last_auto_snapshot_date": None,
         # Dedupe tab state
         "dedupe_candidates":  None,
         "dedupe_review_idx":  0,
