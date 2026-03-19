@@ -12395,6 +12395,7 @@ If the request is ambiguous or unsafe return:
                     f for f in updateable
                     if not any(f.startswith(p) for p in PROTECTED_PREFIXES)
                 ]
+                field_type_map = {f["name"]: f["type"] for f in all_fields}
                 hidden = len(updateable) - len(safe_fields)
                 if hidden:
                     st.caption(
@@ -12405,11 +12406,82 @@ If the request is ambiguous or unsafe return:
                 with col1:
                     update_field = st.selectbox("Field to update", safe_fields, key="update_field")
                 with col2:
-                    new_value = st.text_input(
-                        "New value",
-                        placeholder="Leave blank to set field to null/empty",
-                        key="update_value",
-                    )
+                    selected_type = field_type_map.get(update_field, "string")
+
+                    if selected_type == "boolean":
+                        bool_choice = st.selectbox(
+                            "New value",
+                            options=["True (checked)", "False (unchecked)", "null (clear)"],
+                            index=1,
+                            key="update_value_bool",
+                        )
+                        if bool_choice == "True (checked)":
+                            new_value = True
+                        elif bool_choice == "False (unchecked)":
+                            new_value = False
+                        else:
+                            new_value = None
+
+                    elif selected_type in ("int", "integer", "double", "currency", "percent"):
+                        new_value_raw = st.text_input(
+                            "New value",
+                            placeholder="Enter a number, or leave blank to clear",
+                            key="update_value_num",
+                        )
+                        if new_value_raw.strip() == "":
+                            new_value = None
+                        else:
+                            try:
+                                new_value = float(new_value_raw) if "." in new_value_raw else int(new_value_raw)
+                            except ValueError:
+                                st.warning(f"'{new_value_raw}' is not a valid number for this field type.")
+                                new_value = new_value_raw
+
+                    elif selected_type == "date":
+                        new_value_raw = st.text_input(
+                            "New value",
+                            placeholder="YYYY-MM-DD, or leave blank to clear",
+                            key="update_value_date",
+                        )
+                        new_value = new_value_raw.strip() if new_value_raw.strip() else None
+
+                    elif selected_type == "datetime":
+                        new_value_raw = st.text_input(
+                            "New value",
+                            placeholder="YYYY-MM-DDTHH:MM:SSZ, or leave blank to clear",
+                            key="update_value_datetime",
+                        )
+                        new_value = new_value_raw.strip() if new_value_raw.strip() else None
+
+                    elif selected_type in ("picklist", "multipicklist"):
+                        picklist_field = next((f for f in all_fields if f["name"] == update_field), {})
+                        picklist_values = [
+                            v["value"] for v in picklist_field.get("picklistValues", [])
+                            if v.get("active")
+                        ]
+                        if picklist_values:
+                            new_value = st.selectbox(
+                                "New value",
+                                options=["— clear field —"] + picklist_values,
+                                key="update_value_picklist",
+                            )
+                            if new_value == "— clear field —":
+                                new_value = None
+                        else:
+                            new_value_raw = st.text_input(
+                                "New value",
+                                placeholder="Enter picklist value exactly, or leave blank to clear",
+                                key="update_value_picklist_text",
+                            )
+                            new_value = new_value_raw.strip() if new_value_raw.strip() else None
+
+                    else:
+                        new_value_raw = st.text_input(
+                            "New value",
+                            placeholder="Leave blank to set field to null/empty",
+                            key="update_value",
+                        )
+                        new_value = new_value_raw if new_value_raw else None
 
                 if st.button("🔍  Preview Changes (Dry Run)", type="primary", key="preview_update"):
                     preview_df = df[["Id"] + ([update_field] if update_field in df.columns else [])].copy()
@@ -12417,13 +12489,13 @@ If the request is ambiguous or unsafe return:
                         preview_df = preview_df.rename(columns={update_field: "Current Value"})
                     else:
                         preview_df["Current Value"] = "(field not in query results)"
-                    preview_df["→ New Value"] = new_value if new_value else None
+                    preview_df["→ New Value"] = new_value
 
                     st.session_state.dry_run_pending = {
                         "operation": "Update",
                         "df":        preview_df,
                         "payload":   [
-                            {"Id": row["Id"], update_field: new_value if new_value else None}
+                            {"Id": row["Id"], update_field: new_value}
                             for _, row in df.iterrows()
                         ],
                         "object":    object_name,
