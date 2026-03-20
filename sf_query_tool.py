@@ -8622,44 +8622,63 @@ def render_territory_tab():
         icon="⚠️",
     )
 
-    _TERRITORY_SECTIONS = [
-        "📋  Territory Map",
-        "🔍  Instant Lookup",
-        "⚠️  Territory Exception Analysis",
-        "👥  Rep/BDR Alignment",
-        "🔄  Reassign",
-        "📊  Executive Report",
-        "📊  Territory Queries",
-        "🗺️  Territory Editor",
-        "🔄  Territory Sync",
-    ]
-    territory_section = st.selectbox(
-        "Section",
-        _TERRITORY_SECTIONS,
-        key="territory_section",
-        label_visibility="collapsed",
-    )
+    # ── Three consolidated tabs ─────────────────────────────────────────────
+    tab_define, tab_assign, tab_report = st.tabs([
+        "📋  Territory Definitions",
+        "🔄  Account Assignment",
+        "📊  Reporting & Analysis",
+    ])
 
-    st.markdown("---")
+    with tab_define:
+        # View, edit, and test territory definitions in one place
+        _define_section = st.radio(
+            "Definition tool",
+            ["📋  Territory Map", "🗺️  Territory Editor", "🔍  Instant Lookup"],
+            key="territory_define_section",
+            label_visibility="collapsed",
+            horizontal=True,
+        )
+        st.markdown("---")
+        if _define_section == "📋  Territory Map":
+            _render_territory_map()
+        elif _define_section == "🗺️  Territory Editor":
+            render_territory_editor_subtab()
+        elif _define_section == "🔍  Instant Lookup":
+            _render_instant_lookup(pd)
 
-    if territory_section == "📋  Territory Map":
-        _render_territory_map()
-    elif territory_section == "🔍  Instant Lookup":
-        _render_instant_lookup(pd)
-    elif territory_section == "⚠️  Territory Exception Analysis":
-        _render_rep_coverage(pd)
-    elif territory_section == "👥  Rep/BDR Alignment":
-        render_alignment_subtab()
-    elif territory_section == "🔄  Reassign":
-        render_reassign_subtab()
-    elif territory_section == "📊  Executive Report":
-        _render_executive_report()
-    elif territory_section == "📊  Territory Queries":
-        _render_territory_queries()
-    elif territory_section == "🗺️  Territory Editor":
-        render_territory_editor_subtab()
-    elif territory_section == "🔄  Territory Sync":
-        render_territory_sync_subtab()
+    with tab_assign:
+        # All actions that change territory/rep/account ownership
+        _assign_section = st.radio(
+            "Assignment tool",
+            ["🔄  Territory Sync", "🔄  Reassign", "👥  Rep/BDR Alignment"],
+            key="territory_assign_section",
+            label_visibility="collapsed",
+            horizontal=True,
+        )
+        st.markdown("---")
+        if _assign_section == "🔄  Territory Sync":
+            render_territory_sync_subtab()
+        elif _assign_section == "🔄  Reassign":
+            render_reassign_subtab()
+        elif _assign_section == "👥  Rep/BDR Alignment":
+            render_alignment_subtab()
+
+    with tab_report:
+        # Read-only analytics and exception reporting
+        _report_section = st.radio(
+            "Report",
+            ["📊  Executive Report", "⚠️  Exception Analysis", "📊  Territory Queries"],
+            key="territory_report_section",
+            label_visibility="collapsed",
+            horizontal=True,
+        )
+        st.markdown("---")
+        if _report_section == "📊  Executive Report":
+            _render_executive_report()
+        elif _report_section == "⚠️  Exception Analysis":
+            _render_rep_coverage(pd)
+        elif _report_section == "📊  Territory Queries":
+            _render_territory_queries()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11249,10 +11268,10 @@ def render_sidebar_nav():
 
     # ── HOME ──────────────────────────────────────────────────────────────────────────
     with st.expander("🏠  Home", expanded=True):
-        _nav_btn("📊  Org Health Dashboard", "dashboard")
+        _nav_btn("📊  Dashboard", "dashboard")
 
-    # ── QUERY & DATA ──────────────────────────────────────────────────────────────────
-    with st.expander("🔎  Query & Data", expanded=True):
+    # ── QUERY & ACTION ────────────────────────────────────────────────────────────────
+    with st.expander("🔍  Query & Action", expanded=True):
         _nav_btn("🔍  Query Builder", "query")
         _results_label = "📋  Results & Actions"
         if st.session_state.query_results is not None:
@@ -11261,33 +11280,24 @@ def render_sidebar_nav():
         _nav_btn("📂  CSV Data Loader", "csv_loader")
         _nav_btn("⚡  Force Update", "force_update")
 
-    # ── DATA QUALITY ──────────────────────────────────────────────────────────────────
-    with st.expander("🧹  Data Quality", expanded=True):
-        _nav_btn("🔗  Deduplication", "dedupe")
-        _nav_btn("🗑️  Contact Purge", "contact_purge")
-        _nav_btn("🔁  Duplicate Lead Detection", "duplicate_leads")
-        _nav_btn("🌐  Website Cleanup", "website_cleanup")
-        _nav_btn("📦  Data Archival Assistant", "archival")
+    # ── DATA HEALTH ───────────────────────────────────────────────────────────────────
+    with st.expander("🧹  Data Health", expanded=True):
+        _nav_btn("🧹  Data Quality Centre", "data_quality")
+        _nav_btn("📦  Data Archival", "archival")
+        _nav_btn("🗺️  Territory Management", "territory")
 
-    # ── ORG MANAGEMENT ────────────────────────────────────────────────────────────────
-    with st.expander("🛠️  Org Management", expanded=False):
-        _nav_btn("🗺️  Territory Mgmt", "territory")
-        _nav_btn("🔐  Permissions & Access", "permissions")
+    # ── ORG INTELLIGENCE ──────────────────────────────────────────────────────────────
+    with st.expander("🔧  Org Intelligence", expanded=False):
         _nav_btn("⚙️  Automation Inventory", "automation_inventory")
-        _nav_btn("📄  Schema Explorer", "schema_explorer")
-        _nav_btn("📊  Report & Dashboard Scanner", "report_scanner")
-        _nav_btn("👤  Bulk Ownership Transfer", "ownership_transfer")
+        _nav_btn("🔐  Permissions & Users", "permissions")
+        _nav_btn("📄  Org Explorer", "org_explorer")
 
     # ── REFERENCE & LOGS ──────────────────────────────────────────────────────────────
     with st.expander("📚  Reference & Logs", expanded=False):
-        _hist_label = "📁  History & Logs"
+        _hist_label = "📚  Reference & Logs"
         if st.session_state.query_history:
             _hist_label += f"  ({len(st.session_state.query_history)})"
         _nav_btn(_hist_label, "history")
-        _nav_btn("🗓️  Change Log Generator", "change_log")
-        _nav_btn("🗂️  Cleanup Shortcuts", "shortcuts")
-        _nav_btn("📧  Digest & Alerts", "digest_config")
-        _nav_btn("📋  Runbooks", "runbooks")
 
     # ── SAFETY ────────────────────────────────────────────────────────────────────────
     with st.expander("🛡️  Safety", expanded=True):
@@ -13108,7 +13118,7 @@ def render_shortcuts_page(dry_run_mode: bool, auto_backup: bool):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_website_cleanup_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("🌐  Website Cleanup")
+    st.subheader("🌐  Website Cleanup")
     render_website_cleanup_tab(auto_backup=auto_backup, dry_run_mode=dry_run_mode)
 
 
@@ -13119,10 +13129,10 @@ def render_website_cleanup_page(dry_run_mode: bool, auto_backup: bool):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_permissions_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("🔐  Permissions & Access")
+    st.header("🔐  Permissions & Users")
     permissions_section = st.radio(
         "Section",
-        ["👤  User Hub", "⚖️  Permission Set Comparison", "🔍  Access Reverse Lookup"],
+        ["👤  User Hub", "⚖️  Permission Set Comparison", "🔍  Access Reverse Lookup", "🔄  Ownership Transfer"],
         key="permissions_section",
         label_visibility="collapsed",
     )
@@ -13133,6 +13143,8 @@ def render_permissions_page(dry_run_mode: bool, auto_backup: bool):
         _render_perm_set_comparison()
     elif permissions_section == "🔍  Access Reverse Lookup":
         _render_access_reverse_lookup()
+    elif permissions_section == "🔄  Ownership Transfer":
+        render_ownership_transfer_page(dry_run_mode, auto_backup)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -13527,8 +13539,8 @@ def _collect_health_metrics() -> list[dict]:
     return metrics
 
 
-def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("📊  Org Health Dashboard")
+def _render_dashboard_health(dry_run_mode: bool, auto_backup: bool):
+    """Original Org Health Dashboard content — now shown inside the Dashboard's first tab."""
 
     # ── Snapshot controls ──────────────────────────────────────────────────────
     _supabase_live = _get_db_connection() is not None
@@ -14070,35 +14082,37 @@ def render_automation_inventory_page(dry_run_mode: bool, auto_backup: bool):
     if "_flow_cache" not in st.session_state:
         st.session_state["_flow_cache"] = _load_flow_cache()
 
-    auto_section = st.radio(
-        "Section",
-        [
-            "📊  Census",
-            "🏥  Object Health",
-            "🔎  Object Explorer",
-            "🗺️  Merge Planner",
-            "🕰️  Stale Automations",
-            "🏷️  Integration Map",
-        ],
-        key="auto_section",
-        label_visibility="collapsed",
-        horizontal=True,
-    )
-    st.markdown("---")
+    # ── Two consolidated tabs ───────────────────────────────────────────
+    tab_catalog, tab_planner = st.tabs([
+        "📊  Automation Catalog",
+        "🗺️  Consolidation Planner",
+    ])
 
-    # ── Route to tab renderers ────────────────────────────────────────────
-    if auto_section == "📊  Census":
-        _render_census_tab()
-    elif auto_section == "🏥  Object Health":
-        _render_object_health_tab()
-    elif auto_section == "🔎  Object Explorer":
-        _render_object_explorer_tab()
-    elif auto_section == "🗺️  Merge Planner":
+    with tab_catalog:
+        # Everything about what automations exist and their health
+        _cat_section = st.radio(
+            "Catalog view",
+            ["📊  Census", "🏥  Object Health", "🔎  Object Explorer",
+             "🕰️  Stale Automations", "🏷️  Integration Map"],
+            key="auto_catalog_section",
+            label_visibility="collapsed",
+            horizontal=True,
+        )
+        st.markdown("---")
+        if _cat_section == "📊  Census":
+            _render_census_tab()
+        elif _cat_section == "🏥  Object Health":
+            _render_object_health_tab()
+        elif _cat_section == "🔎  Object Explorer":
+            _render_object_explorer_tab()
+        elif _cat_section == "🕰️  Stale Automations":
+            _render_stale_automations_tab()
+        elif _cat_section == "🏷️  Integration Map":
+            render_integration_map()
+
+    with tab_planner:
+        # AI-assisted flow consolidation and merge planning
         _render_merge_planner_tab()
-    elif auto_section == "🕰️  Stale Automations":
-        _render_stale_automations_tab()
-    elif auto_section == "🏷️  Integration Map":
-        render_integration_map()
 
 
 # ── Tab 1: Census ─────────────────────────────────────────────────────────
@@ -18841,7 +18855,7 @@ def _fetch_population_rates(object_name: str, fields: list[str], total_count: in
 
 
 def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("📄  Schema Explorer")
+    st.subheader("📄  Schema Explorer")
     st.caption(
         "Browse fields on any object. Detect integration ownership, calculate population rates, "
         "and surface cleanup candidates."
@@ -19032,7 +19046,7 @@ def _load_dashboard_inventory() -> pd.DataFrame:
 
 
 def render_report_scanner_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("📊  Report & Dashboard Cleanup Scanner")
+    st.subheader("📊  Reports & Dashboards")
     st.caption(
         "Surface stale and orphaned reports and dashboards across the org. "
         "Read-only — no records are modified."
@@ -19219,7 +19233,7 @@ def _fetch_owned_records(object_name: str, user_id: str, extra_filter: str = "")
 
 
 def render_ownership_transfer_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("👤  Bulk Ownership Transfer Wizard")
+    st.subheader("👤  Bulk Ownership Transfer Wizard")
     st.caption(
         "Transfer all records owned by a departing user to one or more new owners. "
         "Step through the wizard to preview before executing."
@@ -19499,7 +19513,7 @@ def _generate_release_notes(rows: list[dict]) -> str:
 
 
 def render_change_log_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("🗓️  Change Log & Release Notes Generator")
+    st.subheader("🗓️  Change Log & Release Notes")
     st.caption(
         "Load SetupAuditTrail data for a date range, filter, and generate "
         "AI-formatted release notes. SetupAuditTrail retains 180 days of history."
@@ -19979,7 +19993,7 @@ def _save_digest_config(cfg: dict):
 
 
 def render_digest_config_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("📧  Scheduled Digest & Alerting")
+    st.subheader("📧  Scheduled Digest & Alerting")
     st.caption(
         "Configure the automated org health digest. "
         "Scheduling is handled externally by Windows Task Scheduler or cron — "
@@ -20222,7 +20236,6 @@ def render_dedupe_page(dry_run_mode: bool, auto_backup: bool):
     Deduplication page.  A horizontal radio selects between Account and
     Contact deduplication.
     """
-    st.header("Deduplication")
 
     dedupe_object = st.radio(
         "Object",
@@ -21997,17 +22010,15 @@ def render_contact_purge_page(dry_run_mode: bool, auto_backup: bool):
 # PAGE: HISTORY & LOGS  (page = "history")
 # ══════════════════════════════════════════════════════════════════════════════
 
-def render_history_page():
+def _render_history_content():
     """
-    History & Logs page.
+    Query History + Audit Logs content — now shown inside the Reference & Logs first tab.
     Section 1 — Query History: all queries run this session as a table;
                 each row has a Load button that reloads the SOQL and navigates
                 to the Query Builder.
     Section 2 — Audit Logs: CSV files written to sf_backups/ by auto-backup.
     """
     import pandas as _pd
-
-    st.header("History & Logs")
 
     # ── Query History ──────────────────────────────────────────────────────────────────────────
     st.subheader("Query History")
@@ -22140,7 +22151,28 @@ def main():
         dry_run_mode, auto_backup = render_sidebar_nav()
 
     # ── Page routing ──────────────────────────────────────────────────────────────────────────
+    # Consolidated pages: data_quality, org_explorer, and absorbed pages redirect
+    # to their new parent pages for users who have old bookmarks or session state.
     page = st.session_state.page
+
+    # Redirect old page keys to their new consolidated pages
+    _REDIRECTS = {
+        "dedupe":           "data_quality",
+        "contact_purge":    "data_quality",
+        "duplicate_leads":  "data_quality",
+        "website_cleanup":  "data_quality",
+        "schema_explorer":  "org_explorer",
+        "report_scanner":   "org_explorer",
+        "ownership_transfer": "permissions",
+        "change_log":       "history",
+        "shortcuts":        "history",
+        "digest_config":    "dashboard",
+        "runbooks":         "dashboard",
+    }
+    if page in _REDIRECTS:
+        page = _REDIRECTS[page]
+        st.session_state.page = page
+
     if page == "dashboard":
         render_dashboard_page(dry_run_mode, auto_backup)
     elif page == "query":
@@ -22151,14 +22183,8 @@ def main():
         render_csv_loader_page(dry_run_mode, auto_backup)
     elif page == "force_update":
         render_force_update_page(dry_run_mode, auto_backup)
-    elif page == "dedupe":
-        render_dedupe_page(dry_run_mode, auto_backup)
-    elif page == "contact_purge":
-        render_contact_purge_page(dry_run_mode, auto_backup)
-    elif page == "duplicate_leads":
-        render_duplicate_leads_page(dry_run_mode, auto_backup)
-    elif page == "website_cleanup":
-        render_website_cleanup_page(dry_run_mode, auto_backup)
+    elif page == "data_quality":
+        render_data_quality_page(dry_run_mode, auto_backup)
     elif page == "archival":
         render_archival_page(dry_run_mode, auto_backup)
     elif page == "territory":
@@ -22167,22 +22193,10 @@ def main():
         render_permissions_page(dry_run_mode, auto_backup)
     elif page == "automation_inventory":
         render_automation_inventory_page(dry_run_mode, auto_backup)
-    elif page == "schema_explorer":
-        render_schema_explorer_page(dry_run_mode, auto_backup)
-    elif page == "report_scanner":
-        render_report_scanner_page(dry_run_mode, auto_backup)
-    elif page == "ownership_transfer":
-        render_ownership_transfer_page(dry_run_mode, auto_backup)
+    elif page == "org_explorer":
+        render_org_explorer_page(dry_run_mode, auto_backup)
     elif page == "history":
         render_history_page()
-    elif page == "change_log":
-        render_change_log_page(dry_run_mode, auto_backup)
-    elif page == "shortcuts":
-        render_shortcuts_page(dry_run_mode, auto_backup)
-    elif page == "digest_config":
-        render_digest_config_page(dry_run_mode, auto_backup)
-    elif page == "runbooks":
-        render_runbooks_page(dry_run_mode, auto_backup)
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
 
@@ -22270,7 +22284,7 @@ def _status_icon(status: str) -> str:
 
 
 def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
-    st.header("📋  Admin Runbooks")
+    st.subheader("📋  Admin Runbooks")
 
     if _get_db_connection() is None:
         st.warning("Runbooks require Supabase to be configured.")
@@ -22467,8 +22481,19 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
     with st.sidebar:
         dry_run_mode, auto_backup = render_sidebar_nav()
 
-    # ── Page routing ───────────────────────────────────────────────────══════════════════════════
+    # ── Page routing (secondary — kept in sync with main dispatch) ────────────
     page = st.session_state.page
+    _REDIRECTS_2 = {
+        "dedupe": "data_quality", "contact_purge": "data_quality",
+        "duplicate_leads": "data_quality", "website_cleanup": "data_quality",
+        "schema_explorer": "org_explorer", "report_scanner": "org_explorer",
+        "ownership_transfer": "permissions", "change_log": "history",
+        "shortcuts": "history", "digest_config": "dashboard", "runbooks": "dashboard",
+    }
+    if page in _REDIRECTS_2:
+        page = _REDIRECTS_2[page]
+        st.session_state.page = page
+
     if page == "dashboard":
         render_dashboard_page(dry_run_mode, auto_backup)
     elif page == "query":
@@ -22479,14 +22504,8 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
         render_csv_loader_page(dry_run_mode, auto_backup)
     elif page == "force_update":
         render_force_update_page(dry_run_mode, auto_backup)
-    elif page == "dedupe":
-        render_dedupe_page(dry_run_mode, auto_backup)
-    elif page == "contact_purge":
-        render_contact_purge_page(dry_run_mode, auto_backup)
-    elif page == "duplicate_leads":
-        render_duplicate_leads_page(dry_run_mode, auto_backup)
-    elif page == "website_cleanup":
-        render_website_cleanup_page(dry_run_mode, auto_backup)
+    elif page == "data_quality":
+        render_data_quality_page(dry_run_mode, auto_backup)
     elif page == "archival":
         render_archival_page(dry_run_mode, auto_backup)
     elif page == "territory":
@@ -22495,22 +22514,10 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
         render_permissions_page(dry_run_mode, auto_backup)
     elif page == "automation_inventory":
         render_automation_inventory_page(dry_run_mode, auto_backup)
-    elif page == "schema_explorer":
-        render_schema_explorer_page(dry_run_mode, auto_backup)
-    elif page == "report_scanner":
-        render_report_scanner_page(dry_run_mode, auto_backup)
-    elif page == "ownership_transfer":
-        render_ownership_transfer_page(dry_run_mode, auto_backup)
+    elif page == "org_explorer":
+        render_org_explorer_page(dry_run_mode, auto_backup)
     elif page == "history":
         render_history_page()
-    elif page == "change_log":
-        render_change_log_page(dry_run_mode, auto_backup)
-    elif page == "shortcuts":
-        render_shortcuts_page(dry_run_mode, auto_backup)
-    elif page == "digest_config":
-        render_digest_config_page(dry_run_mode, auto_backup)
-    elif page == "runbooks":
-        render_runbooks_page(dry_run_mode, auto_backup)
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
 
@@ -22991,7 +22998,6 @@ def render_duplicate_leads_page(dry_run_mode: bool, auto_backup: bool):
     UI consistency with other modules, but have no functional effect because
     this module is fully read-only and performs no writes whatsoever.
     """
-    st.header("🔁 Duplicate Lead Detection")
     st.caption(
         "Identifies existing Leads that likely already exist as Contacts by comparing "
         "**First Name + Last Name + Company** against all Contacts and their Account names. "
@@ -23136,6 +23142,121 @@ def render_duplicate_leads_page(dry_run_mode: bool, auto_backup: bool):
         key       = "dup_leads_export_csv",
         help      = "Downloads the results table as a CSV file named duplicate_leads_report_YYYY-MM-DD.csv",
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONSOLIDATED PAGE WRAPPERS
+#
+# These functions combine formerly-separate pages into tabbed views.
+# The original render functions are preserved and called from within tabs.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Consolidated Dashboard — combines Org Health, Alerts & Digest, and Runbooks
+    into a single page with three tabs. Previously these were three separate
+    pages in the sidebar nav.
+    """
+    st.header("📊  Dashboard")
+
+    tab_health, tab_alerts, tab_runbooks = st.tabs([
+        "📊  Org Health",
+        "🚨  Alerts & Digest",
+        "📋  Runbooks",
+    ])
+
+    with tab_health:
+        _render_dashboard_health(dry_run_mode, auto_backup)
+
+    with tab_alerts:
+        render_digest_config_page(dry_run_mode, auto_backup)
+
+    with tab_runbooks:
+        render_runbooks_page(dry_run_mode, auto_backup)
+
+
+def render_history_page():
+    """
+    Consolidated Reference & Logs page — combines Query History, Audit Logs,
+    Change Log Generator, and Audit Shortcuts into a single page with tabs.
+    """
+    st.header("📚  Reference & Logs")
+
+    tab_history, tab_changelog, tab_shortcuts = st.tabs([
+        "📁  Query History & Audit Logs",
+        "🗓️  Change Log & Release Notes",
+        "🗂️  Audit Shortcuts",
+    ])
+
+    with tab_history:
+        _render_history_content()
+
+    with tab_changelog:
+        render_change_log_page(True, True)
+
+    with tab_shortcuts:
+        render_shortcuts_page(True, True)
+
+
+def render_org_explorer_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Consolidated Org Explorer — combines Schema Explorer and Report & Dashboard
+    Scanner into a single page with two tabs.
+    """
+    st.header("📄  Org Explorer")
+
+    tab_schema, tab_reports = st.tabs([
+        "📄  Schema Explorer",
+        "📊  Reports & Dashboards",
+    ])
+
+    with tab_schema:
+        render_schema_explorer_page(dry_run_mode, auto_backup)
+
+    with tab_reports:
+        render_report_scanner_page(dry_run_mode, auto_backup)
+
+
+def render_data_quality_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Consolidated Data Quality Centre — combines Deduplication, Duplicate Lead
+    Detection, Contact Purge (dirty data + stale + rules editor), and Website
+    Cleanup into a single page with tabs.
+
+    This is the one-stop shop for all record quality work.
+    """
+    st.header("🧹  Data Quality Centre")
+
+    # Load purge rules once for the tabs that need them
+    rules = _load_purge_rules()
+
+    tab_dedupe, tab_dup_leads, tab_dirty, tab_stale, tab_website, tab_rules = st.tabs([
+        "🔗  Deduplication",
+        "🔁  Lead-Contact Matches",
+        "🗑️  Dirty Data Scan",
+        "📅  Stale Records",
+        "🌐  Website Cleanup",
+        "🤖  Rules Editor",
+    ])
+
+    with tab_dedupe:
+        render_dedupe_page(dry_run_mode, auto_backup)
+
+    with tab_dup_leads:
+        render_duplicate_leads_page(dry_run_mode, auto_backup)
+
+    with tab_dirty:
+        _render_dirty_data_tab(rules, dry_run_mode, auto_backup)
+
+    with tab_stale:
+        _render_stale_tab(rules, dry_run_mode, auto_backup)
+
+    with tab_website:
+        render_website_cleanup_page(dry_run_mode, auto_backup)
+
+    with tab_rules:
+        _render_rules_editor_tab()
 
 
 if __name__ == "__main__":
