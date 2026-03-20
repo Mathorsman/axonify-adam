@@ -31,7 +31,7 @@
   "dirty_data_rules": {
     "junk_name_keywords": [
       "test", "sample", "demo", "fake", "dummy", "xxx", "yyy", "zzz",
-      "n/a", "na", "null", "none", "unknown", "tbd", "placeholder",
+      "n/a", "unknown", "tbd", "placeholder",
       "delete", "do not use", "donotuse", "admin", "import"
     ],
     "short_name_max_chars": 2,

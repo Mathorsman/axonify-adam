@@ -11309,7 +11309,8 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
     and Raw SOQL modes.  After a successful run the user is auto-navigated to
     the Results & Actions page.  Recent queries are shown at the bottom.
     """
-    st.header("Query Builder")
+    st.header("🔍  Query Builder")
+    st.caption("Build SOQL queries with AI assistance, a visual builder, or raw SOQL — then action results on the next page.")
 
     query_mode = st.radio(
         "Query mode",
@@ -13096,6 +13097,7 @@ def render_website_cleanup_page(dry_run_mode: bool, auto_backup: bool):
 
 def render_permissions_page(dry_run_mode: bool, auto_backup: bool):
     st.header("🔐  Permissions & Users")
+    st.caption("Manage users, compare permission sets, trace field-level access, or transfer record ownership.")
     permissions_section = st.radio(
         "Section",
         ["👤  User Hub", "⚖️  Permission Set Comparison", "🔍  Access Reverse Lookup", "🔄  Ownership Transfer"],
@@ -22110,7 +22112,7 @@ def main():
     st.markdown(f"""
     <div class="app-header">
       <h1>⚡ A.D.A.M.</h1>
-      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v7.0</div>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.0</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -22441,7 +22443,7 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
     st.markdown(f"""
     <div class="app-header">
       <h1>⚡ A.D.A.M.</h1>
-      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v6.0</div>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.0</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -23127,6 +23129,7 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
     pages in the sidebar nav.
     """
     st.header("📊  Dashboard")
+    st.caption("Org health at a glance. Configure digest alerts or manage runbooks from the tabs below.")
 
     tab_health, tab_alerts, tab_runbooks = st.tabs([
         "📊  Org Health",
@@ -23150,6 +23153,7 @@ def render_history_page():
     Change Log Generator, and Audit Shortcuts into a single page with tabs.
     """
     st.header("📚  Reference & Logs")
+    st.caption("Query history, change logs, and audit shortcuts — everything you need for traceability.")
 
     tab_history, tab_changelog, tab_shortcuts = st.tabs([
         "📁  Query History & Audit Logs",
@@ -23173,6 +23177,7 @@ def render_org_explorer_page(dry_run_mode: bool, auto_backup: bool):
     Scanner into a single page with two tabs.
     """
     st.header("📄  Org Explorer")
+    st.caption("Browse your org's schema and scan reports & dashboards for cleanup opportunities.")
 
     tab_schema, tab_reports = st.tabs([
         "📄  Schema Explorer",

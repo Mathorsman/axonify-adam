@@ -113,7 +113,7 @@ PATTERN_SHORT       = re.compile(r"^.{1,2}$")
 # Known junk keywords in names (case-insensitive)
 JUNK_NAME_KEYWORDS = [
     "test", "sample", "demo", "fake", "dummy", "xxx", "yyy", "zzz",
-    "n/a", "na", "null", "none", "unknown", "tbd", "placeholder",
+    "n/a", "unknown", "tbd", "placeholder",
     "delete", "do not use", "donotuse", "admin", "import",
 ]
 
@@ -418,9 +418,9 @@ def _is_short_name(value: str) -> bool:
 
 
 def _has_junk_keyword(value: str) -> bool:
-    """True if the name contains a known junk keyword."""
+    """True if the name contains a known junk keyword (whole-word match)."""
     lower = value.lower().strip()
-    return any(kw in lower for kw in JUNK_NAME_KEYWORDS)
+    return any(re.search(r'\b' + re.escape(kw) + r'\b', lower) for kw in JUNK_NAME_KEYWORDS)
 
 
 def _is_all_caps_name(value: str) -> bool:
