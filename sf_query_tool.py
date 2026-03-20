@@ -19726,9 +19726,14 @@ def render_archival_page(dry_run_mode: bool, auto_backup: bool):
         "Always exports to CSV before any deletion."
     )
 
+    _archival_options = ["📋  Archival Candidates", "🔧  Custom Scan", "🗑️  Archive & Delete"]
+    _archival_default = 0
+    if st.session_state.pop("_archival_jump_to_delete", False):
+        _archival_default = 2  # jump to Archive & Delete tab
     archival_section = st.radio(
         "Section",
-        ["📋  Archival Candidates", "🔧  Custom Scan", "🗑️  Archive & Delete"],
+        _archival_options,
+        index=_archival_default,
         key="archival_section",
         label_visibility="collapsed",
         horizontal=True,
@@ -19785,7 +19790,7 @@ def render_archival_page(dry_run_mode: bool, auto_backup: bool):
                     help="Go to Archive & Delete tab with this scan pre-selected.",
                 ):
                     st.session_state["_archival_selected"] = scan
-                    st.session_state["archival_section"] = "🗑️  Archive & Delete"
+                    st.session_state["_archival_jump_to_delete"] = True
                     st.rerun()
 
     elif archival_section == "🔧  Custom Scan":
@@ -19808,7 +19813,7 @@ def render_archival_page(dry_run_mode: bool, auto_backup: bool):
                     st.metric(f"Matching {custom_obj} records", f"{count:,}")
                     if st.button("Use in Archive & Delete", key="cs_use"):
                         st.session_state["_archival_selected"] = scan
-                        st.session_state["archival_section"] = "🗑️  Archive & Delete"
+                        st.session_state["_archival_jump_to_delete"] = True
                         st.rerun()
                 else:
                     st.error("Query failed. Check object name and WHERE clause.")
