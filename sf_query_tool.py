@@ -11265,6 +11265,7 @@ def render_sidebar_nav():
     with st.expander("🧹  Data Quality", expanded=True):
         _nav_btn("🔗  Deduplication", "dedupe")
         _nav_btn("🗑️  Contact Purge", "contact_purge")
+        _nav_btn("🔁  Duplicate Lead Detection", "duplicate_leads")
         _nav_btn("🌐  Website Cleanup", "website_cleanup")
         _nav_btn("📦  Data Archival Assistant", "archival")
 
@@ -22154,6 +22155,8 @@ def main():
         render_dedupe_page(dry_run_mode, auto_backup)
     elif page == "contact_purge":
         render_contact_purge_page(dry_run_mode, auto_backup)
+    elif page == "duplicate_leads":
+        render_duplicate_leads_page(dry_run_mode, auto_backup)
     elif page == "website_cleanup":
         render_website_cleanup_page(dry_run_mode, auto_backup)
     elif page == "archival":
@@ -22480,6 +22483,8 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
         render_dedupe_page(dry_run_mode, auto_backup)
     elif page == "contact_purge":
         render_contact_purge_page(dry_run_mode, auto_backup)
+    elif page == "duplicate_leads":
+        render_duplicate_leads_page(dry_run_mode, auto_backup)
     elif page == "website_cleanup":
         render_website_cleanup_page(dry_run_mode, auto_backup)
     elif page == "archival":
@@ -22742,6 +22747,395 @@ def render_user_hub():
         st.caption(f"{len(rows)} permission set(s) explicitly assigned.")
     else:
         st.info("No additional permission sets assigned \u2014 access is governed by profile only.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DUPLICATE LEAD DETECTION  (page = "duplicate_leads")
+#
+# Identifies Leads in Salesforce that likely already exist as Contacts by
+# comparing First Name + Last Name + Company (Lead) against
+# First Name + Last Name + Account Name (Contact).
+#
+# This is a read-only audit tool — it never creates, modifies, converts,
+# or deletes any records.  Human reviews the output and decides what to do.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _dup_leads_query_all(sf, soql: str) -> list:
+    """
+    Executes a SOQL query and follows Salesforce's pagination (nextRecordsUrl)
+    until every record has been retrieved.
+
+    Salesforce returns a maximum of 2,000 records per page.  For large orgs
+    this function loops until the 'done' flag comes back True, collecting all
+    pages into a single flat list.  Returns a list of record dicts.
+    """
+    result  = sf.query(soql)
+    records = result.get("records", [])
+
+    # Keep fetching the next page until Salesforce says we're done
+    while not result.get("done", True):
+        next_url = result.get("nextRecordsUrl", "")
+        result   = sf.query_more(next_url, identifier_is_url=True)
+        records.extend(result.get("records", []))
+
+    return records
+
+
+def _dup_leads_fetch_leads(sf) -> "pd.DataFrame":
+    """
+    Queries all unconverted, non-deleted Leads from Salesforce.
+
+    'IsConverted = false' excludes Leads that have already been converted to
+    a Contact/Account — those are expected to have a matching Contact and are
+    not meaningful duplicates for this audit.
+
+    Returns a DataFrame with columns:
+        Id, FirstName, LastName, Company, Email, CreatedDate
+    """
+    soql = (
+        "SELECT Id, FirstName, LastName, Company, Email, CreatedDate "
+        "FROM Lead "
+        "WHERE IsConverted = false"
+    )
+    records = _dup_leads_query_all(sf, soql)
+
+    # Log to query history so the run appears in History & Logs
+    add_to_history(soql, "Lead", len(records))
+
+    if not records:
+        return pd.DataFrame(columns=["Id", "FirstName", "LastName", "Company", "Email", "CreatedDate"])
+
+    rows = []
+    for r in records:
+        rows.append({
+            "Id":          r.get("Id", ""),
+            "FirstName":   r.get("FirstName") or "",
+            "LastName":    r.get("LastName") or "",
+            "Company":     r.get("Company") or "",
+            "Email":       r.get("Email") or "",
+            "CreatedDate": r.get("CreatedDate") or "",
+        })
+    return pd.DataFrame(rows)
+
+
+def _dup_leads_fetch_contacts(sf) -> "pd.DataFrame":
+    """
+    Queries all active Contacts from Salesforce, including their Account name.
+
+    The Account name is fetched via a relationship query (Account.Name) and
+    is the field compared against the Lead's Company field during matching.
+
+    Returns a DataFrame with columns:
+        Id, FirstName, LastName, Email, AccountName
+    """
+    soql = (
+        "SELECT Id, FirstName, LastName, Email, Account.Name "
+        "FROM Contact"
+    )
+    records = _dup_leads_query_all(sf, soql)
+
+    # Log to query history
+    add_to_history(soql, "Contact", len(records))
+
+    if not records:
+        return pd.DataFrame(columns=["Id", "FirstName", "LastName", "Email", "AccountName"])
+
+    rows = []
+    for r in records:
+        # Account.Name is returned as a nested dict: r["Account"]["Name"]
+        acct         = r.get("Account") or {}
+        account_name = acct.get("Name") or "" if isinstance(acct, dict) else ""
+        rows.append({
+            "Id":          r.get("Id", ""),
+            "FirstName":   r.get("FirstName") or "",
+            "LastName":    r.get("LastName") or "",
+            "Email":       r.get("Email") or "",
+            "AccountName": account_name,
+        })
+    return pd.DataFrame(rows)
+
+
+def _dup_leads_find_matches(leads_df: "pd.DataFrame", contacts_df: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Compares every Lead against every Contact using a normalised match key.
+
+    A Lead is flagged only when ALL THREE of the following match
+    (case-insensitive, leading/trailing whitespace stripped):
+        Lead.FirstName  ==  Contact.FirstName
+        Lead.LastName   ==  Contact.LastName
+        Lead.Company    ==  Contact Account.Name
+
+    The approach:
+      1. Build a string key "firstname||lastname||company" for each Lead
+      2. Build the same key for each Contact (using Account Name as company)
+      3. Inner-join the two DataFrames on the key
+      4. Each row in the result is one Lead/Contact duplicate pair
+
+    Returns a display-ready DataFrame, or an empty DataFrame if no matches.
+    """
+    if leads_df.empty or contacts_df.empty:
+        return pd.DataFrame()
+
+    # Build normalised match key for Leads
+    leads_df = leads_df.copy()
+    leads_df["_match_key"] = (
+        leads_df["FirstName"].str.strip().str.lower().fillna("") + "||" +
+        leads_df["LastName"].str.strip().str.lower().fillna("") + "||" +
+        leads_df["Company"].str.strip().str.lower().fillna("")
+    )
+
+    # Build the same normalised key for Contacts (Account Name plays the role of Company)
+    contacts_df = contacts_df.copy()
+    contacts_df["_match_key"] = (
+        contacts_df["FirstName"].str.strip().str.lower().fillna("") + "||" +
+        contacts_df["LastName"].str.strip().str.lower().fillna("") + "||" +
+        contacts_df["AccountName"].str.strip().str.lower().fillna("")
+    )
+
+    # Exclude rows where all three fields are blank — these are not meaningful matches
+    leads_df    = leads_df[leads_df["_match_key"]    != "||"]
+    contacts_df = contacts_df[contacts_df["_match_key"] != "||"]
+
+    # Inner join: every Lead row that shares a key with at least one Contact row
+    merged = leads_df.merge(
+        contacts_df,
+        on="_match_key",
+        suffixes=("_lead", "_contact"),
+    )
+
+    if merged.empty:
+        return pd.DataFrame()
+
+    # Trim CreatedDate to YYYY-MM-DD (Salesforce returns full ISO datetime string)
+    created_dates = merged["CreatedDate"].str[:10] if "CreatedDate" in merged.columns else ""
+
+    # Build the output DataFrame with the column names required by the spec
+    result = pd.DataFrame({
+        "Lead Name":             merged["FirstName_lead"].str.strip() + " " + merged["LastName_lead"].str.strip(),
+        "Lead Company":          merged["Company"],
+        "Lead Email":            merged["Email_lead"],
+        "Lead Created Date":     created_dates,
+        "Matched Contact Name":  merged["FirstName_contact"].str.strip() + " " + merged["LastName_contact"].str.strip(),
+        "Matched Account Name":  merged["AccountName"],
+        "Matched Contact Email": merged["Email_contact"],
+        "Lead ID":               merged["Id_lead"],
+        "Contact ID":            merged["Id_contact"],
+        "Match Basis":           "First Name + Last Name + Company",
+    })
+
+    return result.reset_index(drop=True)
+
+
+def _dup_leads_write_log(
+    leads_count: int,
+    contacts_count: int,
+    matches_count: int,
+    export_filename: str,
+) -> str:
+    """
+    Writes a plain-text audit log entry to sf_logs/ summarising this scan run.
+
+    The log records who ran the scan, how many records were checked, how many
+    matches were found, and the export filename.  No backup is created because
+    this module is read-only and touches no records.
+
+    Log files are named:  sf_logs/Lead_DuplicateScan_<timestamp>.log
+
+    Returns the path to the log file so it can be shown in the UI.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp = datetime.datetime.now()
+    filename  = f"{LOG_DIR}/Lead_DuplicateScan_{timestamp.strftime(TIMESTAMP_FMT)}.log"
+    user      = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+
+    lines = [
+        "=" * 72,
+        "ADAM AUDIT LOG — Duplicate Lead Detection",
+        "=" * 72,
+        f"Timestamp:          {timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Run by:             {user}",
+        "",
+        "SCAN SUMMARY",
+        f"  Leads checked:    {leads_count:,}",
+        f"  Contacts checked: {contacts_count:,}",
+        f"  Matches found:    {matches_count:,}",
+        "",
+        "MATCH CRITERIA",
+        "  All three fields must match (case-insensitive, whitespace-trimmed):",
+        "    Lead.FirstName  ==  Contact.FirstName",
+        "    Lead.LastName   ==  Contact.LastName",
+        "    Lead.Company    ==  Contact.Account.Name",
+        "",
+        "EXPORT",
+        f"  {export_filename if export_filename else 'No export — 0 matches found'}",
+        "",
+        "NOTE: This scan is read-only.  No records were modified, converted, or deleted.",
+        "=" * 72,
+    ]
+
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    return filename
+
+
+def render_duplicate_leads_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Main entry point for the Duplicate Lead Detection page.
+
+    Identifies Leads that likely already exist as Contacts by comparing
+    First Name + Last Name + Company against all active Contacts.
+
+    The dry_run_mode and auto_backup sidebar toggles are accepted here for
+    UI consistency with other modules, but have no functional effect because
+    this module is fully read-only and performs no writes whatsoever.
+    """
+    st.header("🔁 Duplicate Lead Detection")
+    st.caption(
+        "Identifies existing Leads that likely already exist as Contacts by comparing "
+        "**First Name + Last Name + Company** against all Contacts and their Account names. "
+        "This is a retrospective audit tool — it never modifies any records."
+    )
+
+    # Inform the user that this module is read-only so they know the safety
+    # toggles in the sidebar don't apply here
+    st.info(
+        "**Read-only module.** This scan queries Salesforce but does not update, convert, "
+        "or delete any records. The Dry Run and Auto-Backup sidebar toggles have no effect here."
+    )
+
+    st.markdown("---")
+
+    # ── Run Audit button ────────────────────────────────────────────────────────
+    # Clicking the button kicks off the full Lead + Contact fetch and comparison.
+    # Results are stored in session state so they survive Streamlit reruns
+    # (e.g. if the user clicks the export button without re-running the scan).
+    if st.button("▶  Run Audit", type="primary", key="dup_leads_run"):
+
+        # Clear any results from a previous run so stale data is never shown
+        for k in ("_dup_leads_results", "_dup_leads_leads_count", "_dup_leads_contacts_count"):
+            st.session_state.pop(k, None)
+
+        try:
+            # Step 1 — Establish the Salesforce connection
+            with st.spinner("Connecting to Salesforce…"):
+                sf = get_sf_connection()
+
+            # Step 2 — Fetch all unconverted Leads
+            with st.spinner("Querying Leads…"):
+                leads_df = _dup_leads_fetch_leads(sf)
+            st.toast(f"Leads loaded: {len(leads_df):,}")
+
+            # Step 3 — Fetch all Contacts with their Account names
+            with st.spinner("Querying Contacts…"):
+                contacts_df = _dup_leads_fetch_contacts(sf)
+            st.toast(f"Contacts loaded: {len(contacts_df):,}")
+
+            # Step 4 — Compare records to find matches
+            with st.spinner("Comparing records…"):
+                results_df = _dup_leads_find_matches(leads_df, contacts_df)
+
+            # Step 5 — Write the audit log before displaying results
+            date_str        = datetime.datetime.now().strftime("%Y-%m-%d")
+            export_filename = f"duplicate_leads_report_{date_str}.csv" if not results_df.empty else ""
+            log_path        = _dup_leads_write_log(
+                leads_count    = len(leads_df),
+                contacts_count = len(contacts_df),
+                matches_count  = len(results_df),
+                export_filename= export_filename,
+            )
+
+            # Persist results in session state for the display section below
+            st.session_state["_dup_leads_results"]        = results_df
+            st.session_state["_dup_leads_leads_count"]    = len(leads_df)
+            st.session_state["_dup_leads_contacts_count"] = len(contacts_df)
+
+            st.success(
+                f"Scan complete — {len(leads_df):,} leads and {len(contacts_df):,} contacts checked. "
+                f"**{len(results_df):,} potential duplicate(s) found.**  "
+                f"Log saved: `{log_path}`"
+            )
+
+        except Exception as e:
+            # Surface the error clearly in the UI — never leave the user with
+            # a silent failure or a raw Python traceback in the console only
+            st.error(
+                f"❌ An error occurred during the audit: {e}\n\n"
+                "Check your Salesforce connection and try again. If the problem persists, "
+                "contact your ADAM administrator."
+            )
+            return
+
+    # ── Results display ─────────────────────────────────────────────────────────
+    # This section renders whenever results exist in session state — both
+    # immediately after the button is clicked and if the user navigates away
+    # and back without running the scan again.
+
+    results_df = st.session_state.get("_dup_leads_results")
+
+    if results_df is None:
+        # First visit — no scan has been run yet in this session
+        st.markdown(
+            "Click **▶  Run Audit** above to start. The scan will:\n"
+            "1. Fetch all unconverted Leads from Salesforce\n"
+            "2. Fetch all Contacts and their Account names\n"
+            "3. Flag Leads where First Name + Last Name + Company all match a Contact\n"
+            "4. Present the matches here for your review and export"
+        )
+        return
+
+    if results_df.empty:
+        # Scan ran successfully but found no matches — show a positive result
+        st.success("✅  No duplicate leads detected.")
+        leads_count    = st.session_state.get("_dup_leads_leads_count", 0)
+        contacts_count = st.session_state.get("_dup_leads_contacts_count", 0)
+        st.caption(f"Checked {leads_count:,} leads against {contacts_count:,} contacts — no matches found.")
+        return
+
+    # One or more matches were found — show metrics, table, and export button
+    st.markdown("---")
+    st.subheader(f"Results — {len(results_df):,} potential duplicate(s)")
+
+    leads_count    = st.session_state.get("_dup_leads_leads_count", 0)
+    contacts_count = st.session_state.get("_dup_leads_contacts_count", 0)
+
+    # Summary metrics at the top so the key numbers are visible at a glance
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Leads Scanned",    f"{leads_count:,}")
+    col2.metric("Contacts Scanned", f"{contacts_count:,}")
+    col3.metric("Potential Dupes",  f"{len(results_df):,}")
+
+    st.markdown("")
+
+    # Column picker — lets the admin show or hide columns without re-running
+    _DEFAULT_COLS = [
+        "Lead Name", "Lead Company", "Lead Email", "Lead Created Date",
+        "Matched Contact Name", "Matched Account Name", "Matched Contact Email",
+        "Lead ID", "Contact ID", "Match Basis",
+    ]
+    show_cols = _col_picker(results_df, _DEFAULT_COLS, "_dup_leads_col_pick")
+
+    # Results table — sortable by clicking any column header
+    st.dataframe(results_df[show_cols], hide_index=True, width="stretch")
+    st.caption(
+        "Sort by any column by clicking its header. "
+        "All matches use **exact** name + company comparison (case-insensitive). "
+        "No fuzzy matching or email fallback is applied."
+    )
+
+    # ── Export to CSV ───────────────────────────────────────────────────────────
+    st.markdown("---")
+    date_str  = datetime.datetime.now().strftime("%Y-%m-%d")
+    csv_bytes = results_df[show_cols].to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇  Export to CSV",
+        data      = csv_bytes,
+        file_name = f"duplicate_leads_report_{date_str}.csv",
+        mime      = "text/csv",
+        key       = "dup_leads_export_csv",
+        help      = "Downloads the results table as a CSV file named duplicate_leads_report_YYYY-MM-DD.csv",
+    )
 
 
 if __name__ == "__main__":
