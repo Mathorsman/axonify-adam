@@ -3566,6 +3566,80 @@ MERGE_DISPLAY_FIELDS = [
     ("LastModifiedDate",  "Last Modified"),
 ]
 
+# ── Generic merge engine (shared by Account and Contact deduplication) ─────
+#
+# Both Account and Contact merges follow the same pattern:
+#   1. For each child object type, find records pointing at the duplicate
+#   2. Re-parent them to the master record (via Bulk API)
+#   3. Delete the duplicate record
+# The only differences are the child object list and the delete call.
+
+def _execute_generic_merge(
+    sf,
+    object_name: str,
+    child_objects: list,
+    master_id: str,
+    duplicate_id: str,
+    dry_run: bool = True,
+) -> dict:
+    """
+    Generic merge engine used by both Account and Contact deduplication.
+
+    Re-parents all child records from duplicate_id to master_id, then deletes
+    the duplicate.  In dry_run mode, only counts — nothing is changed.
+
+    Parameters:
+        sf             — authenticated simple_salesforce.Salesforce instance
+        object_name    — "Account" or "Contact" (used for the delete call)
+        child_objects  — list of (child_object_name, parent_field) tuples
+        master_id      — 18-char Id of the record to keep
+        duplicate_id   — 18-char Id of the record to merge away
+        dry_run        — if True, count only; if False, execute changes
+
+    Returns:
+        {"children_moved": {obj: count, ...}, "errors": [...], "dry_run": bool}
+    """
+    children_moved = {}
+    errors         = []
+
+    for child_obj, parent_field in child_objects:
+        try:
+            result = sf.query(
+                f"SELECT Id FROM {child_obj} "
+                f"WHERE {parent_field} = '{duplicate_id}' LIMIT 2000"
+            )
+            child_records = result.get("records", [])
+            if not child_records:
+                continue
+
+            children_moved[child_obj] = len(child_records)
+
+            if not dry_run:
+                payload = [{"Id": r["Id"], parent_field: master_id} for r in child_records]
+                obj_api = getattr(sf.bulk, child_obj)
+                results = obj_api.update(payload)
+                failed  = [r for r in results if not r.get("success")]
+                if failed:
+                    errors.append(f"{child_obj}: {len(failed)} re-parent failures")
+
+        except Exception as e:
+            err_str = str(e)
+            if "sObject type" not in err_str and "INVALID_TYPE" not in err_str:
+                errors.append(f"{child_obj}: {e}")
+
+    if not dry_run and not errors:
+        try:
+            getattr(sf, object_name).delete(duplicate_id)
+        except Exception as e:
+            errors.append(f"Delete duplicate: {e}")
+
+    return {
+        "children_moved": children_moved,
+        "errors":         errors,
+        "dry_run":        dry_run,
+    }
+
+
 # Child objects to re-parent when merging
 MERGE_CHILD_OBJECTS = [
     ("Contact",          "AccountId"),
@@ -3585,63 +3659,8 @@ def execute_account_merge(
     object_name: str = "Account",
     dry_run: bool = True,
 ) -> dict:
-    """
-    Merges duplicate_id into master_id by:
-      1. Re-parenting all child records (Contacts, Opps, Cases, etc.)
-      2. Deleting the duplicate Account
-
-    In dry_run mode, only counts what WOULD be moved — nothing is changed.
-
-    Returns:
-      {
-        "children_moved": { "Contact": 3, "Opportunity": 1, ... },
-        "errors": [],
-        "dry_run": True/False
-      }
-    """
-    children_moved = {}
-    errors         = []
-
-    for child_obj, parent_field in MERGE_CHILD_OBJECTS:
-        try:
-            # Count/fetch children linked to the duplicate
-            count_result = sf.query(
-                f"SELECT Id FROM {child_obj} "
-                f"WHERE {parent_field} = '{duplicate_id}' LIMIT 2000"
-            )
-            child_records = count_result.get("records", [])
-            if not child_records:
-                continue
-
-            children_moved[child_obj] = len(child_records)
-
-            if not dry_run:
-                # Re-parent in batches via Bulk API
-                payload = [{"Id": r["Id"], parent_field: master_id} for r in child_records]
-                obj_api = getattr(sf.bulk, child_obj)
-                results = obj_api.update(payload)
-                failed  = [r for r in results if not r.get("success")]
-                if failed:
-                    errors.append(f"{child_obj}: {len(failed)} re-parent failures")
-
-        except Exception as e:
-            # Some child objects may not exist in this org — skip gracefully
-            err_str = str(e)
-            if "sObject type" not in err_str and "INVALID_TYPE" not in err_str:
-                errors.append(f"{child_obj}: {e}")
-
-    if not dry_run and not errors:
-        # Delete the duplicate
-        try:
-            sf.Account.delete(duplicate_id)
-        except Exception as e:
-            errors.append(f"Delete duplicate: {e}")
-
-    return {
-        "children_moved": children_moved,
-        "errors":         errors,
-        "dry_run":        dry_run,
-    }
+    """Merges duplicate Account into master. Delegates to the generic engine."""
+    return _execute_generic_merge(sf, "Account", MERGE_CHILD_OBJECTS, master_id, duplicate_id, dry_run)
 
 
 def get_ai_merge_recommendation(
@@ -5358,61 +5377,8 @@ def execute_contact_merge(
     duplicate_id: str,
     dry_run: bool = True,
 ) -> dict:
-    """
-    Merges a duplicate Contact into a master Contact by:
-      1. Re-parenting child records (Tasks, Events, CampaignMembers, Cases)
-         from the duplicate to the master.
-      2. Deleting the duplicate Contact.
-
-    In dry_run mode, only counts what WOULD be moved — nothing changes.
-
-    Returns:
-      {
-        "children_moved": { "Task": 2, "CampaignMember": 1, ... },
-        "errors": [],
-        "dry_run": True/False
-      }
-    """
-    children_moved = {}
-    errors         = []
-
-    for child_obj, parent_field in CONTACT_CHILD_OBJECTS:
-        try:
-            result = sf.query(
-                f"SELECT Id FROM {child_obj} "
-                f"WHERE {parent_field} = '{duplicate_id}' LIMIT 2000"
-            )
-            child_records = result.get("records", [])
-            if not child_records:
-                continue
-
-            children_moved[child_obj] = len(child_records)
-
-            if not dry_run:
-                payload = [{"Id": r["Id"], parent_field: master_id} for r in child_records]
-                obj_api = getattr(sf.bulk, child_obj)
-                results = obj_api.update(payload)
-                failed  = [r for r in results if not r.get("success")]
-                if failed:
-                    errors.append(f"{child_obj}: {len(failed)} re-parent failures")
-
-        except Exception as e:
-            err_str = str(e)
-            # Silently skip objects that don't exist in this org
-            if "sObject type" not in err_str and "INVALID_TYPE" not in err_str:
-                errors.append(f"{child_obj}: {e}")
-
-    if not dry_run and not errors:
-        try:
-            sf.Contact.delete(duplicate_id)
-        except Exception as e:
-            errors.append(f"Delete duplicate: {e}")
-
-    return {
-        "children_moved": children_moved,
-        "errors":         errors,
-        "dry_run":        dry_run,
-    }
+    """Merges duplicate Contact into master. Delegates to the generic engine."""
+    return _execute_generic_merge(sf, "Contact", CONTACT_CHILD_OBJECTS, master_id, duplicate_id, dry_run)
 
 
 def get_contact_ai_recommendation(
@@ -13819,12 +13785,14 @@ def _render_dashboard_health(dry_run_mode: bool, auto_backup: bool):
     # ── Section 5: Quick Navigation Cards ─────────────────────────────────────
     st.subheader("Quick Actions")
     cards = [
-        ("🔍", "Run a Query",        "SOQL builder with AI assist",        "query"),
-        ("🔗", "Dedup Accounts",     "Find and merge duplicate accounts",   "dedupe"),
-        ("🗺️", "Territory Check",    "Lookup and reassign territory",       "territory"),
-        ("🔐", "Permissions Lookup", "User Hub and permission set review",  "permissions"),
+        ("🔍", "Run a Query",         "AI-assisted SOQL builder",                           "query"),
+        ("🧹", "Data Quality",        "Deduplicate, scan dirty data, find stale records",   "data_quality"),
+        ("🗺️", "Territory Mgmt",      "Definitions, assignment, and territory reporting",   "territory"),
+        ("⚙️", "Automations",         "Census, health scoring, and stale detection",        "automation_inventory"),
+        ("🔐", "Permissions",         "User hub, permission sets, ownership transfer",      "permissions"),
+        ("📄", "Org Explorer",        "Schema browser and report/dashboard scanner",        "org_explorer"),
     ]
-    card_cols = st.columns(4)
+    card_cols = st.columns(len(cards))
     for col, (icon, title, desc, target) in zip(card_cols, cards):
         with col:
             if st.button(
@@ -23227,6 +23195,10 @@ def render_data_quality_page(dry_run_mode: bool, auto_backup: bool):
     This is the one-stop shop for all record quality work.
     """
     st.header("🧹  Data Quality Centre")
+    st.caption(
+        "One-stop shop for all record quality work. Use the tabs below to find duplicates, "
+        "flag dirty data, identify stale records, clean up websites, or edit purge rules."
+    )
 
     # Load purge rules once for the tabs that need them
     rules = _load_purge_rules()
