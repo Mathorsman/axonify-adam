@@ -469,6 +469,73 @@ def generate_ai_briefing(
 # SLACK POSTING
 # ══════════════════════════════════════════════════════════════════════════════
 
+def generate_adam_narrative(days: int) -> str:
+    """
+    Generate a plain-language 'This Week in A.D.A.M.' narrative from
+    operation_logs stored in Supabase. Returns empty string if Supabase
+    is not configured or no logs exist.
+    """
+    sb_url = os.environ.get("SUPABASE_URL", "").strip()
+    sb_key = os.environ.get("SUPABASE_KEY", "").strip()
+    if not sb_url or not sb_key:
+        return ""
+
+    try:
+        from supabase import create_client as _sb
+        sb = _sb(sb_url, sb_key)
+        cutoff = (_utcnow() - datetime.timedelta(days=days)).isoformat()
+        logs = (sb.table("operation_logs")
+                .select("operation,object_name,record_count,succeeded,failed,created_at")
+                .gte("created_at", cutoff)
+                .order("created_at", desc=True)
+                .limit(200)
+                .execute()).data or []
+    except Exception:
+        return ""
+
+    if not logs:
+        return ""
+
+    # Build a compact summary for the AI
+    from collections import Counter
+    op_counts = Counter()
+    total_records = 0
+    total_failed = 0
+    for log in logs:
+        op_counts[log.get("operation", "Unknown")] += 1
+        total_records += log.get("record_count", 0) or 0
+        total_failed += log.get("failed", 0) or 0
+
+    ops_summary = ", ".join(f"{op}: {ct}" for op, ct in op_counts.most_common())
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return ""
+
+    prompt = (
+        f"You are A.D.A.M., the Axonify Data & Administration Manager.\n\n"
+        f"Operations in the last {days} days:\n"
+        f"- Total operations: {len(logs)}\n"
+        f"- Operations by type: {ops_summary}\n"
+        f"- Total records affected: {total_records:,}\n"
+        f"- Failed operations: {total_failed}\n\n"
+        f"Write a 3-sentence paragraph summarizing this week's admin activity, "
+        f"suitable for a Revenue Ops manager. Be specific about what happened. "
+        f"Start with 'This Week in A.D.A.M.' as the opening."
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model=AI_MODEL,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text.strip()
+    except Exception:
+        return ""
+
+
 def build_slack_blocks(
     days: int,
     summary: str,
@@ -476,6 +543,7 @@ def build_slack_blocks(
     limits: dict,
     user_changes: dict,
     flows_df: pd.DataFrame,
+    adam_narrative: str = "",
 ) -> list:
     """
     Builds a Slack Block Kit message from the digest data.
@@ -509,7 +577,20 @@ def build_slack_blocks(
             },
         },
         {"type": "divider"},
+    ]
 
+    # Plain Language Summary — AI-generated from operation_logs (F5 Component 3)
+    if adam_narrative:
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*This Week in A.D.A.M. — Auto-generated summary*\n\n{adam_narrative[:2800]}",
+            },
+        })
+        blocks.append({"type": "divider"})
+
+    blocks += [
         # AI summary
         {
             "type": "section",
@@ -715,10 +796,24 @@ def main():
         summary = generate_ai_briefing(effective_days, audit_df, limits, user_changes, flows_df)
         print(f"   ✓ Briefing generated ({len(summary)} chars)\n")
 
+    # ── Step 3b: A.D.A.M. narrative (from operation_logs in Supabase) ────────
+    adam_narrative = ""
+    if not effective_no_ai:
+        print("📝 Generating A.D.A.M. activity narrative…")
+        adam_narrative = generate_adam_narrative(effective_days)
+        if adam_narrative:
+            print(f"   ✓ Narrative generated ({len(adam_narrative)} chars)\n")
+        else:
+            print("   ℹ️  No operation logs found or Supabase not configured — skipping narrative\n")
+
     # ── Step 4: Print summary to console (always) ─────────────────────────────
     print("─" * 60)
     print("DIGEST SUMMARY")
     print("─" * 60)
+    if adam_narrative:
+        print("\n[This Week in A.D.A.M.]")
+        print(adam_narrative)
+        print()
     print(summary)
     print()
 
@@ -745,7 +840,8 @@ def main():
         today      = _utcnow().strftime("%b %d, %Y")
         fallback   = f"Axonify Salesforce Org Digest — {today}"
         blocks     = build_slack_blocks(
-            effective_days, summary, audit_df, limits, user_changes, flows_df
+            effective_days, summary, audit_df, limits, user_changes, flows_df,
+            adam_narrative=adam_narrative,
         )
         ok, msg = post_to_slack(blocks, fallback)
 

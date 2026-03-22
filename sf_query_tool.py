@@ -479,25 +479,42 @@ st.set_page_config(
 # ══════════════════════════════════════════════════════════════════════════════
 # GLOBAL STYLES  — dark industrial theme, clean data-tool aesthetic
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
 
-:root {
-    /* BACKGROUNDS — 4 clearly distinct levels */
-    --bg-base:        #0f1a15;   /* page background                        */
-    --bg-surface:     #142420;   /* cards, sidebar                         */
-    --bg-raised:      #1a3028;   /* inputs, code blocks                    */
-    --bg-overlay:     #234035;   /* hover states, active rows              */
-    /* TEXT — WCAG AA compliant on all backgrounds above */
-    --text-primary:   #f0f5f2;   /* headlines, labels        (13:1 on base) */
-    --text-secondary: #b8ccbf;   /* body copy, descriptions   (7.2:1 on base) */
-    --text-muted:     #6e8c7a;   /* timestamps, metadata only (3.9:1 — captions only) */
-    /* BORDERS — overridden per theme */
+# Module-level CSS variable constants — selected at render time by theme_mode
+DARK_CSS_VARS = """
+    --bg-base:        #0f1a15;
+    --bg-surface:     #142420;
+    --bg-raised:      #1a3028;
+    --bg-overlay:     #234035;
+    --text-primary:   #f0f5f2;
+    --text-secondary: #b8ccbf;
+    --text-muted:     #6e8c7a;
     --border-subtle:  #1a2d22;
     --nav-border:     #1a2d22;
     --tab-border:     #1a2d22;
-}
+"""
+
+LIGHT_CSS_VARS = """
+    --bg-base:        #f4f9f6;
+    --bg-surface:     #ffffff;
+    --bg-raised:      #eaf5ee;
+    --bg-overlay:     #d4eddd;
+    --text-primary:   #0a1a10;
+    --text-secondary: #1e3828;
+    --text-muted:     #3d6650;
+    --border-subtle:  #c4ddd0;
+    --nav-border:     #b8d4c4;
+    --tab-border:     #c4ddd0;
+"""
+
+_theme = st.session_state.get("theme_mode", "dark")
+_css_vars = DARK_CSS_VARS if _theme == "dark" else LIGHT_CSS_VARS
+
+st.markdown(
+    "<style>\n"
+    "@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');\n"
+    ":root {" + _css_vars + "}\n"
+    + """
 
 html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="block-container"], .main, .block-container {
     font-family: 'IBM Plex Sans', sans-serif;
@@ -639,22 +656,10 @@ section[data-testid="stSidebar"] div[data-testid="stBaseButton-secondary"] > but
 </style>
 """, unsafe_allow_html=True)
 
-# ── Theme override — inject light-mode CSS variables and component overrides ──
-if st.session_state.get("theme_mode", "dark") == "light":
+# ── Theme-adaptive overrides — light-mode component styles ────────────────────
+if _theme == "light":
     st.markdown("""
 <style>
-:root {
-    --bg-base:        #f4f9f6;
-    --bg-surface:     #ffffff;
-    --bg-raised:      #eaf5ee;
-    --bg-overlay:     #d4eddd;
-    --text-primary:   #0a1a10;
-    --text-secondary: #1e3828;
-    --text-muted:     #3d6650;
-    --border-subtle:  #c4ddd0;
-    --nav-border:     #b8d4c4;
-    --tab-border:     #c4ddd0;
-}
 /* Override Streamlit's config.toml dark base for all major containers */
 html, body, [class*="css"],
 [data-testid="stAppViewContainer"],
@@ -3187,18 +3192,25 @@ def render_dry_run_panel(df: pd.DataFrame, operation: str, object_name: str):
     record_count = len(df)
     icon = "🔴" if operation == "Delete" else "🟡"
 
-    # ── AI plain-language impact preview (cached per unique call) ─────────────
-    _impact_key = f"_impact_{operation}_{object_name}_{record_count}"
+    # ── AI plain-language impact preview (F5 Component 2 — cached per operation) ──
+    _last_soql = st.session_state.get("last_soql", "")
+    _impact_hash = hash(f"{operation}_{object_name}_{record_count}_{_last_soql}")
+    _impact_key = f"_impact_preview_{_impact_hash}"
     if _impact_key not in st.session_state:
+        _filter_hint = f" Filter applied: {_last_soql}" if _last_soql else ""
         _q = (
-            f"In one sentence, describe in plain English what it means to "
-            f"{operation.lower()} {record_count:,} {object_name} records in Salesforce. "
-            f"In a second sentence, state the rollback path if something goes wrong."
+            f"This action will {operation.lower()} {record_count:,} {object_name} records.{_filter_hint} "
+            f"In one sentence, describe in plain English what these records are and whether "
+            f"they have operational value. In a second sentence, state the rollback path "
+            f"if something goes wrong (e.g. Recycle Bin retention, backup CSV)."
         )
-        st.session_state[_impact_key] = ask_adam(_q)
+        try:
+            st.session_state[_impact_key] = ask_adam(_q)
+        except Exception:
+            st.session_state[_impact_key] = ""
     _impact = st.session_state.get(_impact_key, "")
     if _impact:
-        st.info(f"**In plain terms:** {_impact}")
+        st.info(f"**Impact preview:** {_impact}")
 
     st.markdown("---")
     st.subheader(f"{icon} Dry Run Preview — {operation}")
@@ -11377,6 +11389,29 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                 st.caption("✅ Full scan — all records returned.")
         with btn_col:
             generate_btn = st.button("🤖  Generate Results", type="primary", key="gen_soql")
+
+        # ── Ask about the org (F3 — plain-English org advisor) ──────────────
+        st.markdown("---")
+        st.subheader("Ask About the Org")
+        st.caption(
+            "Ask a plain-English question about your Salesforce org. "
+            "This is not a SOQL generator — it gives advice using live org context."
+        )
+        _adam_q = st.text_input(
+            "Ask about the org",
+            placeholder="Is it safe to remove the Drift_ fields? What would break?",
+            key="ask_adam_input",
+            label_visibility="collapsed",
+        )
+        if st.button("💬  Ask A.D.A.M.", key="ask_adam_btn") and _adam_q.strip():
+            _cache_key = f"_adam_answer_{hash(_adam_q.strip())}"
+            if _cache_key not in st.session_state:
+                with st.spinner("Thinking…"):
+                    st.session_state[_cache_key] = ask_adam(_adam_q.strip())
+            st.info(st.session_state[_cache_key])
+        elif st.session_state.get(f"_adam_answer_{hash((_adam_q or '').strip())}"):
+            st.info(st.session_state[f"_adam_answer_{hash(_adam_q.strip())}"])
+        st.markdown("---")
 
         # Reset Q&A state whenever the user changes the request text
         if ai_request.strip() != st.session_state.get("ai_qa_request", ""):
@@ -22242,7 +22277,7 @@ def main():
     st.markdown(f"""
     <div class="app-header">
       <h1>⚡ A.D.A.M.</h1>
-      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.1</div>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.2</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -22315,15 +22350,20 @@ _AUDIT_CHECKS = {
         "icon": "🔒",
         "checks": [
             {"name": "Users with Modify All Data",        "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true",
-             "description": "Highly privileged users — ensure this list is intentional.",                  "severity": "high",   "threshold": 5},
+             "description": "Highly privileged users — ensure this list is intentional.",                  "severity": "high",   "threshold": 5,
+             "remediation": {"page": "permissions", "state": {"user_hub_filter": "Modify All Data"}, "action": "Review in Permissions & Users"}},
             {"name": "Users with View All Data",           "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsViewAllData = true AND Assignee.IsActive = true",
-             "description": "Users who can read every record in the org.",                                 "severity": "medium", "threshold": 15},
+             "description": "Users who can read every record in the org.",                                 "severity": "medium", "threshold": 15,
+             "remediation": {"page": "permissions", "state": {"user_hub_filter": "View All Data"}, "action": "Review in Permissions & Users"}},
             {"name": "Active users — no login 90 days",    "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:90 AND UserType = 'Standard'",
-             "description": "Dormant accounts that should be deactivated.",                                "severity": "medium", "threshold": 5},
+             "description": "Dormant accounts that should be deactivated.",                                "severity": "medium", "threshold": 5,
+             "remediation": {"page": "query", "state": {"last_soql": "SELECT Id, Name, Email, LastLoginDate, Profile.Name FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:90 AND UserType = 'Standard'", "last_object": "User"}, "action": "Query dormant accounts in Query Builder"}},
             {"name": "Active users — no login 180 days",   "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:180 AND UserType = 'Standard'",
-             "description": "Severely dormant accounts — almost certainly safe to deactivate.",             "severity": "high",   "threshold": 0},
+             "description": "Severely dormant accounts — almost certainly safe to deactivate.",             "severity": "high",   "threshold": 0,
+             "remediation": {"page": "query", "state": {"last_soql": "SELECT Id, Name, Email, LastLoginDate, Profile.Name FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:180 AND UserType = 'Standard'", "last_object": "User"}, "action": "Query stale accounts in Query Builder"}},
             {"name": "Login-as-any-user permission",       "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsManageUsers = true AND Assignee.IsActive = true",
-             "description": "Can impersonate other users — review carefully.",                             "severity": "high",   "threshold": 3},
+             "description": "Can impersonate other users — review carefully.",                             "severity": "high",   "threshold": 3,
+             "remediation": {"page": "permissions", "state": {}, "action": "Review in Permissions & Users"}},
         ],
     },
     "data_quality": {
@@ -22331,17 +22371,23 @@ _AUDIT_CHECKS = {
         "icon": "🧹",
         "checks": [
             {"name": "Orphaned Contacts (no Account)",     "soql": "SELECT COUNT() FROM Contact WHERE AccountId = null",
-             "description": "Contacts not linked to any account.",                                         "severity": "medium", "threshold": 10},
+             "description": "Contacts not linked to any account.",                                         "severity": "medium", "threshold": 10,
+             "remediation": {"page": "data_quality", "state": {"purge_filter_preset": "orphaned"}, "action": "Review in Data Quality Centre"}},
             {"name": "Leads missing Company",              "soql": "SELECT COUNT() FROM Lead WHERE Company = null AND IsConverted = false",
-             "description": "Open leads without a company — likely junk.",                                 "severity": "medium", "threshold": 20},
+             "description": "Open leads without a company — likely junk.",                                 "severity": "medium", "threshold": 20,
+             "remediation": {"page": "query", "state": {"last_soql": "SELECT Id, Name, Company, Email, CreatedDate FROM Lead WHERE Company = null AND IsConverted = false", "last_object": "Lead"}, "action": "Query missing-company leads"}},
             {"name": "Contacts missing Email",             "soql": "SELECT COUNT() FROM Contact WHERE Email = null AND Account.Type = 'Customer'",
-             "description": "Customer contacts with no email address.",                                    "severity": "low",    "threshold": 25},
+             "description": "Customer contacts with no email address.",                                    "severity": "low",    "threshold": 25,
+             "remediation": {"page": "data_quality", "state": {"purge_filter_preset": "missing_email"}, "action": "Review in Data Quality Centre"}},
             {"name": "Accounts missing Industry",          "soql": "SELECT COUNT() FROM Account WHERE Industry = null AND Type = 'Customer'",
-             "description": "Customer accounts with no industry set.",                                     "severity": "low",    "threshold": 50},
+             "description": "Customer accounts with no industry set.",                                     "severity": "low",    "threshold": 50,
+             "remediation": {"page": "query", "state": {"last_soql": "SELECT Id, Name, Industry, Type, OwnerId, Owner.Name FROM Account WHERE Industry = null AND Type = 'Customer'", "last_object": "Account"}, "action": "Query accounts missing industry"}},
             {"name": "Opps missing Amount (past Prospect)","soql": "SELECT COUNT() FROM Opportunity WHERE Amount = null AND IsClosed = false AND StageName != 'Prospecting'",
-             "description": "Active opportunities beyond Prospecting without a dollar amount.",             "severity": "medium", "threshold": 10},
+             "description": "Active opportunities beyond Prospecting without a dollar amount.",             "severity": "medium", "threshold": 10,
+             "remediation": {"page": "query", "state": {"last_soql": "SELECT Id, Name, StageName, Amount, OwnerId, Owner.Name FROM Opportunity WHERE Amount = null AND IsClosed = false AND StageName != 'Prospecting'", "last_object": "Opportunity"}, "action": "Query opps missing amount"}},
             {"name": "Duplicate email addresses",          "soql": "SELECT COUNT(Id) ct FROM Contact WHERE Email != null GROUP BY Email HAVING COUNT(Id) > 1",
-             "description": "Contacts sharing the same email address.",                                    "severity": "medium", "threshold": 20},
+             "description": "Contacts sharing the same email address.",                                    "severity": "medium", "threshold": 20,
+             "remediation": {"page": "data_quality", "state": {"dedupe_mode": "Contact", "dedupe_email_match": True}, "action": "Review in Data Quality — Contact Dedupe"}},
         ],
     },
     "automation_health": {
@@ -22349,11 +22395,14 @@ _AUDIT_CHECKS = {
         "icon": "⚙️",
         "checks": [
             {"name": "Test/temp Flows in production",      "soql": "SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true AND (Label LIKE '%test%' OR Label LIKE '%temp%' OR Label LIKE '%delete%')",
-             "description": "Flows that look like they were meant for testing.",                           "severity": "high",   "threshold": 0},
+             "description": "Flows that look like they were meant for testing.",                           "severity": "high",   "threshold": 0,
+             "remediation": {"page": "automation_inventory", "state": {"automation_filter": "TEST / TEMP prefix"}, "action": "Review in Automation Inventory"}},
             {"name": "Flow errors (last 7 days)",          "soql": "SELECT COUNT() FROM FlowExecutionErrorEvent WHERE EventDate > LAST_N_DAYS:7",
-             "description": "Recent flow execution errors.",                                               "severity": "medium", "threshold": 10},
+             "description": "Recent flow execution errors.",                                               "severity": "medium", "threshold": 10,
+             "remediation": {"page": "automation_inventory", "state": {}, "action": "Review in Automation Inventory"}},
             {"name": "Active Record-Triggered Flows",      "soql": "SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true AND ProcessType = 'AutoLaunchedFlow'",
-             "description": "Total count of active auto-launched flows — watch for bloat.",                "severity": "low",    "threshold": 50},
+             "description": "Total count of active auto-launched flows — watch for bloat.",                "severity": "low",    "threshold": 50,
+             "remediation": {"page": "automation_inventory", "state": {}, "action": "Review in Automation Inventory"}},
         ],
     },
     "org_hygiene": {
@@ -22361,11 +22410,14 @@ _AUDIT_CHECKS = {
         "icon": "🏗️",
         "checks": [
             {"name": "Reports not run in 180 days",        "soql": "SELECT COUNT() FROM Report WHERE LastRunDate < LAST_N_DAYS:180",
-             "description": "Stale reports — candidates for cleanup.",                                     "severity": "low",    "threshold": 50},
+             "description": "Stale reports — candidates for cleanup.",                                     "severity": "low",    "threshold": 50,
+             "remediation": {"page": "org_explorer", "state": {"stale_threshold": 180}, "action": "Review in Org Explorer — Report Scanner"}},
             {"name": "Dashboards not viewed in 180 days",  "soql": "SELECT COUNT() FROM Dashboard WHERE LastReferencedDate < LAST_N_DAYS:180",
-             "description": "Unused dashboards taking up space.",                                          "severity": "low",    "threshold": 20},
+             "description": "Unused dashboards taking up space.",                                          "severity": "low",    "threshold": 20,
+             "remediation": {"page": "org_explorer", "state": {"stale_threshold": 180, "report_type_filter": "dashboards"}, "action": "Review in Org Explorer — Dashboards"}},
             {"name": "Custom objects with 0 records",      "soql": "SELECT COUNT() FROM EntityDefinition WHERE IsCustomSetting = false AND QualifiedApiName LIKE '%__c' AND RecordCount = 0",
-             "description": "Custom objects that may be unused.",                                          "severity": "low",    "threshold": 5},
+             "description": "Custom objects that may be unused.",                                          "severity": "low",    "threshold": 5,
+             "remediation": {"page": "org_explorer", "state": {}, "action": "Review in Org Explorer — Schema"}},
         ],
     },
 }
@@ -22513,16 +22565,26 @@ def render_audit_compliance_page(dry_run_mode: bool, auto_backup: bool):
                         count_str = f"{r['count']:,}" if r["count"] >= 0 else "error"
                         threshold = r.get("threshold", 0)
 
-                        st.markdown(
-                            f"{icon} **{r['name']}** — {count_str} records "
-                            f'<span style="color:{sev_color};font-size:0.75rem;">'
-                            f'[{r.get("severity","").upper()}]</span>'
-                            + (f" *(threshold: {threshold})*" if r["status"] == "fail" else "")
-                            + (f"\n\n> ⚠️ Error: {r['error']}" if r.get("error") else ""),
-                            unsafe_allow_html=True,
-                        )
-                        if r.get("description"):
-                            st.caption(r["description"])
+                        _result_col, _fix_col = st.columns([5, 1])
+                        with _result_col:
+                            st.markdown(
+                                f"{icon} **{r['name']}** — {count_str} records "
+                                f'<span style="color:{sev_color};font-size:0.75rem;">'
+                                f'[{r.get("severity","").upper()}]</span>'
+                                + (f" *(threshold: {threshold})*" if r["status"] == "fail" else "")
+                                + (f"\n\n> ⚠️ Error: {r['error']}" if r.get("error") else ""),
+                                unsafe_allow_html=True,
+                            )
+                            if r.get("description"):
+                                st.caption(r["description"])
+                        with _fix_col:
+                            _remed = r.get("remediation")
+                            if r["status"] in ("warn", "fail") and _remed and _remed.get("page"):
+                                _fix_key = f"fix_{r['name'].replace(' ', '_')}_{r['status']}"
+                                if st.button("🔧 Fix it", key=_fix_key, help=_remed.get("action", "Navigate to fix")):
+                                    for _sk, _sv in _remed.get("state", {}).items():
+                                        st.session_state[_sk] = _sv
+                                    nav_to(_remed["page"])
 
     # ── Tab 2: Compliance Report ──────────────────────────────────────────────
     with tab_report:
@@ -22533,18 +22595,23 @@ def render_audit_compliance_page(dry_run_mode: bool, auto_backup: bool):
             run_ts = st.session_state.get("audit_run_ts", "unknown")
             st.subheader(f"Compliance Report — {run_ts}")
 
-            # Build report DataFrame
+            # Build report DataFrame (includes Recommended Action column for F6)
             report_rows = []
             for r in results:
+                _remed = r.get("remediation", {})
+                _action = ""
+                if r.get("status") in ("warn", "fail") and _remed:
+                    _action = _remed.get("action", "")
                 report_rows.append({
-                    "Category":    r.get("category", ""),
-                    "Check":       r.get("name", ""),
-                    "Status":      r.get("status", "").upper(),
-                    "Count":       r.get("count", -1),
-                    "Threshold":   r.get("threshold", ""),
-                    "Severity":    r.get("severity", "").upper(),
-                    "Description": r.get("description", ""),
-                    "SOQL":        r.get("soql", ""),
+                    "Category":           r.get("category", ""),
+                    "Check":              r.get("name", ""),
+                    "Status":             r.get("status", "").upper(),
+                    "Count":              r.get("count", -1),
+                    "Threshold":          r.get("threshold", ""),
+                    "Severity":           r.get("severity", "").upper(),
+                    "Recommended Action": _action,
+                    "Description":        r.get("description", ""),
+                    "SOQL":               r.get("soql", ""),
                 })
             report_df = pd.DataFrame(report_rows)
             st.dataframe(report_df, hide_index=True, width="stretch")
@@ -22565,6 +22632,7 @@ def render_audit_compliance_page(dry_run_mode: bool, auto_backup: bool):
             warn_count = sum(1 for r in results if r["status"] == "warn")
             score = round(pass_count / len(results) * 100) if results else 0
 
+            # Template summary (always available as fallback)
             summary_text = (
                 f"# Salesforce Org Audit Report — {ORG_NAME}\n"
                 f"**Date:** {run_ts}\n"
@@ -22577,6 +22645,34 @@ def render_audit_compliance_page(dry_run_mode: bool, auto_backup: bool):
                 summary_text += "## Critical Issues\n"
                 for r in high_fails:
                     summary_text += f"- **{r['name']}**: {r['count']:,} records (threshold: {r.get('threshold', 0)})\n"
+
+            # AI-generated executive summary (F3 — cached per run)
+            _ai_summary_key = f"_ac_ai_summary_{run_ts}"
+            if _ai_summary_key not in st.session_state:
+                try:
+                    _fail_list = "\n".join(
+                        f"- {r['name']}: {r['count']:,} records [{r.get('severity','').upper()}]"
+                        for r in results if r["status"] in ("fail", "warn")
+                    ) or "None"
+                    _ai_prompt = (
+                        f"Audit health score: {score}%. "
+                        f"{pass_count} passed, {warn_count} warnings, {fail_count} failed "
+                        f"out of {len(results)} checks.\n\n"
+                        f"Failing/warning checks:\n{_fail_list}\n\n"
+                        "Based on these audit results, write a 3-sentence executive summary "
+                        "suitable for a non-technical VP. Lead with the overall health score, "
+                        "call out critical failures, and end with a single recommended action."
+                    )
+                    with st.spinner("Generating AI executive summary…"):
+                        st.session_state[_ai_summary_key] = ask_adam(_ai_prompt)
+                except Exception:
+                    st.session_state[_ai_summary_key] = None
+
+            _ai_summary = st.session_state.get(_ai_summary_key)
+            if _ai_summary:
+                st.markdown("**AI Executive Summary**")
+                st.info(_ai_summary)
+                summary_text += f"\n## AI Summary\n{_ai_summary}\n"
 
             st.text_area("Executive Summary (copy-paste for stakeholders)", summary_text, height=250, key="ac_exec_summary")
 
@@ -22970,7 +23066,7 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
     st.markdown(f"""
     <div class="app-header">
       <h1>⚡ A.D.A.M.</h1>
-      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.1</div>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.2</div>
     </div>
     """, unsafe_allow_html=True)
 
