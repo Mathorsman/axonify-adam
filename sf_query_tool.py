@@ -11252,6 +11252,10 @@ def render_sidebar_nav():
         _nav_btn("📦  Data Archival", "archival")
         _nav_btn("🗺️  Territory Management", "territory")
 
+    # ── AUDIT & COMPLIANCE ─────────────────────────────────────────────────────────────
+    with st.expander("🛡️  Audit & Compliance", expanded=False):
+        _nav_btn("🛡️  Audit Centre", "audit_compliance")
+
     # ── ORG INTELLIGENCE ──────────────────────────────────────────────────────────────
     with st.expander("🔧  Org Intelligence", expanded=False):
         _nav_btn("⚙️  Automation Inventory", "automation_inventory")
@@ -19967,6 +19971,36 @@ def _save_digest_config(cfg: dict):
         pass
 
 
+def _generate_cron_expression(cfg: dict) -> str:
+    """Generate a cron expression string from digest config for easy copy-paste."""
+    minute = int(cfg.get("minute", 0))
+    hour = int(cfg.get("hour", 8))
+    freq = cfg.get("frequency", "Weekly")
+
+    if freq == "Daily":
+        return f"{minute} {hour} * * *"
+    elif freq == "Weekly":
+        day_map = {"Monday": 1, "Tuesday": 2, "Wednesday": 3, "Thursday": 4,
+                   "Friday": 5, "Saturday": 6, "Sunday": 0}
+        dow = day_map.get(cfg.get("weekday", "Monday"), 1)
+        return f"{minute} {hour} * * {dow}"
+    elif freq == "Monthly":
+        dom = int(cfg.get("month_day", 1))
+        return f"{minute} {hour} {dom} * *"
+    return f"{minute} {hour} * * 1"
+
+
+# Schedule presets for quick setup
+_SCHEDULE_PRESETS = {
+    "Business hours daily (Mon-Fri 8am)": {"frequency": "Daily", "hour": 8, "minute": 0, "weekday": "Monday"},
+    "Weekly Monday morning (8am)":        {"frequency": "Weekly", "hour": 8, "minute": 0, "weekday": "Monday"},
+    "Weekly Friday afternoon (4pm)":      {"frequency": "Weekly", "hour": 16, "minute": 0, "weekday": "Friday"},
+    "Bi-monthly (1st & 15th at 9am)":     {"frequency": "Monthly", "hour": 9, "minute": 0, "month_day": 1},
+    "Monthly first Monday (8am)":         {"frequency": "Monthly", "hour": 8, "minute": 0, "month_day": 1},
+    "Custom":                             None,
+}
+
+
 def render_digest_config_page(dry_run_mode: bool, auto_backup: bool):
     st.subheader("📧  Scheduled Digest & Alerting")
     st.caption(
@@ -19979,7 +20013,7 @@ def render_digest_config_page(dry_run_mode: bool, auto_backup: bool):
 
     digest_section = st.radio(
         "Section",
-        ["⚙️  Configuration", "🚨  Alert Thresholds", "👁️  Preview & Test"],
+        ["⚙️  Configuration", "🚨  Alert Thresholds", "👁️  Preview & Test", "📋  Schedule Presets"],
         key="digest_section",
         label_visibility="collapsed",
         horizontal=True,
@@ -20200,6 +20234,71 @@ The script reads `digest_schedule.json` for configuration. No arguments required
                         st.error(f"Failed to send: {exc}")
             else:
                 st.info("Configure Slack channel and SF_SLACK_BOT_TOKEN to enable test delivery.")
+
+    elif digest_section == "📋  Schedule Presets":
+        st.subheader("Quick Schedule Presets")
+        st.caption("Pick a common schedule to auto-fill the configuration, or use Custom for full control.")
+
+        preset_name = st.selectbox(
+            "Preset",
+            list(_SCHEDULE_PRESETS.keys()),
+            key="dc_preset",
+        )
+
+        preset = _SCHEDULE_PRESETS.get(preset_name)
+        if preset:
+            st.markdown(f"**Frequency:** {preset['frequency']} · **Time:** {preset['hour']:02d}:{preset['minute']:02d}")
+            if preset["frequency"] == "Weekly":
+                st.markdown(f"**Day:** {preset.get('weekday', 'Monday')}")
+            elif preset["frequency"] == "Monthly":
+                st.markdown(f"**Day of month:** {preset.get('month_day', 1)}")
+
+            if st.button("📋  Apply Preset", key="dc_apply_preset"):
+                cfg.update(preset)
+                _save_digest_config(cfg)
+                st.success(f"Applied preset: {preset_name}")
+                st.rerun()
+        else:
+            st.info("Select 'Custom' to manually configure every schedule option in the Configuration tab.")
+
+        st.markdown("---")
+        st.subheader("Cron Expression Generator")
+        st.caption("Auto-generated from your current schedule config. Copy into your crontab.")
+
+        cron_expr = _generate_cron_expression(cfg)
+        st.code(f"{cron_expr}  cd /path/to/axonify-adam && python digest_scheduler.py", language="bash")
+
+        st.markdown("**Current schedule breakdown:**")
+        freq = cfg.get("frequency", "Weekly")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown(f"- **Frequency:** {freq}")
+            st.markdown(f"- **Time:** {int(cfg.get('hour', 8)):02d}:{int(cfg.get('minute', 0)):02d}")
+        with col_b:
+            if freq == "Weekly":
+                st.markdown(f"- **Day:** {cfg.get('weekday', 'Monday')}")
+            elif freq == "Monthly":
+                st.markdown(f"- **Day of month:** {cfg.get('month_day', 1)}")
+            st.markdown(f"- **Lookback:** {cfg.get('lookback_days', 7)} days")
+
+        # Multi-schedule info
+        st.markdown("---")
+        st.subheader("Multi-Schedule Tips")
+        st.markdown("""
+To run multiple schedules (e.g. daily quick check + weekly deep audit), add multiple cron entries:
+
+```bash
+# Daily quick digest (Mon-Fri at 8am)
+0 8 * * 1-5 cd /path/to/axonify-adam && python digest_scheduler.py --profile quick
+
+# Weekly deep audit (Monday 6am)
+0 6 * * 1 cd /path/to/axonify-adam && python digest_scheduler.py --profile deep
+```
+
+Each profile can use a separate config file. Copy `digest_schedule.json` to
+`digest_schedule_quick.json` and `digest_schedule_deep.json`, then pass
+`--config <file>` to the scheduler.
+""")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -22034,6 +22133,17 @@ def _render_history_content():
                 st.info(f"No CSV files in `{BACKUP_DIR}/` yet.")
             else:
                 st.caption(f"{len(_files)} file(s) in `{BACKUP_DIR}/`")
+
+                # Total backup size
+                _total_size = 0
+                for _fname in _files:
+                    try:
+                        _total_size += os.path.getsize(os.path.join(BACKUP_DIR, _fname))
+                    except Exception:
+                        pass
+                _total_str = f"{_total_size / (1024*1024):.1f} MB" if _total_size >= 1024*1024 else f"{_total_size / 1024:.1f} KB"
+                st.caption(f"Total size: {_total_str}")
+
                 for _fname in _files[:50]:
                     _fpath = os.path.join(BACKUP_DIR, _fname)
                     try:
@@ -22041,7 +22151,20 @@ def _render_history_content():
                         _size_str = f"{_size / 1024:.1f} KB" if _size >= 1024 else f"{_size} B"
                     except Exception:
                         _size_str = "?"
-                    st.text(f"📄  {_fname}  ({_size_str})")
+
+                    _col_name, _col_dl = st.columns([5, 1])
+                    with _col_name:
+                        st.text(f"📄  {_fname}  ({_size_str})")
+                    with _col_dl:
+                        try:
+                            with open(_fpath, "r", encoding="utf-8") as _bf:
+                                _file_content = _bf.read()
+                            st.download_button(
+                                "📥", data=_file_content, file_name=_fname,
+                                mime="text/csv", key=f"dl_{_fname}",
+                            )
+                        except Exception:
+                            pass
         except Exception as e:
             st.error(f"Could not list backup files: {e}")
 
@@ -22074,6 +22197,8 @@ def main():
         "ai_qa_answers":       {},     # {question_id: answer_string}
         "ai_qa_request":       "",     # the request that triggered the current QA
         "excluded_ids":       set(),
+        "audit_results":      None,
+        "audit_run_ts":       "",
         "page":               "dashboard",
         "theme_mode":              "dark",
         "last_auto_snapshot_date": None,
@@ -22117,7 +22242,7 @@ def main():
     st.markdown(f"""
     <div class="app-header">
       <h1>⚡ A.D.A.M.</h1>
-      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.0</div>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.1</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -22170,10 +22295,341 @@ def main():
         render_automation_inventory_page(dry_run_mode, auto_backup)
     elif page == "org_explorer":
         render_org_explorer_page(dry_run_mode, auto_backup)
+    elif page == "audit_compliance":
+        render_audit_compliance_page(dry_run_mode, auto_backup)
     elif page == "history":
         render_history_page()
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: AUDIT & COMPLIANCE  (page = "audit_compliance")
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Pre-built audit check catalogue — runs live SOQL against the org.
+# Each category contains checks with a name, SOQL, description, and severity.
+_AUDIT_CHECKS = {
+    "security": {
+        "label": "Security & Access",
+        "icon": "🔒",
+        "checks": [
+            {"name": "Users with Modify All Data",        "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true",
+             "description": "Highly privileged users — ensure this list is intentional.",                  "severity": "high",   "threshold": 5},
+            {"name": "Users with View All Data",           "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsViewAllData = true AND Assignee.IsActive = true",
+             "description": "Users who can read every record in the org.",                                 "severity": "medium", "threshold": 15},
+            {"name": "Active users — no login 90 days",    "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:90 AND UserType = 'Standard'",
+             "description": "Dormant accounts that should be deactivated.",                                "severity": "medium", "threshold": 5},
+            {"name": "Active users — no login 180 days",   "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:180 AND UserType = 'Standard'",
+             "description": "Severely dormant accounts — almost certainly safe to deactivate.",             "severity": "high",   "threshold": 0},
+            {"name": "Login-as-any-user permission",       "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsManageUsers = true AND Assignee.IsActive = true",
+             "description": "Can impersonate other users — review carefully.",                             "severity": "high",   "threshold": 3},
+        ],
+    },
+    "data_quality": {
+        "label": "Data Quality",
+        "icon": "🧹",
+        "checks": [
+            {"name": "Orphaned Contacts (no Account)",     "soql": "SELECT COUNT() FROM Contact WHERE AccountId = null",
+             "description": "Contacts not linked to any account.",                                         "severity": "medium", "threshold": 10},
+            {"name": "Leads missing Company",              "soql": "SELECT COUNT() FROM Lead WHERE Company = null AND IsConverted = false",
+             "description": "Open leads without a company — likely junk.",                                 "severity": "medium", "threshold": 20},
+            {"name": "Contacts missing Email",             "soql": "SELECT COUNT() FROM Contact WHERE Email = null AND Account.Type = 'Customer'",
+             "description": "Customer contacts with no email address.",                                    "severity": "low",    "threshold": 25},
+            {"name": "Accounts missing Industry",          "soql": "SELECT COUNT() FROM Account WHERE Industry = null AND Type = 'Customer'",
+             "description": "Customer accounts with no industry set.",                                     "severity": "low",    "threshold": 50},
+            {"name": "Opps missing Amount (past Prospect)","soql": "SELECT COUNT() FROM Opportunity WHERE Amount = null AND IsClosed = false AND StageName != 'Prospecting'",
+             "description": "Active opportunities beyond Prospecting without a dollar amount.",             "severity": "medium", "threshold": 10},
+            {"name": "Duplicate email addresses",          "soql": "SELECT COUNT(Id) ct FROM Contact WHERE Email != null GROUP BY Email HAVING COUNT(Id) > 1",
+             "description": "Contacts sharing the same email address.",                                    "severity": "medium", "threshold": 20},
+        ],
+    },
+    "automation_health": {
+        "label": "Automation Health",
+        "icon": "⚙️",
+        "checks": [
+            {"name": "Test/temp Flows in production",      "soql": "SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true AND (Label LIKE '%test%' OR Label LIKE '%temp%' OR Label LIKE '%delete%')",
+             "description": "Flows that look like they were meant for testing.",                           "severity": "high",   "threshold": 0},
+            {"name": "Flow errors (last 7 days)",          "soql": "SELECT COUNT() FROM FlowExecutionErrorEvent WHERE EventDate > LAST_N_DAYS:7",
+             "description": "Recent flow execution errors.",                                               "severity": "medium", "threshold": 10},
+            {"name": "Active Record-Triggered Flows",      "soql": "SELECT COUNT() FROM FlowDefinitionView WHERE IsActive = true AND ProcessType = 'AutoLaunchedFlow'",
+             "description": "Total count of active auto-launched flows — watch for bloat.",                "severity": "low",    "threshold": 50},
+        ],
+    },
+    "org_hygiene": {
+        "label": "Org Hygiene",
+        "icon": "🏗️",
+        "checks": [
+            {"name": "Reports not run in 180 days",        "soql": "SELECT COUNT() FROM Report WHERE LastRunDate < LAST_N_DAYS:180",
+             "description": "Stale reports — candidates for cleanup.",                                     "severity": "low",    "threshold": 50},
+            {"name": "Dashboards not viewed in 180 days",  "soql": "SELECT COUNT() FROM Dashboard WHERE LastReferencedDate < LAST_N_DAYS:180",
+             "description": "Unused dashboards taking up space.",                                          "severity": "low",    "threshold": 20},
+            {"name": "Custom objects with 0 records",      "soql": "SELECT COUNT() FROM EntityDefinition WHERE IsCustomSetting = false AND QualifiedApiName LIKE '%__c' AND RecordCount = 0",
+             "description": "Custom objects that may be unused.",                                          "severity": "low",    "threshold": 5},
+        ],
+    },
+}
+
+# Severity colors
+_SEVERITY_COLORS = {"high": "#F96041", "medium": "#FCBC68", "low": "#6e8c7a"}
+
+
+def _run_audit_check(check: dict) -> dict:
+    """Execute a single audit check SOQL and return the result dict."""
+    sf = get_sf_connection()
+    try:
+        count = sf.query(check["soql"]).get("totalSize", 0)
+        threshold = check.get("threshold", 0)
+        if count > threshold:
+            status = "fail"
+        elif count > 0:
+            status = "warn"
+        else:
+            status = "pass"
+        return {**check, "count": count, "status": status, "error": None}
+    except Exception as e:
+        return {**check, "count": -1, "status": "fail", "error": str(e)}
+
+
+def render_audit_compliance_page(dry_run_mode: bool, auto_backup: bool):
+    """
+    Audit & Compliance Centre — runs live security, data quality, automation,
+    and org hygiene checks against the connected org. No Supabase required.
+    Results can be exported as a compliance report CSV.
+    """
+    st.header("🛡️  Audit & Compliance Centre")
+    st.caption(
+        "Run on-demand audit checks across security, data quality, automation health, "
+        "and org hygiene. Export results as a compliance report."
+    )
+
+    tab_checks, tab_report, tab_trends = st.tabs([
+        "🔍  Run Audit Checks",
+        "📄  Compliance Report",
+        "📈  Audit Trends",
+    ])
+
+    # ── Tab 1: Run Audit Checks ───────────────────────────────────────────────
+    with tab_checks:
+        # Category selector
+        categories = list(_AUDIT_CHECKS.keys())
+        cat_labels = [f"{_AUDIT_CHECKS[c]['icon']}  {_AUDIT_CHECKS[c]['label']}" for c in categories]
+
+        selected_cats = st.multiselect(
+            "Categories to audit",
+            options=categories,
+            default=categories,
+            format_func=lambda c: f"{_AUDIT_CHECKS[c]['icon']}  {_AUDIT_CHECKS[c]['label']}",
+            key="ac_categories",
+        )
+
+        col_run, col_clear = st.columns([1, 4])
+        with col_run:
+            run_pressed = st.button("▶️  Run Audit", type="primary", key="ac_run")
+        with col_clear:
+            if st.button("🗑️  Clear Results", key="ac_clear"):
+                st.session_state.pop("audit_results", None)
+                st.rerun()
+
+        if run_pressed:
+            all_results = []
+            progress = st.progress(0)
+            total_checks = sum(len(_AUDIT_CHECKS[c]["checks"]) for c in selected_cats)
+            done = 0
+
+            for cat_key in selected_cats:
+                cat = _AUDIT_CHECKS[cat_key]
+                for check in cat["checks"]:
+                    result = _run_audit_check(check)
+                    result["category"] = cat["label"]
+                    result["category_key"] = cat_key
+                    all_results.append(result)
+                    done += 1
+                    progress.progress(done / total_checks if total_checks else 1.0)
+
+            progress.empty()
+            st.session_state["audit_results"] = all_results
+            st.session_state["audit_run_ts"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Save to Supabase if available
+            sb = _get_db_connection()
+            if sb:
+                try:
+                    summary = {
+                        "run_at": st.session_state["audit_run_ts"],
+                        "total_checks": len(all_results),
+                        "passed": sum(1 for r in all_results if r["status"] == "pass"),
+                        "warned": sum(1 for r in all_results if r["status"] == "warn"),
+                        "failed": sum(1 for r in all_results if r["status"] == "fail"),
+                        "results": all_results,
+                    }
+                    sb.table("audit_runs").insert(summary).execute()
+                except Exception:
+                    pass  # Non-critical — local results still shown
+
+        # Display results
+        results = st.session_state.get("audit_results")
+        if results:
+            run_ts = st.session_state.get("audit_run_ts", "")
+            pass_count = sum(1 for r in results if r["status"] == "pass")
+            warn_count = sum(1 for r in results if r["status"] == "warn")
+            fail_count = sum(1 for r in results if r["status"] == "fail")
+
+            st.markdown(f"**Last run:** {run_ts}")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Checks", len(results))
+            col2.metric("Passed", pass_count)
+            col3.metric("Warnings", warn_count)
+            col4.metric("Failed", fail_count)
+
+            # Score
+            if results:
+                score = round(pass_count / len(results) * 100)
+                score_color = COLOR_SUCCESS if score >= 80 else (COLOR_WARNING if score >= 60 else COLOR_ERROR)
+                st.markdown(
+                    f'<div style="text-align:center;padding:12px;border-radius:8px;'
+                    f'background:{score_color}22;border:1px solid {score_color};">'
+                    f'<span style="font-size:2rem;font-weight:bold;color:{score_color};">'
+                    f'{score}%</span><br>'
+                    f'<span style="color:{score_color};font-size:0.85rem;">Audit Health Score</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("---")
+
+            # Group by category
+            from itertools import groupby as _groupby
+            sorted_results = sorted(results, key=lambda r: r.get("category_key", ""))
+            for cat_key, cat_results in _groupby(sorted_results, key=lambda r: r.get("category_key", "")):
+                cat_results = list(cat_results)
+                cat_info = _AUDIT_CHECKS.get(cat_key, {})
+                cat_icon = cat_info.get("icon", "")
+                cat_label = cat_info.get("label", cat_key)
+
+                with st.expander(f"{cat_icon}  {cat_label} ({len(cat_results)} checks)", expanded=True):
+                    for r in cat_results:
+                        icon = _status_icon(r["status"])
+                        sev_color = _SEVERITY_COLORS.get(r.get("severity", "low"), "#6e8c7a")
+                        count_str = f"{r['count']:,}" if r["count"] >= 0 else "error"
+                        threshold = r.get("threshold", 0)
+
+                        st.markdown(
+                            f"{icon} **{r['name']}** — {count_str} records "
+                            f'<span style="color:{sev_color};font-size:0.75rem;">'
+                            f'[{r.get("severity","").upper()}]</span>'
+                            + (f" *(threshold: {threshold})*" if r["status"] == "fail" else "")
+                            + (f"\n\n> ⚠️ Error: {r['error']}" if r.get("error") else ""),
+                            unsafe_allow_html=True,
+                        )
+                        if r.get("description"):
+                            st.caption(r["description"])
+
+    # ── Tab 2: Compliance Report ──────────────────────────────────────────────
+    with tab_report:
+        results = st.session_state.get("audit_results")
+        if not results:
+            st.info("Run an audit first to generate a compliance report.")
+        else:
+            run_ts = st.session_state.get("audit_run_ts", "unknown")
+            st.subheader(f"Compliance Report — {run_ts}")
+
+            # Build report DataFrame
+            report_rows = []
+            for r in results:
+                report_rows.append({
+                    "Category":    r.get("category", ""),
+                    "Check":       r.get("name", ""),
+                    "Status":      r.get("status", "").upper(),
+                    "Count":       r.get("count", -1),
+                    "Threshold":   r.get("threshold", ""),
+                    "Severity":    r.get("severity", "").upper(),
+                    "Description": r.get("description", ""),
+                    "SOQL":        r.get("soql", ""),
+                })
+            report_df = pd.DataFrame(report_rows)
+            st.dataframe(report_df, hide_index=True, width="stretch")
+
+            # CSV download
+            csv_data = report_df.to_csv(index=False)
+            st.download_button(
+                "📥  Download Compliance Report (CSV)",
+                data=csv_data,
+                file_name=f"compliance_report_{run_ts.replace(' ', '_').replace(':', '')}.csv",
+                mime="text/csv",
+                key="ac_download",
+            )
+
+            # Summary text for stakeholders
+            pass_count = sum(1 for r in results if r["status"] == "pass")
+            fail_count = sum(1 for r in results if r["status"] == "fail")
+            warn_count = sum(1 for r in results if r["status"] == "warn")
+            score = round(pass_count / len(results) * 100) if results else 0
+
+            summary_text = (
+                f"# Salesforce Org Audit Report — {ORG_NAME}\n"
+                f"**Date:** {run_ts}\n"
+                f"**Overall Score:** {score}%\n"
+                f"**Results:** {pass_count} passed, {warn_count} warnings, {fail_count} failed "
+                f"out of {len(results)} checks.\n\n"
+            )
+            high_fails = [r for r in results if r["status"] == "fail" and r.get("severity") == "high"]
+            if high_fails:
+                summary_text += "## Critical Issues\n"
+                for r in high_fails:
+                    summary_text += f"- **{r['name']}**: {r['count']:,} records (threshold: {r.get('threshold', 0)})\n"
+
+            st.text_area("Executive Summary (copy-paste for stakeholders)", summary_text, height=250, key="ac_exec_summary")
+
+    # ── Tab 3: Audit Trends ───────────────────────────────────────────────────
+    with tab_trends:
+        sb = _get_db_connection()
+        if sb is None:
+            st.info("Audit trend tracking requires Supabase. Results are saved automatically after each run.")
+            return
+
+        try:
+            hist = (sb.table("audit_runs")
+                    .select("run_at, total_checks, passed, warned, failed")
+                    .order("run_at", desc=True)
+                    .limit(30)
+                    .execute()).data or []
+        except Exception:
+            hist = []
+
+        if not hist:
+            st.info("No historical audit data yet. Run a few audits to see trends.")
+        else:
+            hist_df = pd.DataFrame(hist)
+            hist_df["run_at"] = pd.to_datetime(hist_df["run_at"])
+            hist_df = hist_df.sort_values("run_at")
+            hist_df["score"] = (hist_df["passed"] / hist_df["total_checks"] * 100).round(1)
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=hist_df["run_at"], y=hist_df["score"],
+                mode="lines+markers", name="Health Score %",
+                line=dict(color=COLOR_SUCCESS, width=2),
+                marker=dict(size=8),
+            ))
+            fig.update_layout(
+                title="Audit Health Score Over Time",
+                yaxis_title="Score %", yaxis_range=[0, 105],
+                xaxis_title="", height=350,
+                template="plotly_dark" if st.session_state.get("theme_mode") == "dark" else "plotly_white",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Pass/Warn/Fail stacked bar
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(x=hist_df["run_at"], y=hist_df["passed"], name="Passed", marker_color=COLOR_SUCCESS))
+            fig2.add_trace(go.Bar(x=hist_df["run_at"], y=hist_df["warned"], name="Warned", marker_color=COLOR_WARNING))
+            fig2.add_trace(go.Bar(x=hist_df["run_at"], y=hist_df["failed"], name="Failed", marker_color=COLOR_ERROR))
+            fig2.update_layout(
+                barmode="stack", title="Check Results by Run",
+                yaxis_title="Checks", xaxis_title="", height=300,
+                template="plotly_dark" if st.session_state.get("theme_mode") == "dark" else "plotly_white",
+            )
+            st.plotly_chart(fig2, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -22207,6 +22663,39 @@ _STARTER_RUNBOOKS = [
         "steps": [
             {"name": "Users with Modify All Data", "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsModifyAllData = true AND Assignee.IsActive = true", "threshold_type": "any_result", "threshold_value": 0},
             {"name": "Active users — no login 90d", "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND LastLoginDate < LAST_N_DAYS:90 AND UserType = 'Standard'",               "threshold_type": "max_count", "threshold_value": 5},
+        ],
+    },
+    {
+        "name": "Weekly Security Posture Check",
+        "description": "Monitors security-sensitive configuration weekly. Alerts on risky permissions and login anomalies.",
+        "schedule": "weekly",
+        "steps": [
+            {"name": "Users with View All Data",     "soql": "SELECT COUNT() FROM PermissionSetAssignment WHERE PermissionSet.PermissionsViewAllData = true AND Assignee.IsActive = true",  "threshold_type": "max_count", "threshold_value": 15},
+            {"name": "Profiles with no IP restriction","soql": "SELECT COUNT() FROM Profile WHERE Id NOT IN (SELECT ProfileId FROM LoginIpRange) AND UserType = 'Standard'",                "threshold_type": "any_result", "threshold_value": 0},
+            {"name": "Users without MFA (last 30d)",  "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND LastLoginDate > LAST_N_DAYS:30 AND UserType = 'Standard'",               "threshold_type": "any_result", "threshold_value": 0},
+            {"name": "API-only users (integration)",   "soql": "SELECT COUNT() FROM User WHERE IsActive = true AND UserType = 'Standard' AND (Alias LIKE '%api%' OR Alias LIKE '%int%')",   "threshold_type": "any_result", "threshold_value": 0},
+        ],
+    },
+    {
+        "name": "Monthly Data Completeness Audit",
+        "description": "Checks critical field completeness across key objects. Run on the 1st of each month.",
+        "schedule": "monthly",
+        "steps": [
+            {"name": "Leads missing Company",         "soql": "SELECT COUNT() FROM Lead WHERE Company = null AND IsConverted = false",                                                      "threshold_type": "max_count", "threshold_value": 20},
+            {"name": "Opps missing Close Date",        "soql": "SELECT COUNT() FROM Opportunity WHERE CloseDate = null AND IsClosed = false",                                               "threshold_type": "max_count", "threshold_value": 0},
+            {"name": "Opps missing Amount",            "soql": "SELECT COUNT() FROM Opportunity WHERE Amount = null AND IsClosed = false AND StageName != 'Prospecting'",                   "threshold_type": "max_count", "threshold_value": 10},
+            {"name": "Accounts missing Website",       "soql": "SELECT COUNT() FROM Account WHERE Website = null AND Type = 'Customer'",                                                   "threshold_type": "max_count", "threshold_value": 30},
+            {"name": "Contacts missing Title",         "soql": "SELECT COUNT() FROM Contact WHERE Title = null AND Account.Type = 'Customer'",                                             "threshold_type": "max_count", "threshold_value": 100},
+        ],
+    },
+    {
+        "name": "Quarterly Org Hygiene Review",
+        "description": "Deep org cleanup checks — unused reports, stale custom fields, old sandbox artifacts.",
+        "schedule": "quarterly",
+        "steps": [
+            {"name": "Reports not run in 180d",        "soql": "SELECT COUNT() FROM Report WHERE LastRunDate < LAST_N_DAYS:180",                                                           "threshold_type": "max_count", "threshold_value": 50},
+            {"name": "Dashboards not viewed in 180d",  "soql": "SELECT COUNT() FROM Dashboard WHERE LastReferencedDate < LAST_N_DAYS:180",                                                 "threshold_type": "max_count", "threshold_value": 20},
+            {"name": "Inactive users still assigned",  "soql": "SELECT COUNT() FROM User WHERE IsActive = false AND LastLoginDate > LAST_N_DAYS:365",                                      "threshold_type": "any_result", "threshold_value": 0},
         ],
     },
 ]
@@ -22423,6 +22912,39 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
         if not runs:
             st.caption("No runs recorded yet.")
         else:
+            # Trend chart — pass/warn/fail over time
+            if len(runs) >= 2:
+                trend_data = []
+                for run in runs:
+                    trend_data.append({
+                        "run_at": str(run.get("run_at", ""))[:16].replace("T", " "),
+                        "status": run.get("status", "unknown"),
+                    })
+                trend_df = pd.DataFrame(trend_data)
+                trend_df["run_at"] = pd.to_datetime(trend_df["run_at"], errors="coerce")
+                trend_df = trend_df.dropna(subset=["run_at"]).sort_values("run_at")
+
+                # Count statuses per run date
+                status_counts = trend_df.groupby([trend_df["run_at"].dt.date, "status"]).size().unstack(fill_value=0)
+                if not status_counts.empty:
+                    fig_rb = go.Figure()
+                    for status, color in [("pass", COLOR_SUCCESS), ("warn", COLOR_WARNING), ("fail", COLOR_ERROR)]:
+                        if status in status_counts.columns:
+                            fig_rb.add_trace(go.Bar(
+                                x=status_counts.index.astype(str),
+                                y=status_counts[status],
+                                name=status.capitalize(),
+                                marker_color=color,
+                            ))
+                    fig_rb.update_layout(
+                        barmode="stack", title="Runbook Results Over Time",
+                        yaxis_title="Runs", height=250,
+                        template="plotly_dark" if st.session_state.get("theme_mode") == "dark" else "plotly_white",
+                    )
+                    st.plotly_chart(fig_rb, use_container_width=True)
+
+            st.markdown("---")
+
             for run in runs:
                 icon    = _status_icon(run["status"])
                 ts      = str(run.get("run_at", ""))[:16].replace("T", " ")
@@ -22448,7 +22970,7 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
     st.markdown(f"""
     <div class="app-header">
       <h1>⚡ A.D.A.M.</h1>
-      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.0</div>
+      <div class="subtitle">Axonify Data &amp; Administration Manager · {ORG_NAME} · v8.1</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -22491,6 +23013,8 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
         render_automation_inventory_page(dry_run_mode, auto_backup)
     elif page == "org_explorer":
         render_org_explorer_page(dry_run_mode, auto_backup)
+    elif page == "audit_compliance":
+        render_audit_compliance_page(dry_run_mode, auto_backup)
     elif page == "history":
         render_history_page()
     else:
@@ -23152,18 +23676,80 @@ def render_dashboard_page(dry_run_mode: bool, auto_backup: bool):
         render_runbooks_page(dry_run_mode, auto_backup)
 
 
+def _render_operation_log_tab():
+    """
+    Operation Log tab — shows a consolidated view of all Supabase-logged
+    operations with filtering, summary stats, and CSV export.
+    """
+    sb = _get_db_connection()
+    if sb is None:
+        st.info("Operation log requires Supabase to be configured.")
+        return
+
+    ops = db_get_operation_logs(n=200)
+    if not ops:
+        st.info("No operations logged yet.")
+        return
+
+    ops_df = pd.DataFrame(ops)
+    ops_df["created_at"] = pd.to_datetime(ops_df["created_at"])
+
+    # Filter controls
+    col_user, col_obj, col_op = st.columns(3)
+    with col_user:
+        users = sorted(ops_df["sf_user"].dropna().unique().tolist())
+        sel_user = st.selectbox("User", ["All"] + users, key="oplog_user")
+    with col_obj:
+        objects = sorted(ops_df["object_name"].dropna().unique().tolist())
+        sel_obj = st.selectbox("Object", ["All"] + objects, key="oplog_obj")
+    with col_op:
+        operations = sorted(ops_df["operation"].dropna().unique().tolist())
+        sel_op = st.selectbox("Operation", ["All"] + operations, key="oplog_op")
+
+    filtered = ops_df.copy()
+    if sel_user != "All":
+        filtered = filtered[filtered["sf_user"] == sel_user]
+    if sel_obj != "All":
+        filtered = filtered[filtered["object_name"] == sel_obj]
+    if sel_op != "All":
+        filtered = filtered[filtered["operation"] == sel_op]
+
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Operations", len(filtered))
+    col2.metric("Records Affected", f"{filtered['record_count'].sum():,.0f}")
+    col3.metric("Succeeded", f"{filtered['succeeded'].sum():,.0f}")
+    col4.metric("Failed", f"{filtered['failed'].sum():,.0f}")
+
+    # Table
+    display_cols = [c for c in ["created_at", "sf_user", "operation", "object_name", "record_count", "succeeded", "failed"] if c in filtered.columns]
+    st.dataframe(filtered[display_cols], hide_index=True, width="stretch")
+
+    # CSV export
+    csv_data = filtered[display_cols].to_csv(index=False)
+    st.download_button(
+        "📥  Download Operation Log (CSV)",
+        data=csv_data,
+        file_name=f"operation_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        key="oplog_download",
+    )
+
+
 def render_history_page():
     """
     Consolidated Reference & Logs page — combines Query History, Audit Logs,
-    Change Log Generator, and Audit Shortcuts into a single page with tabs.
+    Change Log Generator, Audit Shortcuts, and Operation Log into a single
+    page with tabs.
     """
     st.header("📚  Reference & Logs")
     st.caption("Query history, change logs, and audit shortcuts — everything you need for traceability.")
 
-    tab_history, tab_changelog, tab_shortcuts = st.tabs([
+    tab_history, tab_changelog, tab_shortcuts, tab_oplog = st.tabs([
         "📁  Query History & Audit Logs",
         "🗓️  Change Log & Release Notes",
         "🗂️  Audit Shortcuts",
+        "📊  Operation Log",
     ])
 
     with tab_history:
@@ -23174,6 +23760,9 @@ def render_history_page():
 
     with tab_shortcuts:
         render_shortcuts_page(True, True)
+
+    with tab_oplog:
+        _render_operation_log_tab()
 
 
 def render_org_explorer_page(dry_run_mode: bool, auto_backup: bool):
