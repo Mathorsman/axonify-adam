@@ -18996,7 +18996,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     cols_to_show = (["Object"] if show_obj_col else []) + ["Label", "API Name", "Type", "Owner", "PopRate"]
     display = view[cols_to_show].copy()
     display["PopRate"] = display["PopRate"].apply(
-        lambda v: f"{v:.0f}%" if v is not None else "—"
+        lambda v: f"{v:.0f}%" if pd.notna(v) else "N/A"
     )
     display = display.rename(columns={"PopRate": "Population"})
 
@@ -19043,7 +19043,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                     continue
                 obj_display = obj_view[["Label", "API Name", "Type", "Owner", "PopRate"]].copy()
                 obj_display["PopRate"] = obj_display["PopRate"].apply(
-                    lambda v: f"{v:.0f}%" if v is not None else "—"
+                    lambda v: f"{v:.0f}%" if pd.notna(v) else "N/A"
                 )
                 obj_display = obj_display.rename(columns={"PopRate": "Population"})
                 zf.writestr(f"{obj_name}_{_label}.csv", obj_display.to_csv(index=False))
