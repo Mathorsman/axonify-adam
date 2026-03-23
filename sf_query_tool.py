@@ -18813,17 +18813,17 @@ def _fetch_population_rates(object_name: str, fields: list[str], total_count: in
     """Run batched COUNT queries to get population rate per field."""
     sf = get_sf_connection()
     rates = {}
-    # Process in batches of 5 fields (avoid SOQL length limits)
-    batch_size = 5
-    for i in range(0, len(fields), batch_size):
-        batch = fields[i:i+batch_size]
-        for fld in batch:
-            try:
-                res = sf.query(f"SELECT COUNT(Id) cnt FROM {object_name} WHERE {fld} != null LIMIT 1")
-                populated = res["records"][0]["cnt"]
-                rates[fld] = round(populated / total_count * 100, 1) if total_count > 0 else 0.0
-            except Exception:
-                rates[fld] = None
+    errors = 0
+    for fld in fields:
+        try:
+            res = sf.query(f"SELECT COUNT() FROM {object_name} WHERE {fld} != null")
+            populated = res.get("totalSize", 0)
+            rates[fld] = round(populated / total_count * 100, 1) if total_count > 0 else 0.0
+        except Exception:
+            rates[fld] = None
+            errors += 1
+    if errors:
+        st.warning(f"⚠️ {errors} of {len(fields)} field population queries failed for {object_name}.")
     return rates
 
 
@@ -18949,8 +18949,8 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             )
             obj_df = stored_frames[obj_name]
             try:
-                total_res = sf.query(f"SELECT COUNT(Id) cnt FROM {obj_name}")
-                total = total_res["records"][0]["cnt"]
+                total_res = sf.query(f"SELECT COUNT() FROM {obj_name}")
+                total = total_res.get("totalSize", 0)
             except Exception:
                 total = 0
             queryable_fields = obj_df[
