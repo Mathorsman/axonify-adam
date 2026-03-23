@@ -639,9 +639,8 @@ section[data-testid="stSidebar"] div[data-testid="stBaseButton-secondary"] > but
 </style>
 """, unsafe_allow_html=True)
 
-# ── Theme override — inject light-mode CSS variables and component overrides ──
-if st.session_state.get("theme_mode", "dark") == "light":
-    st.markdown("""
+# ── Theme override — light-mode CSS (injected from main() after sidebar renders) ──
+_LIGHT_MODE_CSS = """
 <style>
 :root {
     --bg-base:        #f4f9f6;
@@ -695,7 +694,12 @@ section[data-testid="stSidebar"] > div:first-child {
 .pill-retired { background: #fce4e0; color: #C0392B; }
 .safety-banner { background: #fff5e0; border-color: #FCBC68; color: #7a4f00; }
 </style>
-""", unsafe_allow_html=True)
+"""
+
+def _inject_theme_css():
+    """Inject light-mode CSS override when theme_mode is 'light'. Call from main() after sidebar."""
+    if st.session_state.get("theme_mode", "dark") == "light":
+        st.markdown(_LIGHT_MODE_CSS, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11271,16 +11275,15 @@ def render_sidebar_nav():
             help="Preview all changes before they execute. Strongly recommended for production.")
         auto_backup = st.toggle("Auto-Backup Before Changes", value=True, key="auto_backup",
             help="Saves affected records to CSV before any update or delete.")
-        light_mode = st.toggle(
-            "☀️ Light Mode" if st.session_state.get("theme_mode") == "dark" else "🌙 Dark Mode",
-            value=(st.session_state.get("theme_mode") == "light"),
-            key="theme_toggle",
-            help="Switch between dark and light interface themes.",
-        )
-        if light_mode:
-            st.session_state.theme_mode = "light"
-        else:
-            st.session_state.theme_mode = "dark"
+        _is_light = st.session_state.get("theme_mode", "dark") == "light"
+        if st.button(
+            "🌙  Switch to Dark" if _is_light else "☀️  Switch to Light",
+            key="theme_btn",
+            help="Toggle between dark and light interface themes.",
+            use_container_width=True,
+        ):
+            st.session_state.theme_mode = "dark" if _is_light else "light"
+            st.rerun()
 
         if not dry_run_mode:
             st.markdown('<div class="safety-banner">⚠️ Dry Run OFF — changes execute immediately.</div>', unsafe_allow_html=True)
@@ -19730,6 +19733,7 @@ def render_archival_page(dry_run_mode: bool, auto_backup: bool):
     _archival_default = 0
     if st.session_state.pop("_archival_jump_to_delete", False):
         _archival_default = 2  # jump to Archive & Delete tab
+        st.session_state.pop("archival_section", None)  # clear widget key so index is respected
     archival_section = st.radio(
         "Section",
         _archival_options,
@@ -22125,6 +22129,9 @@ def main():
     with st.sidebar:
         dry_run_mode, auto_backup = render_sidebar_nav()
 
+    # ── Theme CSS (must run AFTER sidebar sets theme_mode) ────────────────────────────────────
+    _inject_theme_css()
+
     # ── Page routing ──────────────────────────────────────────────────────────────────────────
     # Consolidated pages: data_quality, org_explorer, and absorbed pages redirect
     # to their new parent pages for users who have old bookmarks or session state.
@@ -22455,6 +22462,9 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
     # ── Sidebar ────────────────────────────────────────────────────────────────────────────────
     with st.sidebar:
         dry_run_mode, auto_backup = render_sidebar_nav()
+
+    # ── Theme CSS (must run AFTER sidebar sets theme_mode) ────────────────────────────────────
+    _inject_theme_css()
 
     # ── Page routing (secondary — kept in sync with main dispatch) ────────────
     page = st.session_state.page
