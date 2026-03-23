@@ -18831,12 +18831,12 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     st.subheader("📄  Schema Explorer")
     st.caption(
         "Browse fields on any object. Detect integration ownership, calculate population rates, "
-        "and surface cleanup candidates."
+        "and surface cleanup candidates.  Use **Multi-select** or **All Objects** for bundled reports."
     )
 
     sf = get_sf_connection()
 
-    # Object picker
+    # Object list
     try:
         describe = sf.describe()
         all_objects = sorted(
@@ -18846,12 +18846,44 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     except Exception:
         all_objects = ["Account", "Contact", "Opportunity", "Case", "Lead"]
 
-    col_obj, col_search = st.columns([2, 3])
-    with col_obj:
-        sel_obj = st.selectbox("Object", all_objects, key="se_object")
-    with col_search:
-        field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search")
+    # ── Selection mode ────────────────────────────────────────────────────────
+    se_mode = st.radio(
+        "Selection mode",
+        ["Single Object", "Multi-select", "All Objects"],
+        key="se_mode",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
+    selected_objects: list[str] = []
+
+    if se_mode == "Single Object":
+        col_obj, col_search = st.columns([2, 3])
+        with col_obj:
+            sel_obj = st.selectbox("Object", all_objects, key="se_object")
+        with col_search:
+            field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search")
+        selected_objects = [sel_obj]
+
+    elif se_mode == "Multi-select":
+        _defaults = [o for o in SUPPORTED_OBJECTS if o in all_objects]
+        selected_objects = st.multiselect(
+            "Objects to explore",
+            all_objects,
+            default=_defaults,
+            key="se_multi_objects",
+        )
+        field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search_multi")
+        if not selected_objects:
+            st.info("Select one or more objects above.")
+            return
+
+    else:  # All Objects
+        selected_objects = all_objects
+        field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search_all")
+        st.caption(f"All **{len(all_objects)}** queryable/createable objects will be scanned.")
+
+    # ── View mode ─────────────────────────────────────────────────────────────
     schema_section = st.radio(
         "View",
         ["📋  All Fields", "🧹  Cleanup Candidates"],
@@ -18860,6 +18892,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         horizontal=True,
     )
 
+    # ── Action buttons ────────────────────────────────────────────────────────
     col_load, col_pop = st.columns([1, 2])
     with col_load:
         load_clicked = st.button("🔍  Load Fields", key="se_load_btn")
@@ -18867,45 +18900,77 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         pop_clicked = st.button(
             "📊  Calculate Population Rates",
             key="se_pop_btn",
-            help="Runs COUNT queries — may take 30-60 seconds on large objects.",
+            help="Runs COUNT queries — may take 30-60 seconds per object.",
         )
 
+    # ── Load fields (single or batch) ─────────────────────────────────────────
     if load_clicked:
-        with st.spinner(f"Describing {sel_obj}…"):
-            df = _load_field_inventory(sel_obj)
-            st.session_state["_se_obj"] = sel_obj
-            st.session_state["_se_df"]  = df
+        all_frames = {}
+        progress = st.progress(0, text="Loading field inventories…")
+        for idx, obj_name in enumerate(selected_objects):
+            progress.progress(
+                (idx + 1) / len(selected_objects),
+                text=f"Describing {obj_name} ({idx + 1}/{len(selected_objects)})…",
+            )
+            obj_df = _load_field_inventory(obj_name)
+            if not obj_df.empty:
+                obj_df.insert(0, "Object", obj_name)
+                all_frames[obj_name] = obj_df
+        progress.empty()
+
+        if all_frames:
+            combined = pd.concat(all_frames.values(), ignore_index=True)
+            st.session_state["_se_objects"] = list(all_frames.keys())
+            st.session_state["_se_frames"] = all_frames
+            st.session_state["_se_df"] = combined
             st.session_state.pop("_se_pop_rates", None)
+            st.success(f"Loaded {len(combined):,} fields across {len(all_frames)} object(s).")
+        else:
+            st.warning("No fields found for the selected object(s).")
 
+    # ── Retrieve stored data ──────────────────────────────────────────────────
     df: pd.DataFrame = st.session_state.get("_se_df")
-    current_obj = st.session_state.get("_se_obj")
+    loaded_objects: list = st.session_state.get("_se_objects", [])
+    stored_frames: dict = st.session_state.get("_se_frames", {})
 
-    if df is None or current_obj != sel_obj:
-        st.info("Select an object and click **Load Fields**.")
-        return
-    if df.empty:
-        st.warning("No fields found.")
+    if df is None or df.empty:
+        st.info("Select object(s) and click **Load Fields**.")
         return
 
-    if pop_clicked:
-        with st.spinner("Calculating population rates (this may take a moment)…"):
+    # ── Population rates (batch) ──────────────────────────────────────────────
+    if pop_clicked and stored_frames:
+        progress = st.progress(0, text="Calculating population rates…")
+        all_rates = {}
+        obj_list = list(stored_frames.keys())
+        for idx, obj_name in enumerate(obj_list):
+            progress.progress(
+                (idx + 1) / len(obj_list),
+                text=f"Population rates for {obj_name} ({idx + 1}/{len(obj_list)})…",
+            )
+            obj_df = stored_frames[obj_name]
             try:
-                total_res = sf.query(f"SELECT COUNT(Id) cnt FROM {sel_obj}")
+                total_res = sf.query(f"SELECT COUNT(Id) cnt FROM {obj_name}")
                 total = total_res["records"][0]["cnt"]
             except Exception:
                 total = 0
-            queryable_fields = df[
-                ~df["Type"].str.lower().isin(_SKIP_SAMPLE_TYPES) &
-                ~df["Type"].str.lower().isin(_ALWAYS_POPULATED_TYPES)
+            queryable_fields = obj_df[
+                ~obj_df["Type"].str.lower().isin(_SKIP_SAMPLE_TYPES) &
+                ~obj_df["Type"].str.lower().isin(_ALWAYS_POPULATED_TYPES)
             ]["API Name"].tolist()
-            rates = _fetch_population_rates(sel_obj, queryable_fields, total)
-            st.session_state["_se_pop_rates"] = rates
-            # Merge into df
-            df = df.copy()
-            df["PopRate"] = df["API Name"].map(lambda x: rates.get(x))
-            st.session_state["_se_df"] = df
+            rates = _fetch_population_rates(obj_name, queryable_fields, total)
+            obj_df = obj_df.copy()
+            obj_df["PopRate"] = obj_df["API Name"].map(lambda x, r=rates: r.get(x))
+            stored_frames[obj_name] = obj_df
+            all_rates.update(rates)
+        progress.empty()
 
-    # Apply search filter
+        combined = pd.concat(stored_frames.values(), ignore_index=True)
+        st.session_state["_se_frames"] = stored_frames
+        st.session_state["_se_df"] = combined
+        st.session_state["_se_pop_rates"] = all_rates
+        df = combined
+
+    # ── Apply search filter ───────────────────────────────────────────────────
     view = df.copy()
     if field_search:
         mask = (
@@ -18915,7 +18980,6 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         view = view[mask]
 
     if schema_section == "🧹  Cleanup Candidates":
-        # 0% population OR retired tool prefix
         has_rates = view["PopRate"].notna().any()
         if has_rates:
             zero_mask = view["PopRate"] == 0.0
@@ -18927,28 +18991,69 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             f"{len(view)} cleanup candidates: 0% populated fields and/or retired tool fields."
         )
 
-    # Owner pill column
-    def _owner_badge(row):
-        _, cls = _detect_integration_owner(row["API Name"])
-        return f"[{row['Owner']}]"  # plain text for dataframe
-
-    display = view[["Label", "API Name", "Type", "Owner", "PopRate"]].copy()
+    # ── Display ───────────────────────────────────────────────────────────────
+    show_obj_col = len(loaded_objects) > 1
+    cols_to_show = (["Object"] if show_obj_col else []) + ["Label", "API Name", "Type", "Owner", "PopRate"]
+    display = view[cols_to_show].copy()
     display["PopRate"] = display["PopRate"].apply(
         lambda v: f"{v:.0f}%" if v is not None else "—"
     )
     display = display.rename(columns={"PopRate": "Population"})
 
-    st.metric("Fields shown", len(display))
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.metric("Fields shown", f"{len(display):,}")
+    with col_m2:
+        if show_obj_col:
+            st.metric("Objects", len(loaded_objects))
     st.dataframe(display, use_container_width=True, hide_index=True)
 
-    if schema_section == "🧹  Cleanup Candidates" and not view.empty:
+    # ── Downloads ─────────────────────────────────────────────────────────────
+    st.markdown("---")
+    if len(loaded_objects) == 1:
+        # Single object — plain CSV
         csv_data = display.to_csv(index=False).encode("utf-8")
+        _label = "Cleanup Candidates" if schema_section.startswith("🧹") else "Fields"
         st.download_button(
-            "📥  Export Cleanup Candidates as CSV",
+            f"📥  Export {_label} as CSV",
             data=csv_data,
-            file_name=f"{sel_obj}_cleanup_candidates.csv",
+            file_name=f"{loaded_objects[0]}_{_label.replace(' ', '_').lower()}.csv",
             mime="text/csv",
             key="se_export_csv",
+        )
+    elif len(loaded_objects) > 1:
+        _label = "cleanup_candidates" if schema_section.startswith("🧹") else "fields"
+
+        # Combined CSV
+        csv_combined = display.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            f"📥  Download Combined CSV ({len(loaded_objects)} objects)",
+            data=csv_combined,
+            file_name=f"schema_bundle_{_label}_{len(loaded_objects)}_objects.csv",
+            mime="text/csv",
+            key="se_export_combined",
+        )
+
+        # ZIP bundle — one CSV per object
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for obj_name in loaded_objects:
+                obj_view = view[view["Object"] == obj_name]
+                if obj_view.empty:
+                    continue
+                obj_display = obj_view[["Label", "API Name", "Type", "Owner", "PopRate"]].copy()
+                obj_display["PopRate"] = obj_display["PopRate"].apply(
+                    lambda v: f"{v:.0f}%" if v is not None else "—"
+                )
+                obj_display = obj_display.rename(columns={"PopRate": "Population"})
+                zf.writestr(f"{obj_name}_{_label}.csv", obj_display.to_csv(index=False))
+        zip_buffer.seek(0)
+        st.download_button(
+            f"📦  Download ZIP Bundle ({len(loaded_objects)} CSVs)",
+            data=zip_buffer.getvalue(),
+            file_name=f"schema_bundle_{_label}_{len(loaded_objects)}_objects.zip",
+            mime="application/zip",
+            key="se_export_zip",
         )
 
 
