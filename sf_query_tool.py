@@ -18809,21 +18809,61 @@ def _load_field_inventory(object_name: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _fetch_population_rates(object_name: str, fields: list[str], total_count: int) -> dict[str, float]:
-    """Run batched COUNT queries to get population rate per field."""
+def _fetch_population_rates(
+    object_name: str,
+    fields: list[str],
+    total_count: int,
+    progress_bar=None,
+    status_text=None,
+) -> dict[str, float]:
+    """
+    Run batched multi-field COUNT queries to get population rate per field.
+    Each query counts up to 20 fields in a single SOQL call, reducing API
+    round trips from N (one per field) to ceil(N/20).
+    """
     sf = get_sf_connection()
     rates = {}
-    errors = 0
-    for fld in fields:
+    BATCH_SIZE = 20
+    total_fields = len(fields)
+    processed = 0
+
+    for i in range(0, total_fields, BATCH_SIZE):
+        batch = fields[i : i + BATCH_SIZE]
+
+        # Build: SELECT COUNT(Field1) f0, COUNT(Field2) f1, ... FROM Object
+        select_parts = [f"COUNT({fld}) f{j}" for j, fld in enumerate(batch)]
+        soql = f"SELECT {', '.join(select_parts)} FROM {object_name}"
+
         try:
-            res = sf.query(f"SELECT COUNT() FROM {object_name} WHERE {fld} != null")
-            populated = res.get("totalSize", 0)
-            rates[fld] = round(populated / total_count * 100, 1) if total_count > 0 else 0.0
+            res = sf.query(soql)
+            record = res["records"][0] if res.get("records") else {}
+            for j, fld in enumerate(batch):
+                raw = record.get(f"f{j}", 0) or 0
+                rates[fld] = round(raw / total_count * 100, 1) if total_count > 0 else 0.0
         except Exception:
-            rates[fld] = None
-            errors += 1
-    if errors:
-        st.warning(f"⚠️ {errors} of {len(fields)} field population queries failed for {object_name}.")
+            # If the batch fails (e.g. one field is non-aggregatable),
+            # fall back to one query per field in this batch only.
+            for fld in batch:
+                try:
+                    r = sf.query(
+                        f"SELECT COUNT(Id) cnt FROM {object_name} WHERE {fld} != null"
+                    )
+                    populated = r["records"][0]["cnt"]
+                    rates[fld] = round(populated / total_count * 100, 1) if total_count > 0 else 0.0
+                except Exception:
+                    rates[fld] = None
+
+        processed += len(batch)
+
+        # Update progress if UI elements were passed in
+        if progress_bar is not None:
+            fraction = min(processed / total_fields, 1.0)
+            progress_bar.progress(fraction)
+        if status_text is not None:
+            status_text.caption(
+                f"Calculating population rates… {processed} of {total_fields} fields done."
+            )
+
     return rates
 
 
@@ -18893,15 +18933,20 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     )
 
     # ── Action buttons ────────────────────────────────────────────────────────
-    col_load, col_pop = st.columns([1, 2])
+    col_load, col_pop, col_refresh = st.columns([1, 2, 1])
     with col_load:
         load_clicked = st.button("🔍  Load Fields", key="se_load_btn")
     with col_pop:
         pop_clicked = st.button(
             "📊  Calculate Population Rates",
             key="se_pop_btn",
-            help="Runs COUNT queries — may take 30-60 seconds per object.",
+            help="Batches 20 fields per query — much faster than one-at-a-time.",
         )
+    with col_refresh:
+        if st.button("↺  Refresh Rates", key="se_pop_refresh_btn",
+                     help="Force a fresh recalculation, ignoring the cached result."):
+            st.session_state["_se_pop_force_refresh"] = True
+            st.rerun()
 
     # ── Load fields (single or batch) ─────────────────────────────────────────
     if load_clicked:
@@ -18923,7 +18968,10 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             st.session_state["_se_objects"] = list(all_frames.keys())
             st.session_state["_se_frames"] = all_frames
             st.session_state["_se_df"] = combined
-            st.session_state.pop("_se_pop_rates", None)
+            # Clear population rate cache for any previously loaded object
+            for key in list(st.session_state.keys()):
+                if key.startswith("_se_pop_rates"):
+                    del st.session_state[key]
             st.success(f"Loaded {len(combined):,} fields across {len(all_frames)} object(s).")
         else:
             st.warning("No fields found for the selected object(s).")
@@ -18937,32 +18985,66 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         st.info("Select object(s) and click **Load Fields**.")
         return
 
-    # ── Population rates (batch) ──────────────────────────────────────────────
+    # ── Population rates (batch, with caching & progress) ────────────────────
     if pop_clicked and stored_frames:
-        progress = st.progress(0, text="Calculating population rates…")
+        force_refresh = st.session_state.pop("_se_pop_force_refresh", False)
         all_rates = {}
         obj_list = list(stored_frames.keys())
-        for idx, obj_name in enumerate(obj_list):
-            progress.progress(
-                (idx + 1) / len(obj_list),
-                text=f"Population rates for {obj_name} ({idx + 1}/{len(obj_list)})…",
-            )
-            obj_df = stored_frames[obj_name]
-            try:
-                total_res = sf.query(f"SELECT COUNT() FROM {obj_name}")
-                total = total_res.get("totalSize", 0)
-            except Exception:
-                total = 0
-            queryable_fields = obj_df[
-                ~obj_df["Type"].str.lower().isin(_SKIP_SAMPLE_TYPES) &
-                ~obj_df["Type"].str.lower().isin(_ALWAYS_POPULATED_TYPES)
-            ]["API Name"].tolist()
-            rates = _fetch_population_rates(obj_name, queryable_fields, total)
-            obj_df = obj_df.copy()
-            obj_df["PopRate"] = obj_df["API Name"].map(lambda x, r=rates: r.get(x))
-            stored_frames[obj_name] = obj_df
-            all_rates.update(rates)
-        progress.empty()
+
+        # Check if ALL objects already have cached rates
+        all_cached = all(
+            st.session_state.get(f"_se_pop_rates_{o}") for o in obj_list
+        ) and not force_refresh
+
+        if all_cached:
+            for obj_name in obj_list:
+                rates = st.session_state[f"_se_pop_rates_{obj_name}"]
+                obj_df = stored_frames[obj_name].copy()
+                obj_df["PopRate"] = obj_df["API Name"].map(lambda x, r=rates: r.get(x))
+                stored_frames[obj_name] = obj_df
+                all_rates.update(rates)
+        else:
+            obj_progress = st.progress(0, text="Calculating population rates…")
+            field_progress = st.progress(0)
+            status_text = st.empty()
+
+            for idx, obj_name in enumerate(obj_list):
+                obj_progress.progress(
+                    (idx + 1) / len(obj_list),
+                    text=f"Object {idx + 1}/{len(obj_list)}: **{obj_name}**",
+                )
+                obj_df = stored_frames[obj_name]
+                try:
+                    total_res = sf.query(f"SELECT COUNT(Id) cnt FROM {obj_name}")
+                    total = total_res["records"][0]["cnt"]
+                except Exception:
+                    total = 0
+                queryable_fields = obj_df[
+                    ~obj_df["Type"].str.lower().isin(_SKIP_SAMPLE_TYPES) &
+                    ~obj_df["Type"].str.lower().isin(_ALWAYS_POPULATED_TYPES)
+                ]["API Name"].tolist()
+
+                st.caption(
+                    f"Calculating population rates for **{len(queryable_fields)} fields** "
+                    f"across **{total:,} {obj_name}** records…"
+                )
+                field_progress.progress(0)
+
+                rates = _fetch_population_rates(
+                    obj_name, queryable_fields, total,
+                    progress_bar=field_progress,
+                    status_text=status_text,
+                )
+                st.session_state[f"_se_pop_rates_{obj_name}"] = rates
+
+                obj_df = obj_df.copy()
+                obj_df["PopRate"] = obj_df["API Name"].map(lambda x, r=rates: r.get(x))
+                stored_frames[obj_name] = obj_df
+                all_rates.update(rates)
+
+            obj_progress.empty()
+            field_progress.empty()
+            status_text.empty()
 
         combined = pd.concat(stored_frames.values(), ignore_index=True)
         st.session_state["_se_frames"] = stored_frames
