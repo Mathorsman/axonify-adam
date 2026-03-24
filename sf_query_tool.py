@@ -19019,13 +19019,23 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                     total = total_res["records"][0]["cnt"]
                 except Exception:
                     total = 0
-                queryable_fields = obj_df[
+                queryable_mask = (
                     ~obj_df["Type"].str.lower().isin(_SKIP_SAMPLE_TYPES) &
                     ~obj_df["Type"].str.lower().isin(_ALWAYS_POPULATED_TYPES)
-                ]["API Name"].tolist()
+                )
+                # If a field filter is active, only calculate rates for matching fields
+                if field_search:
+                    search_mask = (
+                        obj_df["Label"].str.contains(field_search, case=False, na=False) |
+                        obj_df["API Name"].str.contains(field_search, case=False, na=False)
+                    )
+                    queryable_fields = obj_df[queryable_mask & search_mask]["API Name"].tolist()
+                else:
+                    queryable_fields = obj_df[queryable_mask]["API Name"].tolist()
 
                 st.caption(
                     f"Calculating population rates for **{len(queryable_fields)} fields** "
+                    f"({'filtered' if field_search else 'all queryable'}) "
                     f"across **{total:,} {obj_name}** records…"
                 )
                 field_progress.progress(0)
