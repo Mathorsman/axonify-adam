@@ -1537,8 +1537,11 @@ def get_object_fields(object_name: str) -> list[dict]:
     sf = get_sf_connection()
     try:
         desc = getattr(sf, object_name).describe()
+        live_fields = _get_live_field_names(sf, object_name)
         fields = []
         for f in desc["fields"]:
+            if live_fields is not None and f["name"] not in live_fields:
+                continue
             entry = {
                 "name":       f["name"],
                 "label":      f["label"],
@@ -18767,6 +18770,57 @@ _SKIP_SAMPLE_TYPES = {"textarea", "encryptedstring", "base64", "anytype"}
 _ALWAYS_POPULATED_TYPES = {"id", "autonumber", "formula", "rollup"}
 
 
+def _bisect_valid_fields(sf, object_name: str, fields: list) -> list:
+    """
+    Recursively bisects a field list to identify and drop any fields that
+    Salesforce rejects at query time (e.g. soft-deleted fields still visible
+    in describe()).  Returns only the fields that can actually be selected.
+    """
+    if not fields:
+        return []
+    if len(fields) == 1:
+        return []  # This single field caused the failure — drop it
+    mid = len(fields) // 2
+    out = []
+    for half in (fields[:mid], fields[mid:]):
+        try:
+            sf.query(f"SELECT {', '.join(half)} FROM {object_name} LIMIT 1")
+            out.extend(half)
+        except Exception:
+            out.extend(_bisect_valid_fields(sf, object_name, half))
+    return out
+
+
+def _get_live_field_names(sf, object_name: str) -> set | None:
+    """
+    Returns the set of field API names that can actually be queried on
+    object_name right now.  Uses probe SELECT queries in batches of 400
+    (well under the 20k-char SOQL limit) and binary-searches within any
+    failing batch to isolate deleted/inaccessible fields.
+    Returns None only if the object itself can't be queried at all, so
+    callers can treat None as 'skip filtering' rather than 'no fields'.
+    """
+    # Get the full field list from describe so we know what to probe
+    try:
+        desc = getattr(sf, object_name).describe()
+        all_fields = [f["name"] for f in desc.get("fields", [])]
+    except Exception:
+        return None
+
+    BATCH = 400  # stays well under the 20k-char SOQL limit
+    valid = []
+    for i in range(0, len(all_fields), BATCH):
+        chunk = all_fields[i : i + BATCH]
+        try:
+            sf.query(f"SELECT {', '.join(chunk)} FROM {object_name} LIMIT 1")
+            valid.extend(chunk)
+        except Exception:
+            # At least one field in this batch is bad — bisect to find it
+            valid.extend(_bisect_valid_fields(sf, object_name, chunk))
+
+    return set(valid)
+
+
 def _detect_integration_owner(api_name: str) -> tuple[str, str]:
     """Return (owner_label, pill_class) based on field prefix matching."""
     prefix = api_name.split("__")[0].lower() if "__" in api_name else ""
@@ -18782,7 +18836,12 @@ def _detect_integration_owner(api_name: str) -> tuple[str, str]:
 
 
 def _load_field_inventory(object_name: str) -> pd.DataFrame:
-    """Describe the object and return a DataFrame of all fields."""
+    """Describe the object and return a DataFrame of all fields.
+
+    Cross-checks describe() results against FieldDefinition so that fields
+    which have been deleted (or are otherwise no longer queryable) in the org
+    are silently excluded from the inventory.
+    """
     sf = get_sf_connection()
     try:
         desc = getattr(sf, object_name).describe()
@@ -18793,9 +18852,30 @@ def _load_field_inventory(object_name: str) -> pd.DataFrame:
             st.error(f"Could not describe {object_name}: {exc}")
             return pd.DataFrame()
 
+    live_fields = _get_live_field_names(sf, object_name)
+
+    # ── Diagnostic: surface what the probe found ──────────────────────────────
+    if live_fields is None:
+        st.warning(
+            "⚠️ Field validation probe failed — showing all fields from describe() "
+            "without filtering. Check Salesforce API permissions."
+        )
+    else:
+        describe_names = {f.get("name", "") for f in desc.get("fields", [])}
+        dropped = describe_names - live_fields
+        if dropped:
+            st.info(
+                f"🗑️ **{len(dropped)} field(s) excluded** — present in describe() but "
+                f"rejected by live query probe (likely soft-deleted): "
+                f"`{'`, `'.join(sorted(dropped))}`"
+            )
+
     rows = []
     for f in desc.get("fields", []):
         api_name = f.get("name", "")
+        # Skip fields that no longer exist in the org according to FieldDefinition
+        if live_fields is not None and api_name not in live_fields:
+            continue
         owner, _ = _detect_integration_owner(api_name)
         rows.append({
             "Label":       f.get("label", ""),
@@ -18815,24 +18895,37 @@ def _fetch_population_rates(
     total_count: int,
     progress_bar=None,
     status_text=None,
+    where_clause: str = "",
 ) -> dict[str, float]:
     """
     Run batched multi-field COUNT queries to get population rate per field.
     Each query counts up to 20 fields in a single SOQL call, reducing API
     round trips from N (one per field) to ceil(N/20).
+
+    where_clause — optional SOQL condition (without the WHERE keyword) to
+    restrict which records are counted, e.g. "Type IN ('Customer', 'Former Customer')".
+    Both the denominator (total records) and numerator (populated records) use
+    the same filter so the percentage is always relative to the filtered set.
+
+    Validates the field list against live probe queries so that deleted fields
+    are excluded rather than causing batch failures.
     """
     sf = get_sf_connection()
+    live_fields = _get_live_field_names(sf, object_name)
+    if live_fields is not None:
+        fields = [f for f in fields if f in live_fields]
     rates = {}
     BATCH_SIZE = 20
     total_fields = len(fields)
     processed = 0
+    where_sql = f" WHERE {where_clause}" if where_clause.strip() else ""
 
     for i in range(0, total_fields, BATCH_SIZE):
         batch = fields[i : i + BATCH_SIZE]
 
-        # Build: SELECT COUNT(Field1) f0, COUNT(Field2) f1, ... FROM Object
+        # Build: SELECT COUNT(Field1) f0, COUNT(Field2) f1, ... FROM Object [WHERE ...]
         select_parts = [f"COUNT({fld}) f{j}" for j, fld in enumerate(batch)]
-        soql = f"SELECT {', '.join(select_parts)} FROM {object_name}"
+        soql = f"SELECT {', '.join(select_parts)} FROM {object_name}{where_sql}"
 
         try:
             res = sf.query(soql)
@@ -18845,8 +18938,11 @@ def _fetch_population_rates(
             # fall back to one query per field in this batch only.
             for fld in batch:
                 try:
+                    fld_where = f"{fld} != null"
+                    if where_clause.strip():
+                        fld_where = f"{fld_where} AND ({where_clause})"
                     r = sf.query(
-                        f"SELECT COUNT(Id) cnt FROM {object_name} WHERE {fld} != null"
+                        f"SELECT COUNT(Id) cnt FROM {object_name} WHERE {fld_where}"
                     )
                     populated = r["records"][0]["cnt"]
                     rates[fld] = round(populated / total_count * 100, 1) if total_count > 0 else 0.0
@@ -18867,286 +18963,365 @@ def _fetch_population_rates(
     return rates
 
 
+def _get_picklist_fields_for_filter(object_name: str) -> list:
+    """
+    Return picklist field metadata for the Schema Explorer record-scope filter.
+    Uses describe() only — no probe queries — so it is fast and safe to call
+    before fields are loaded.  Results are cached for 5 minutes.
+
+    Returns a list of dicts: [{name, label, values: [str]}]
+    """
+    sf = get_sf_connection()
+    try:
+        desc = getattr(sf, object_name).describe()
+    except Exception:
+        try:
+            desc = sf.restful(f"sobjects/{object_name}/describe")
+        except Exception:
+            return []
+    result = []
+    for f in desc.get("fields", []):
+        if f.get("type") not in ("picklist", "multipicklist"):
+            continue
+        active_vals = [
+            pv["value"]
+            for pv in (f.get("picklistValues") or [])
+            if pv.get("active")
+        ]
+        if active_vals:
+            result.append({
+                "name":   f["name"],
+                "label":  f["label"],
+                "values": active_vals,
+            })
+    return result
+
+
 def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
-    st.subheader("📄  Schema Explorer")
+    """
+    Schema Explorer — review active fields on any Salesforce object and
+    measure data completion rates scoped to a specific record filter
+    (e.g. customer and former-customer accounts).
+    """
+    st.subheader("📄 Schema Explorer")
     st.caption(
-        "Browse fields on any object. Detect integration ownership, calculate population rates, "
-        "and surface cleanup candidates.  Use **Multi-select** or **All Objects** for bundled reports."
+        "Review active fields on any Salesforce object. "
+        "Set a record scope, load fields, then calculate completion rates."
     )
 
     sf = get_sf_connection()
 
-    # Object list
+    # ── All queryable objects ─────────────────────────────────────────────────
     try:
-        describe = sf.describe()
         all_objects = sorted(
-            s["name"] for s in describe["sobjects"]
+            s["name"] for s in sf.describe()["sobjects"]
             if s.get("queryable") and s.get("createable")
         )
     except Exception:
         all_objects = ["Account", "Contact", "Opportunity", "Case", "Lead"]
 
-    # ── Selection mode ────────────────────────────────────────────────────────
-    se_mode = st.radio(
-        "Selection mode",
-        ["Single Object", "Multi-select", "All Objects"],
-        key="se_mode",
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-
-    selected_objects: list[str] = []
-
-    if se_mode == "Single Object":
-        col_obj, col_search = st.columns([2, 3])
-        with col_obj:
-            sel_obj = st.selectbox("Object", all_objects, key="se_object")
-        with col_search:
-            field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search")
-        selected_objects = [sel_obj]
-
-    elif se_mode == "Multi-select":
-        _defaults = [o for o in SUPPORTED_OBJECTS if o in all_objects]
-        selected_objects = st.multiselect(
-            "Objects to explore",
-            all_objects,
-            default=_defaults,
-            key="se_multi_objects",
+    # ── Object selector + field search ───────────────────────────────────────
+    col_obj, col_search = st.columns([2, 3])
+    with col_obj:
+        default_idx = all_objects.index("Account") if "Account" in all_objects else 0
+        selected_object = st.selectbox(
+            "Object", all_objects, index=default_idx, key="oe_object"
         )
-        field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search_multi")
-        if not selected_objects:
-            st.info("Select one or more objects above.")
-            return
-
-    else:  # All Objects
-        selected_objects = all_objects
-        field_search = st.text_input("Filter fields", placeholder="Search label or API name…", key="se_search_all")
-        st.caption(f"All **{len(all_objects)}** queryable/createable objects will be scanned.")
+    with col_search:
+        field_search = st.text_input(
+            "Search fields",
+            placeholder="Filter by label or API name…",
+            key="oe_search",
+        )
 
     # ── View mode ─────────────────────────────────────────────────────────────
-    schema_section = st.radio(
+    view_mode = st.radio(
         "View",
-        ["📋  All Fields", "🧹  Cleanup Candidates"],
-        key="se_view",
-        label_visibility="collapsed",
+        ["📋 All Fields", "🧹 Cleanup Candidates"],
+        key="oe_view",
         horizontal=True,
+        label_visibility="collapsed",
     )
 
-    # ── Action buttons ────────────────────────────────────────────────────────
-    col_load, col_pop, col_refresh = st.columns([1, 2, 1])
-    with col_load:
-        load_clicked = st.button("🔍  Load Fields", key="se_load_btn")
-    with col_pop:
-        pop_clicked = st.button(
-            "📊  Calculate Population Rates",
-            key="se_pop_btn",
-            help="Batches 20 fields per query — much faster than one-at-a-time.",
+    # ── Describe the selected object ──────────────────────────────────────────
+    # Cached in session state so repeated Streamlit reruns don't hammer the API.
+    # The Refresh button and Load Fields both clear this cache to fetch fresh data.
+    _desc_key = f"_oe_desc_{selected_object}"
+    if _desc_key not in st.session_state:
+        try:
+            st.session_state[_desc_key] = getattr(sf, selected_object).describe()
+        except Exception:
+            try:
+                st.session_state[_desc_key] = sf.restful(
+                    f"sobjects/{selected_object}/describe"
+                )
+            except Exception:
+                st.session_state[_desc_key] = {"fields": []}
+    obj_desc = st.session_state[_desc_key]
+
+    # Build picklist field list from describe() — no probe queries needed
+    picklist_fields = []
+    for _f in obj_desc.get("fields", []):
+        if _f.get("type") not in ("picklist", "multipicklist"):
+            continue
+        active_vals = [
+            pv["value"]
+            for pv in (_f.get("picklistValues") or [])
+            if pv.get("active")
+        ]
+        if active_vals:
+            picklist_fields.append({
+                "name":   _f["name"],
+                "label":  _f["label"],
+                "values": active_vals,
+            })
+    label_to_pf = {pf["label"]: pf for pf in picklist_fields}
+
+    # ── Record scope filter ───────────────────────────────────────────────────
+    st.markdown("##### 🎯 Record scope")
+    st.caption(
+        "Population rates count only records that match this filter. "
+        "Both the total record count and per-field counts use the same scope, "
+        "so percentages are always relative to the filtered set."
+    )
+
+    # When the user switches to a different object, reset filter to defaults
+    if selected_object != st.session_state.get("_oe_prev_obj"):
+        st.session_state.pop("oe_scope_field", None)
+        st.session_state.pop("oe_scope_values", None)
+        st.session_state["_oe_prev_obj"] = selected_object
+
+    scope_options = ["All records (no filter)"] + [pf["label"] for pf in picklist_fields]
+
+    # Default filter field: Account Type when the object is Account
+    if "oe_scope_field" not in st.session_state:
+        st.session_state["oe_scope_field"] = next(
+            (pf["label"] for pf in picklist_fields if pf["name"] == "Type"),
+            "All records (no filter)",
+        ) if selected_object == "Account" else "All records (no filter)"
+
+    # Default filter values: Customer + Former Customer for Account Type
+    if "oe_scope_values" not in st.session_state:
+        _type_pf = next((pf for pf in picklist_fields if pf["name"] == "Type"), None)
+        if selected_object == "Account" and _type_pf:
+            st.session_state["oe_scope_values"] = [
+                v for v in ("Customer", "Former Customer")
+                if v in _type_pf["values"]
+            ]
+
+    col_sf, col_sv = st.columns([1, 2])
+    with col_sf:
+        scope_field_label = st.selectbox(
+            "Filter records by",
+            scope_options,
+            key="oe_scope_field",
         )
-    with col_refresh:
-        if st.button("↺  Refresh Rates", key="se_pop_refresh_btn",
-                     help="Force a fresh recalculation, ignoring the cached result."):
-            st.session_state["_se_pop_force_refresh"] = True
+    scope_pf = label_to_pf.get(scope_field_label)
+    scope_values = []
+    if scope_pf:
+        with col_sv:
+            scope_values = st.multiselect(
+                "Include these values",
+                scope_pf["values"],
+                key="oe_scope_values",
+                placeholder="Select one or more values…",
+            )
+
+    # Build WHERE clause from current selections
+    if scope_pf and scope_values:
+        _vals_sql = ", ".join(f"'{v}'" for v in scope_values)
+        pop_where = f"{scope_pf['name']} IN ({_vals_sql})"
+        st.caption(f"✅ Active scope: `{pop_where}`")
+    else:
+        pop_where = ""
+        if scope_pf and not scope_values:
+            st.caption("⚠️ No values selected — rates will cover ALL records")
+
+    # Bust cached rates whenever the filter changes
+    if pop_where != st.session_state.get("_oe_prev_where", ""):
+        st.session_state["_oe_prev_where"] = pop_where
+        st.session_state.pop("_oe_rates", None)
+
+    # ── Action buttons ────────────────────────────────────────────────────────
+    col_load, col_calc, col_ref = st.columns([1, 2, 1])
+    with col_load:
+        load_clicked = st.button("🔍 Load Fields", key="oe_load_btn")
+    with col_calc:
+        calc_clicked = st.button(
+            "📊 Calculate Population Rates",
+            key="oe_calc_btn",
+            help="Runs batched COUNT queries scoped to the filter above.",
+        )
+    with col_ref:
+        if st.button("↺ Refresh", key="oe_refresh_btn",
+                     help="Clear all cached data and reload from Salesforce."):
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("_oe_"):
+                    del st.session_state[_k]
             st.rerun()
 
-    # ── Load fields (single or batch) ─────────────────────────────────────────
+    # ── Load fields ───────────────────────────────────────────────────────────
     if load_clicked:
-        all_frames = {}
-        progress = st.progress(0, text="Loading field inventories…")
-        for idx, obj_name in enumerate(selected_objects):
-            progress.progress(
-                (idx + 1) / len(selected_objects),
-                text=f"Describing {obj_name} ({idx + 1}/{len(selected_objects)})…",
-            )
-            obj_df = _load_field_inventory(obj_name)
-            if not obj_df.empty:
-                obj_df.insert(0, "Object", obj_name)
-                all_frames[obj_name] = obj_df
-        progress.empty()
+        # Force a fresh describe() — clear the cached copy
+        st.session_state.pop(_desc_key, None)
+        try:
+            fresh_desc = getattr(sf, selected_object).describe()
+        except Exception:
+            try:
+                fresh_desc = sf.restful(f"sobjects/{selected_object}/describe")
+            except Exception as exc:
+                st.error(f"Could not describe {selected_object}: {exc}")
+                st.stop()
+        st.session_state[_desc_key] = fresh_desc
 
-        if all_frames:
-            combined = pd.concat(all_frames.values(), ignore_index=True)
-            st.session_state["_se_objects"] = list(all_frames.keys())
-            st.session_state["_se_frames"] = all_frames
-            st.session_state["_se_df"] = combined
-            # Clear population rate cache for any previously loaded object
-            for key in list(st.session_state.keys()):
-                if key.startswith("_se_pop_rates"):
-                    del st.session_state[key]
-            st.success(f"Loaded {len(combined):,} fields across {len(all_frames)} object(s).")
-        else:
-            st.warning("No fields found for the selected object(s).")
+        rows = []
+        for _f in fresh_desc.get("fields", []):
+            owner, _ = _detect_integration_owner(_f["name"])
+            rows.append({
+                "Label":    _f.get("label", ""),
+                "API Name": _f["name"],
+                "Type":     _f.get("type", ""),
+                "Owner":    owner,
+                "PopRate":  None,
+            })
+        _new_df = pd.DataFrame(rows)
+        st.session_state["_oe_df"]     = _new_df
+        st.session_state["_oe_object"] = selected_object
+        st.session_state.pop("_oe_rates", None)
+        st.success(f"✅ Loaded {len(_new_df):,} fields on **{selected_object}**.")
 
-    # ── Retrieve stored data ──────────────────────────────────────────────────
-    df: pd.DataFrame = st.session_state.get("_se_df")
-    loaded_objects: list = st.session_state.get("_se_objects", [])
-    stored_frames: dict = st.session_state.get("_se_frames", {})
+    # ── Retrieve stored field data ────────────────────────────────────────────
+    df: pd.DataFrame = st.session_state.get("_oe_df")
+    stored_object: str = st.session_state.get("_oe_object", "")
 
     if df is None or df.empty:
-        st.info("Select object(s) and click **Load Fields**.")
+        st.info("👆 Click **Load Fields** to begin.")
         return
 
-    # ── Population rates (batch, with caching & progress) ────────────────────
-    if pop_clicked and stored_frames:
-        force_refresh = st.session_state.pop("_se_pop_force_refresh", False)
-        all_rates = {}
-        obj_list = list(stored_frames.keys())
+    if stored_object and stored_object != selected_object:
+        st.info(
+            f"Showing fields for **{stored_object}**. "
+            f"Click **Load Fields** to switch to {selected_object}."
+        )
 
-        # Check if ALL objects already have cached rates
-        all_cached = all(
-            st.session_state.get(f"_se_pop_rates_{o}") for o in obj_list
-        ) and not force_refresh
+    # ── Calculate population rates ────────────────────────────────────────────
+    if calc_clicked:
+        # Exclude field types that cannot be used inside COUNT()
+        queryable_fields = [
+            row["API Name"]
+            for _, row in df.iterrows()
+            if row["Type"].lower() not in _SKIP_SAMPLE_TYPES
+            and row["Type"].lower() not in _ALWAYS_POPULATED_TYPES
+        ]
 
-        if all_cached:
-            for obj_name in obj_list:
-                rates = st.session_state[f"_se_pop_rates_{obj_name}"]
-                obj_df = stored_frames[obj_name].copy()
-                obj_df["PopRate"] = obj_df["API Name"].map(lambda x, r=rates: r.get(x))
-                stored_frames[obj_name] = obj_df
-                all_rates.update(rates)
-        else:
-            obj_progress = st.progress(0, text="Calculating population rates…")
-            field_progress = st.progress(0)
-            status_text = st.empty()
+        # Get total record count for the scoped set
+        count_soql = f"SELECT COUNT(Id) cnt FROM {stored_object}"
+        if pop_where:
+            count_soql += f" WHERE {pop_where}"
+        try:
+            total = sf.query(count_soql)["records"][0]["cnt"]
+        except Exception as exc:
+            st.error(f"Could not count {stored_object} records: {exc}")
+            st.stop()
 
-            for idx, obj_name in enumerate(obj_list):
-                obj_progress.progress(
-                    (idx + 1) / len(obj_list),
-                    text=f"Object {idx + 1}/{len(obj_list)}: **{obj_name}**",
-                )
-                obj_df = stored_frames[obj_name]
-                try:
-                    total_res = sf.query(f"SELECT COUNT(Id) cnt FROM {obj_name}")
-                    total = total_res["records"][0]["cnt"]
-                except Exception:
-                    total = 0
-                queryable_mask = (
-                    ~obj_df["Type"].str.lower().isin(_SKIP_SAMPLE_TYPES) &
-                    ~obj_df["Type"].str.lower().isin(_ALWAYS_POPULATED_TYPES)
-                )
-                # If a field filter is active, only calculate rates for matching fields
-                if field_search:
-                    search_mask = (
-                        obj_df["Label"].str.contains(field_search, case=False, na=False) |
-                        obj_df["API Name"].str.contains(field_search, case=False, na=False)
-                    )
-                    queryable_fields = obj_df[queryable_mask & search_mask]["API Name"].tolist()
-                else:
-                    queryable_fields = obj_df[queryable_mask]["API Name"].tolist()
+        scope_label = f" matching `{pop_where}`" if pop_where else " (all records)"
+        st.caption(
+            f"Calculating rates for **{len(queryable_fields)} fields** "
+            f"across **{total:,} {stored_object}** records{scope_label}…"
+        )
 
-                st.caption(
-                    f"Calculating population rates for **{len(queryable_fields)} fields** "
-                    f"({'filtered' if field_search else 'all queryable'}) "
-                    f"across **{total:,} {obj_name}** records…"
-                )
-                field_progress.progress(0)
+        where_sql = f" WHERE {pop_where}" if pop_where else ""
+        rates: dict = {}
+        BATCH = 20
+        _prog = st.progress(0)
+        _status = st.empty()
 
-                rates = _fetch_population_rates(
-                    obj_name, queryable_fields, total,
-                    progress_bar=field_progress,
-                    status_text=status_text,
-                )
-                st.session_state[f"_se_pop_rates_{obj_name}"] = rates
+        for i in range(0, len(queryable_fields), BATCH):
+            batch = queryable_fields[i : i + BATCH]
+            select_parts = [f"COUNT({fld}) f{j}" for j, fld in enumerate(batch)]
+            soql = f"SELECT {', '.join(select_parts)} FROM {stored_object}{where_sql}"
+            try:
+                rec = sf.query(soql)["records"][0]
+                for j, fld in enumerate(batch):
+                    raw = rec.get(f"f{j}") or 0
+                    rates[fld] = round(raw / total * 100, 1) if total else 0.0
+            except Exception:
+                # Batch failed — fall back to individual queries for this batch only
+                for fld in batch:
+                    try:
+                        fld_filter = f"{fld} != null"
+                        if pop_where:
+                            fld_filter += f" AND ({pop_where})"
+                        _r = sf.query(
+                            f"SELECT COUNT(Id) cnt FROM {stored_object} WHERE {fld_filter}"
+                        )
+                        populated = _r["records"][0]["cnt"]
+                        rates[fld] = round(populated / total * 100, 1) if total else 0.0
+                    except Exception:
+                        rates[fld] = None
 
-                obj_df = obj_df.copy()
-                obj_df["PopRate"] = obj_df["API Name"].map(lambda x, r=rates: r.get(x))
-                stored_frames[obj_name] = obj_df
-                all_rates.update(rates)
+            done = min(i + BATCH, len(queryable_fields))
+            _prog.progress(done / len(queryable_fields))
+            _status.caption(f"{done} / {len(queryable_fields)} fields processed…")
 
-            obj_progress.empty()
-            field_progress.empty()
-            status_text.empty()
+        _prog.empty()
+        _status.empty()
 
-        combined = pd.concat(stored_frames.values(), ignore_index=True)
-        st.session_state["_se_frames"] = stored_frames
-        st.session_state["_se_df"] = combined
-        st.session_state["_se_pop_rates"] = all_rates
-        df = combined
+        updated_df = df.copy()
+        updated_df["PopRate"] = updated_df["API Name"].map(lambda x, r=rates: r.get(x))
+        st.session_state["_oe_df"]    = updated_df
+        st.session_state["_oe_rates"] = rates
+        df = updated_df
 
-    # ── Apply search filter ───────────────────────────────────────────────────
+    # ── Apply field search and view mode ──────────────────────────────────────
     view = df.copy()
     if field_search:
-        mask = (
-            view["Label"].str.contains(field_search, case=False, na=False) |
-            view["API Name"].str.contains(field_search, case=False, na=False)
+        _mask = (
+            view["Label"].str.contains(field_search, case=False, na=False)
+            | view["API Name"].str.contains(field_search, case=False, na=False)
         )
-        view = view[mask]
+        view = view[_mask]
 
-    if schema_section == "🧹  Cleanup Candidates":
-        has_rates = view["PopRate"].notna().any()
-        if has_rates:
-            zero_mask = view["PopRate"] == 0.0
-        else:
-            zero_mask = pd.Series(False, index=view.index)
-        retired_mask = view["Owner"].isin(RETIRED_TOOLS)
-        view = view[zero_mask | retired_mask]
+    if view_mode == "🧹 Cleanup Candidates":
+        _has_rates = view["PopRate"].notna().any()
+        _zero_mask = (view["PopRate"] == 0.0) if _has_rates else pd.Series(False, index=view.index)
+        _retired_mask = view["Owner"].isin(RETIRED_TOOLS)
+        view = view[_zero_mask | _retired_mask]
         st.caption(
-            f"{len(view)} cleanup candidates: 0% populated fields and/or retired tool fields."
+            f"{len(view)} cleanup candidates — 0% population or retired tool ownership."
         )
 
-    # ── Display ───────────────────────────────────────────────────────────────
-    show_obj_col = len(loaded_objects) > 1
-    cols_to_show = (["Object"] if show_obj_col else []) + ["Label", "API Name", "Type", "Owner", "PopRate"]
-    display = view[cols_to_show].copy()
+    # ── Metrics + table ───────────────────────────────────────────────────────
+    display = view[["Label", "API Name", "Type", "Owner", "PopRate"]].copy()
     display["PopRate"] = display["PopRate"].apply(
         lambda v: f"{v:.0f}%" if pd.notna(v) else "N/A"
     )
     display = display.rename(columns={"PopRate": "Population"})
 
-    col_m1, col_m2 = st.columns(2)
+    col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
         st.metric("Fields shown", f"{len(display):,}")
     with col_m2:
-        if show_obj_col:
-            st.metric("Objects", len(loaded_objects))
+        _rates_count = int(view["PopRate"].notna().sum())
+        st.metric("Rates calculated", f"{_rates_count:,}" if _rates_count else "—")
+    with col_m3:
+        if _rates_count and pop_where:
+            _avg = view["PopRate"].dropna().mean()
+            st.metric("Avg completion (scoped)", f"{_avg:.0f}%" if not pd.isna(_avg) else "—")
+
     st.dataframe(display, use_container_width=True, hide_index=True)
 
-    # ── Downloads ─────────────────────────────────────────────────────────────
+    # ── Export ────────────────────────────────────────────────────────────────
     st.markdown("---")
-    if len(loaded_objects) == 1:
-        # Single object — plain CSV
-        csv_data = display.to_csv(index=False).encode("utf-8")
-        _label = "Cleanup Candidates" if schema_section.startswith("🧹") else "Fields"
-        st.download_button(
-            f"📥  Export {_label} as CSV",
-            data=csv_data,
-            file_name=f"{loaded_objects[0]}_{_label.replace(' ', '_').lower()}.csv",
-            mime="text/csv",
-            key="se_export_csv",
-        )
-    elif len(loaded_objects) > 1:
-        _label = "cleanup_candidates" if schema_section.startswith("🧹") else "fields"
-
-        # Combined CSV
-        csv_combined = display.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            f"📥  Download Combined CSV ({len(loaded_objects)} objects)",
-            data=csv_combined,
-            file_name=f"schema_bundle_{_label}_{len(loaded_objects)}_objects.csv",
-            mime="text/csv",
-            key="se_export_combined",
-        )
-
-        # ZIP bundle — one CSV per object
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for obj_name in loaded_objects:
-                obj_view = view[view["Object"] == obj_name]
-                if obj_view.empty:
-                    continue
-                obj_display = obj_view[["Label", "API Name", "Type", "Owner", "PopRate"]].copy()
-                obj_display["PopRate"] = obj_display["PopRate"].apply(
-                    lambda v: f"{v:.0f}%" if pd.notna(v) else "N/A"
-                )
-                obj_display = obj_display.rename(columns={"PopRate": "Population"})
-                zf.writestr(f"{obj_name}_{_label}.csv", obj_display.to_csv(index=False))
-        zip_buffer.seek(0)
-        st.download_button(
-            f"📦  Download ZIP Bundle ({len(loaded_objects)} CSVs)",
-            data=zip_buffer.getvalue(),
-            file_name=f"schema_bundle_{_label}_{len(loaded_objects)}_objects.zip",
-            mime="application/zip",
-            key="se_export_zip",
-        )
+    _export_label = "cleanup_candidates" if view_mode.startswith("🧹") else "fields"
+    _csv_bytes = display.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "📥 Export as CSV",
+        data=_csv_bytes,
+        file_name=f"{stored_object}_{_export_label}.csv",
+        mime="text/csv",
+        key="oe_export_csv",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -21164,6 +21339,7 @@ def _purge_describe_contact_fields() -> list:
     """Returns [{name, label, type}] for all queryable Contact fields, sorted by label."""
     sf = get_sf_connection()
     desc = sf.Contact.describe()
+    live_fields = _get_live_field_names(sf, "Contact")
     skip_types = {"address", "location", "base64", "encryptedstring"}
     out = []
     for f in desc.get("fields", []):
@@ -21171,6 +21347,8 @@ def _purge_describe_contact_fields() -> list:
             continue
         name = f.get("name", "")
         if not name or name.endswith("__r"):
+            continue
+        if live_fields is not None and name not in live_fields:
             continue
         out.append({"name": name, "label": f.get("label", name), "type": f.get("type", "")})
     return sorted(out, key=lambda x: x["label"])
