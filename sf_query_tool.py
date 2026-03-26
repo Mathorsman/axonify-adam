@@ -19304,7 +19304,8 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     # ── Metrics + table ───────────────────────────────────────────────────────
     _stored_total = st.session_state.get("_oe_total")
 
-    # Build display — include Populated count column when rates have been run
+    # Build display — keep PopRate and PopCount as numerics so sorting is correct.
+    # column_config handles the % and comma formatting in the rendered table.
     _has_counts = "PopCount" in view.columns and view["PopCount"].notna().any()
     _display_cols = ["Label", "API Name", "Type", "Owner"]
     if _has_counts:
@@ -19312,18 +19313,23 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     else:
         _display_cols += ["PopRate"]
 
-    display = view[_display_cols].copy()
-
-    if _has_counts:
-        display["PopCount"] = display["PopCount"].apply(
-            lambda v: f"{int(v):,}" if pd.notna(v) else "N/A"
-        )
-        display = display.rename(columns={"PopCount": "Populated"})
-
-    display["PopRate"] = display["PopRate"].apply(
-        lambda v: f"{v:.0f}%" if pd.notna(v) else "N/A"
+    display = view[_display_cols].copy().rename(
+        columns={"PopCount": "Populated", "PopRate": "Completion %"}
     )
-    display = display.rename(columns={"PopRate": "Completion %"})
+
+    _col_config = {
+        "Completion %": st.column_config.NumberColumn(
+            "Completion %",
+            format="%.1f%%",
+            help="Percentage of records in scope where this field is populated",
+        ),
+    }
+    if _has_counts:
+        _col_config["Populated"] = st.column_config.NumberColumn(
+            "Populated",
+            format="%d",
+            help="Number of records in scope where this field is populated",
+        )
 
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
@@ -19340,7 +19346,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             _scope_suffix = " (scoped)" if pop_where else ""
             st.metric(f"Avg completion{_scope_suffix}", f"{_avg:.0f}%" if not pd.isna(_avg) else "—")
 
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.dataframe(display, use_container_width=True, hide_index=True, column_config=_col_config)
 
     # ── Export ────────────────────────────────────────────────────────────────
     st.markdown("---")
