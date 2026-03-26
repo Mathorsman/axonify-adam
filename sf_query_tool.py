@@ -19185,9 +19185,12 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                 "PopRate":  None,
             })
         _new_df = pd.DataFrame(rows)
+        _new_df["PopCount"] = None   # filled in when rates are calculated
         st.session_state["_oe_df"]     = _new_df
         st.session_state["_oe_object"] = selected_object
-        st.session_state.pop("_oe_rates", None)
+        st.session_state.pop("_oe_rates",  None)
+        st.session_state.pop("_oe_counts", None)
+        st.session_state.pop("_oe_total",  None)
         st.success(f"✅ Loaded {len(_new_df):,} fields on **{selected_object}**.")
 
     # ── Retrieve stored field data ────────────────────────────────────────────
@@ -19231,7 +19234,8 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         )
 
         where_sql = f" WHERE {pop_where}" if pop_where else ""
-        rates: dict = {}
+        rates: dict  = {}   # field → completion %
+        counts: dict = {}   # field → raw populated record count
         BATCH = 20
         _prog = st.progress(0)
         _status = st.empty()
@@ -19244,7 +19248,8 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                 rec = sf.query(soql)["records"][0]
                 for j, fld in enumerate(batch):
                     raw = rec.get(f"f{j}") or 0
-                    rates[fld] = round(raw / total * 100, 1) if total else 0.0
+                    counts[fld] = raw
+                    rates[fld]  = round(raw / total * 100, 1) if total else 0.0
             except Exception:
                 # Batch failed — fall back to individual queries for this batch only
                 for fld in batch:
@@ -19256,9 +19261,11 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                             f"SELECT COUNT(Id) cnt FROM {stored_object} WHERE {fld_filter}"
                         )
                         populated = _r["records"][0]["cnt"]
-                        rates[fld] = round(populated / total * 100, 1) if total else 0.0
+                        counts[fld] = populated
+                        rates[fld]  = round(populated / total * 100, 1) if total else 0.0
                     except Exception:
-                        rates[fld] = None
+                        counts[fld] = None
+                        rates[fld]  = None
 
             done = min(i + BATCH, len(queryable_fields))
             _prog.progress(done / len(queryable_fields))
@@ -19268,9 +19275,12 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         _status.empty()
 
         updated_df = df.copy()
-        updated_df["PopRate"] = updated_df["API Name"].map(lambda x, r=rates: r.get(x))
-        st.session_state["_oe_df"]    = updated_df
-        st.session_state["_oe_rates"] = rates
+        updated_df["PopRate"] = updated_df["API Name"].map(lambda x, r=rates:  r.get(x))
+        updated_df["PopCount"] = updated_df["API Name"].map(lambda x, c=counts: c.get(x))
+        st.session_state["_oe_df"]     = updated_df
+        st.session_state["_oe_rates"]  = rates
+        st.session_state["_oe_counts"] = counts
+        st.session_state["_oe_total"]  = total
         df = updated_df
 
     # ── Apply field search and view mode ──────────────────────────────────────
@@ -19292,22 +19302,43 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         )
 
     # ── Metrics + table ───────────────────────────────────────────────────────
-    display = view[["Label", "API Name", "Type", "Owner", "PopRate"]].copy()
+    _stored_total = st.session_state.get("_oe_total")
+
+    # Build display — include Populated count column when rates have been run
+    _has_counts = "PopCount" in view.columns and view["PopCount"].notna().any()
+    _display_cols = ["Label", "API Name", "Type", "Owner"]
+    if _has_counts:
+        _display_cols += ["PopCount", "PopRate"]
+    else:
+        _display_cols += ["PopRate"]
+
+    display = view[_display_cols].copy()
+
+    if _has_counts:
+        display["PopCount"] = display["PopCount"].apply(
+            lambda v: f"{int(v):,}" if pd.notna(v) else "N/A"
+        )
+        display = display.rename(columns={"PopCount": "Populated"})
+
     display["PopRate"] = display["PopRate"].apply(
         lambda v: f"{v:.0f}%" if pd.notna(v) else "N/A"
     )
-    display = display.rename(columns={"PopRate": "Population"})
+    display = display.rename(columns={"PopRate": "Completion %"})
 
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
         st.metric("Fields shown", f"{len(display):,}")
     with col_m2:
         _rates_count = int(view["PopRate"].notna().sum())
-        st.metric("Rates calculated", f"{_rates_count:,}" if _rates_count else "—")
+        if _stored_total:
+            st.metric("Records in scope", f"{_stored_total:,}")
+        else:
+            st.metric("Rates calculated", f"{_rates_count:,}" if _rates_count else "—")
     with col_m3:
-        if _rates_count and pop_where:
+        if _rates_count:
             _avg = view["PopRate"].dropna().mean()
-            st.metric("Avg completion (scoped)", f"{_avg:.0f}%" if not pd.isna(_avg) else "—")
+            _scope_suffix = " (scoped)" if pop_where else ""
+            st.metric(f"Avg completion{_scope_suffix}", f"{_avg:.0f}%" if not pd.isna(_avg) else "—")
 
     st.dataframe(display, use_container_width=True, hide_index=True)
 
