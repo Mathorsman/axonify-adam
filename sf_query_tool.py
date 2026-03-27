@@ -19143,7 +19143,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         st.session_state.pop("_oe_rates", None)
 
     # ── Action buttons ────────────────────────────────────────────────────────
-    col_load, col_calc, col_ref = st.columns([1, 2, 1])
+    col_load, col_calc, col_activity, col_ref = st.columns([1, 2, 2, 1])
     with col_load:
         load_clicked = st.button("🔍 Load Fields", key="oe_load_btn")
     with col_calc:
@@ -19151,6 +19151,12 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             "📊 Calculate Population Rates",
             key="oe_calc_btn",
             help="Runs batched COUNT queries scoped to the filter above.",
+        )
+    with col_activity:
+        activity_clicked = st.button(
+            "📅 Fetch Last Activity",
+            key="oe_activity_btn",
+            help="For each populated field, finds the most recent record modification date. Run after Calculate Population Rates.",
         )
     with col_ref:
         if st.button("↺ Refresh", key="oe_refresh_btn",
@@ -19177,20 +19183,35 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         rows = []
         for _f in fresh_desc.get("fields", []):
             owner, _ = _detect_integration_owner(_f["name"])
+            _ftype = _f.get("type", "").lower()
+            # Classify population source from describe() metadata
+            if _f.get("calculated") or _ftype == "formula":
+                _src = "Formula"
+            elif _f.get("autoNumber") or _ftype == "autonumber":
+                _src = "Auto-number"
+            elif not _f.get("updateable") and not _f.get("createable"):
+                _src = "System"
+            elif owner not in ("Standard", "Custom"):
+                _src = "Integration"
+            else:
+                _src = "Editable"
             rows.append({
-                "Label":    _f.get("label", ""),
-                "API Name": _f["name"],
-                "Type":     _f.get("type", ""),
-                "Owner":    owner,
-                "PopRate":  None,
+                "Label":        _f.get("label", ""),
+                "API Name":     _f["name"],
+                "Type":         _f.get("type", ""),
+                "Owner":        owner,
+                "Source":       _src,
+                "PopRate":      None,
             })
         _new_df = pd.DataFrame(rows)
-        _new_df["PopCount"] = None   # filled in when rates are calculated
+        _new_df["PopCount"]     = None   # filled in when rates are calculated
+        _new_df["LastActivity"] = None   # filled in when last activity is fetched
         st.session_state["_oe_df"]     = _new_df
         st.session_state["_oe_object"] = selected_object
-        st.session_state.pop("_oe_rates",  None)
-        st.session_state.pop("_oe_counts", None)
-        st.session_state.pop("_oe_total",  None)
+        st.session_state.pop("_oe_rates",        None)
+        st.session_state.pop("_oe_counts",       None)
+        st.session_state.pop("_oe_total",        None)
+        st.session_state.pop("_oe_last_activity", None)
         st.success(f"✅ Loaded {len(_new_df):,} fields on **{selected_object}**.")
 
     # ── Retrieve stored field data ────────────────────────────────────────────
@@ -19283,6 +19304,52 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         st.session_state["_oe_total"]  = total
         df = updated_df
 
+    # ── Fetch last activity ───────────────────────────────────────────────────
+    if activity_clicked:
+        _la_counts = st.session_state.get("_oe_counts", {})
+        # Only fetch dates for fields that are actually populated in this scope.
+        # Skip booleans/id/system types — they're always set and the date adds no signal.
+        _la_skip = _ALWAYS_POPULATED_TYPES | {"boolean"}
+        _la_type_map = dict(zip(df["API Name"], df["Type"].str.lower()))
+        _la_fields = [
+            fld for fld, cnt in _la_counts.items()
+            if cnt and cnt > 0 and _la_type_map.get(fld, "") not in _la_skip
+        ]
+        if not _la_fields:
+            st.warning(
+                "Run **Calculate Population Rates** first — "
+                "last activity requires knowing which fields are populated."
+            )
+        else:
+            _la_map: dict = {}
+            _la_prog = st.progress(0)
+            _la_status = st.empty()
+            for _li, _fld in enumerate(_la_fields):
+                _la_filter = f"{_fld} != null"
+                if pop_where:
+                    _la_filter += f" AND ({pop_where})"
+                try:
+                    _la_res = sf.query(
+                        f"SELECT MAX(LastModifiedDate) maxd "
+                        f"FROM {stored_object} WHERE {_la_filter}"
+                    )
+                    _la_map[_fld] = _la_res["records"][0].get("maxd")
+                except Exception:
+                    _la_map[_fld] = None
+                _la_prog.progress((_li + 1) / len(_la_fields))
+                if (_li + 1) % 10 == 0:
+                    _la_status.caption(f"{_li + 1} / {len(_la_fields)} fields checked…")
+            _la_prog.empty()
+            _la_status.empty()
+
+            _la_df = df.copy()
+            _la_df["LastActivity"] = _la_df["API Name"].map(
+                lambda x, la=_la_map: la.get(x)
+            )
+            st.session_state["_oe_df"]           = _la_df
+            st.session_state["_oe_last_activity"] = _la_map
+            df = _la_df
+
     # ── Apply field search and view mode ──────────────────────────────────────
     view = df.copy()
     if field_search:
@@ -19306,15 +19373,22 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
 
     # Build display — keep PopRate and PopCount as numerics so sorting is correct.
     # column_config handles the % and comma formatting in the rendered table.
-    _has_counts = "PopCount" in view.columns and view["PopCount"].notna().any()
+    _has_counts   = "PopCount"     in view.columns and view["PopCount"].notna().any()
+    _has_activity = "LastActivity" in view.columns and view["LastActivity"].notna().any()
+    _has_source   = "Source"       in view.columns
+
     _display_cols = ["Label", "API Name", "Type", "Owner"]
+    if _has_source:
+        _display_cols += ["Source"]
     if _has_counts:
         _display_cols += ["PopCount", "PopRate"]
     else:
         _display_cols += ["PopRate"]
+    if _has_activity:
+        _display_cols += ["LastActivity"]
 
     display = view[_display_cols].copy().rename(
-        columns={"PopCount": "Populated", "PopRate": "Completion %"}
+        columns={"PopCount": "Populated", "PopRate": "Completion %", "LastActivity": "Last Activity"}
     )
 
     _col_config = {
@@ -19329,6 +19403,17 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             "Populated",
             format="%d",
             help="Number of records in scope where this field is populated",
+        )
+    if _has_activity:
+        _col_config["Last Activity"] = st.column_config.DatetimeColumn(
+            "Last Activity",
+            format="DD MMM YYYY",
+            help="Most recent date a record in scope had this field populated (MAX LastModifiedDate where field != null)",
+        )
+    if _has_source:
+        _col_config["Source"] = st.column_config.TextColumn(
+            "Source",
+            help="Formula = calculated field  |  Integration = populated by an external tool  |  Editable = set manually or by automation",
         )
 
     col_m1, col_m2, col_m3 = st.columns(3)
