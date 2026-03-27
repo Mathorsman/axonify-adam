@@ -19368,86 +19368,148 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         from urllib.parse import quote as _url_quote
         import json as _json
 
+        _auto_map: dict = {}   # field API name → {"types": set, "names": list[str]}
+        _auto_errors: list = []  # non-fatal warnings surfaced to user
         _auto_status = st.empty()
+
+        # ══ 1. Workflow Rules ══════════════════════════════════════════════════
+        # Compound fields (Metadata) cannot appear in Tooling SOQL SELECT — they
+        # must be fetched per-record via REST GET.  So we do three steps:
+        #   a) Get WorkflowRule IDs + names for this object
+        #   b) Get WorkflowFieldUpdate IDs linked to those rules
+        #   c) REST-GET each WorkflowFieldUpdate to read Metadata.field
         _auto_status.caption("Querying Workflow Rules…")
+        _wf_rule_names: dict = {}  # rule_id → rule_name
 
-        # field → {"types": set, "names": list[str]}
-        _auto_map: dict = {}
-
-        # ── 1. Workflow Field Updates ──────────────────────────────────────────
         try:
-            _wfu = sf.restful(
+            _wf_res = sf.restful(
                 "tooling/query?q=" + _url_quote(
-                    f"SELECT Field, WorkflowRule.Name "
-                    f"FROM WorkflowFieldUpdate "
-                    f"WHERE SobjectType = '{stored_object}'"
+                    f"SELECT Id, Name FROM WorkflowRule "
+                    f"WHERE TableEnumOrId = '{stored_object}'"
                 )
             )
-            for _rec in _wfu.get("records", []):
-                _fname  = _rec.get("Field") or ""
-                _rname  = (_rec.get("WorkflowRule") or {}).get("Name", "Unknown Rule")
-                if _fname:
-                    _e = _auto_map.setdefault(_fname, {"types": set(), "names": []})
-                    _e["types"].add("Workflow Rule")
-                    _e["names"].append(f"WF: {_rname}")
-        except Exception:
-            pass
+            _wf_rule_names = {r["Id"]: r.get("Name", "Unknown Rule")
+                              for r in _wf_res.get("records", [])}
+        except Exception as _ex:
+            _auto_errors.append(f"WorkflowRule list failed: {_ex}")
 
-        # ── 2. Active Flow metadata ────────────────────────────────────────────
-        _auto_status.caption("Fetching active Flow metadata…")
-        _flow_records = []
-        try:
-            # Try batch Tooling SOQL first (Metadata is a compound field on FlowVersion)
-            _fv_res = sf.restful(
-                "tooling/query?q=" + _url_quote(
-                    "SELECT Label, Metadata FROM FlowVersion WHERE Status = 'Active'"
-                )
+        if _wf_rule_names:
+            _auto_status.caption(
+                f"Found {len(_wf_rule_names)} Workflow Rule(s) — fetching field updates…"
             )
-            _flow_records = _fv_res.get("records", [])
-        except Exception:
-            # Fallback: get IDs then fetch individually
             try:
-                _fv_ids = sf.restful(
+                _id_csv = "', '".join(_wf_rule_names.keys())
+                _wfu_res = sf.restful(
                     "tooling/query?q=" + _url_quote(
-                        "SELECT Id, Label FROM FlowVersion WHERE Status = 'Active'"
+                        f"SELECT Id, WorkflowRuleId FROM WorkflowFieldUpdate "
+                        f"WHERE WorkflowRuleId IN ('{_id_csv}')"
                     )
-                ).get("records", [])
-                for _fv in _fv_ids:
+                )
+                for _wfu in _wfu_res.get("records", []):
                     try:
-                        _detail = sf.restful(f"tooling/sobjects/FlowVersion/{_fv['Id']}")
-                        _flow_records.append({
-                            "Label":    _fv["Label"],
-                            "Metadata": _detail.get("Metadata"),
-                        })
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                        _detail = sf.restful(
+                            f"tooling/sobjects/WorkflowFieldUpdate/{_wfu['Id']}"
+                        )
+                        _field = (_detail.get("Metadata") or {}).get("field")
+                        if _field:
+                            _rule_name = _wf_rule_names.get(
+                                _wfu.get("WorkflowRuleId"), "Unknown Rule"
+                            )
+                            _ent = _auto_map.setdefault(
+                                _field, {"types": set(), "names": []}
+                            )
+                            _ent["types"].add("Workflow Rule")
+                            _ent["names"].append(f"WF: {_rule_name}")
+                    except Exception as _ex:
+                        _auto_errors.append(
+                            f"WorkflowFieldUpdate fetch failed ({_wfu.get('Id')}): {_ex}"
+                        )
+            except Exception as _ex:
+                _auto_errors.append(f"WorkflowFieldUpdate query failed: {_ex}")
 
-        # Search each flow's metadata JSON for field API names
+        # ══ 2. Active Flows ════════════════════════════════════════════════════
+        # FlowVersion.Metadata is also a compound field — cannot be in SOQL SELECT.
+        # Correct approach:
+        #   a) Use FlowDefinitionView (standard SOQL, API v47+) to get active flows
+        #      and their ActiveVersionId
+        #   b) REST-GET each FlowVersion/{id} to retrieve the full Metadata JSON
+        #   c) Text-search the JSON for each field API name
+        _auto_status.caption("Fetching list of active Flows…")
+        _flow_defs: list = []
+
+        try:
+            _fdv = sf.query(
+                "SELECT Id, Label, ApiName, ActiveVersionId "
+                "FROM FlowDefinitionView "
+                "WHERE IsActive = true AND ActiveVersionId != null"
+            )
+            _flow_defs = _fdv.get("records", [])
+        except Exception as _ex:
+            _auto_errors.append(f"FlowDefinitionView query failed: {_ex}")
+            # Fallback — Tooling API FlowDefinition
+            try:
+                _fdt = sf.restful(
+                    "tooling/query?q=" + _url_quote(
+                        "SELECT Id, Label, ApiName, ActiveVersionId "
+                        "FROM FlowDefinition "
+                        "WHERE Status = 'Active' AND ActiveVersionId != null"
+                    )
+                )
+                _flow_defs = _fdt.get("records", [])
+            except Exception as _ex2:
+                _auto_errors.append(f"FlowDefinition fallback also failed: {_ex2}")
+
         _all_field_names = df["API Name"].tolist()
-        _auto_status.caption(f"Scanning {len(_flow_records)} active flows for field references…")
-        for _fv in _flow_records:
-            _flabel    = _fv.get("Label", "Unknown Flow")
-            _meta_text = _json.dumps(_fv.get("Metadata") or {})
-            for _fname in _all_field_names:
-                # Search for field name as a quoted JSON string value to reduce false positives
-                if f'"{_fname}"' in _meta_text:
-                    _e = _auto_map.setdefault(_fname, {"types": set(), "names": []})
-                    _e["types"].add("Flow")
-                    _tag = f"Flow: {_flabel}"
-                    if _tag not in _e["names"]:
-                        _e["names"].append(_tag)
+        _flow_cap = min(len(_flow_defs), 300)
+        _flow_prog = st.progress(0, text=f"Scanning flows 0 / {_flow_cap}…")
 
+        for _fi, _fd in enumerate(_flow_defs[:_flow_cap]):
+            _vid    = _fd.get("ActiveVersionId")
+            _flabel = _fd.get("Label", "Unknown Flow")
+            if not _vid:
+                continue
+            try:
+                _vdata     = sf.restful(f"tooling/sobjects/FlowVersion/{_vid}")
+                _meta_text = _json.dumps(_vdata.get("Metadata") or {})
+                for _fname in _all_field_names:
+                    # Match "FieldName" as an exact JSON string, or .FieldName" for
+                    # object-dot-field references like "$Record.FieldName__c"
+                    if (f'"{_fname}"' in _meta_text
+                            or f'.{_fname}"' in _meta_text
+                            or f'.{_fname}.' in _meta_text):
+                        _ent = _auto_map.setdefault(_fname, {"types": set(), "names": []})
+                        _ent["types"].add("Flow")
+                        _tag = f"Flow: {_flabel}"
+                        if _tag not in _ent["names"]:
+                            _ent["names"].append(_tag)
+            except Exception as _ex:
+                _auto_errors.append(
+                    f"FlowVersion fetch failed for '{_flabel}' ({_vid}): "
+                    f"{str(_ex)[:120]}"
+                )
+            _flow_prog.progress(
+                (_fi + 1) / _flow_cap,
+                text=f"Scanning flows {_fi + 1} / {_flow_cap}…",
+            )
+
+        _flow_prog.empty()
         _auto_status.empty()
 
-        # ── Update Source column and Automation column ─────────────────────────
+        # ── Surface any non-fatal errors ──────────────────────────────────────
+        if _auto_errors:
+            with st.expander(
+                f"⚠️ {len(_auto_errors)} warning(s) during automation scan — click to view"
+            ):
+                for _err in _auto_errors[:30]:
+                    st.caption(_err)
+
+        # ── Update Source and Automation columns ──────────────────────────────
         _auto_df = df.copy()
         for _fname, _info in _auto_map.items():
             _idx = _auto_df.index[_auto_df["API Name"] == _fname].tolist()
             if not _idx:
                 continue
-            _i = _idx[0]
+            _i     = _idx[0]
             _types = _info["types"]
             if "Workflow Rule" in _types and "Flow" in _types:
                 _new_src = "Workflow + Flow"
@@ -19455,11 +19517,8 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                 _new_src = "Workflow Rule"
             else:
                 _new_src = "Flow"
-            # Only overwrite Source if the current value is Editable/Integration
-            # (don't overwrite Formula / System / Auto-number)
             if _auto_df.at[_i, "Source"] in ("Editable", "Integration"):
                 _auto_df.at[_i, "Source"] = _new_src
-            # Cap names list to 5 to keep the cell readable
             _auto_df.at[_i, "Automation"] = "; ".join(_info["names"][:5])
 
         st.session_state["_oe_df"]       = _auto_df
@@ -19470,8 +19529,9 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         flow_count = sum(1 for v in _auto_map.values() if "Flow"          in v["types"])
         st.success(
             f"Automation scan complete — "
-            f"**{wf_count}** fields touched by Workflow Rules, "
-            f"**{flow_count}** fields referenced in active Flows."
+            f"**{wf_count}** field(s) touched by Workflow Rules, "
+            f"**{flow_count}** field(s) referenced in active Flows "
+            f"(scanned {_flow_cap} flows)."
         )
 
     # ── Apply field search and view mode ──────────────────────────────────────
