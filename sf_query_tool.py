@@ -19142,8 +19142,8 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         st.session_state["_oe_prev_where"] = pop_where
         st.session_state.pop("_oe_rates", None)
 
-    # ── Action buttons ────────────────────────────────────────────────────────
-    col_load, col_calc, col_activity, col_ref = st.columns([1, 2, 2, 1])
+    # ── Action buttons (row 1: primary) ───────────────────────────────────────
+    col_load, col_calc, col_ref = st.columns([1, 2, 1])
     with col_load:
         load_clicked = st.button("🔍 Load Fields", key="oe_load_btn")
     with col_calc:
@@ -19152,12 +19152,6 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             key="oe_calc_btn",
             help="Runs batched COUNT queries scoped to the filter above.",
         )
-    with col_activity:
-        activity_clicked = st.button(
-            "📅 Fetch Last Activity",
-            key="oe_activity_btn",
-            help="For each populated field, finds the most recent record modification date. Run after Calculate Population Rates.",
-        )
     with col_ref:
         if st.button("↺ Refresh", key="oe_refresh_btn",
                      help="Clear all cached data and reload from Salesforce."):
@@ -19165,6 +19159,23 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                 if _k.startswith("_oe_"):
                     del st.session_state[_k]
             st.rerun()
+
+    # ── Action buttons (row 2: analysis) ──────────────────────────────────────
+    col_activity, col_auto = st.columns(2)
+    with col_activity:
+        activity_clicked = st.button(
+            "📅 Fetch Last Activity",
+            key="oe_activity_btn",
+            use_container_width=True,
+            help="For each populated field, finds the most recent record modification date. Run after Calculate Population Rates.",
+        )
+    with col_auto:
+        automation_clicked = st.button(
+            "⚡ Analyze Automations",
+            key="oe_auto_btn",
+            use_container_width=True,
+            help="Scans Workflow Rules and active Flows to detect which fields are touched by automation.",
+        )
 
     # ── Load fields ───────────────────────────────────────────────────────────
     if load_clicked:
@@ -19206,12 +19217,14 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         _new_df = pd.DataFrame(rows)
         _new_df["PopCount"]     = None   # filled in when rates are calculated
         _new_df["LastActivity"] = None   # filled in when last activity is fetched
+        _new_df["Automation"]   = None   # filled in when automation analysis runs
         st.session_state["_oe_df"]     = _new_df
         st.session_state["_oe_object"] = selected_object
         st.session_state.pop("_oe_rates",        None)
         st.session_state.pop("_oe_counts",       None)
         st.session_state.pop("_oe_total",        None)
         st.session_state.pop("_oe_last_activity", None)
+        st.session_state.pop("_oe_auto_map",      None)
         st.success(f"✅ Loaded {len(_new_df):,} fields on **{selected_object}**.")
 
     # ── Retrieve stored field data ────────────────────────────────────────────
@@ -19350,6 +19363,117 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             st.session_state["_oe_last_activity"] = _la_map
             df = _la_df
 
+    # ── Analyze automations ───────────────────────────────────────────────────
+    if automation_clicked:
+        from urllib.parse import quote as _url_quote
+        import json as _json
+
+        _auto_status = st.empty()
+        _auto_status.caption("Querying Workflow Rules…")
+
+        # field → {"types": set, "names": list[str]}
+        _auto_map: dict = {}
+
+        # ── 1. Workflow Field Updates ──────────────────────────────────────────
+        try:
+            _wfu = sf.restful(
+                "tooling/query?q=" + _url_quote(
+                    f"SELECT Field, WorkflowRule.Name "
+                    f"FROM WorkflowFieldUpdate "
+                    f"WHERE SobjectType = '{stored_object}'"
+                )
+            )
+            for _rec in _wfu.get("records", []):
+                _fname  = _rec.get("Field") or ""
+                _rname  = (_rec.get("WorkflowRule") or {}).get("Name", "Unknown Rule")
+                if _fname:
+                    _e = _auto_map.setdefault(_fname, {"types": set(), "names": []})
+                    _e["types"].add("Workflow Rule")
+                    _e["names"].append(f"WF: {_rname}")
+        except Exception:
+            pass
+
+        # ── 2. Active Flow metadata ────────────────────────────────────────────
+        _auto_status.caption("Fetching active Flow metadata…")
+        _flow_records = []
+        try:
+            # Try batch Tooling SOQL first (Metadata is a compound field on FlowVersion)
+            _fv_res = sf.restful(
+                "tooling/query?q=" + _url_quote(
+                    "SELECT Label, Metadata FROM FlowVersion WHERE Status = 'Active'"
+                )
+            )
+            _flow_records = _fv_res.get("records", [])
+        except Exception:
+            # Fallback: get IDs then fetch individually
+            try:
+                _fv_ids = sf.restful(
+                    "tooling/query?q=" + _url_quote(
+                        "SELECT Id, Label FROM FlowVersion WHERE Status = 'Active'"
+                    )
+                ).get("records", [])
+                for _fv in _fv_ids:
+                    try:
+                        _detail = sf.restful(f"tooling/sobjects/FlowVersion/{_fv['Id']}")
+                        _flow_records.append({
+                            "Label":    _fv["Label"],
+                            "Metadata": _detail.get("Metadata"),
+                        })
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # Search each flow's metadata JSON for field API names
+        _all_field_names = df["API Name"].tolist()
+        _auto_status.caption(f"Scanning {len(_flow_records)} active flows for field references…")
+        for _fv in _flow_records:
+            _flabel    = _fv.get("Label", "Unknown Flow")
+            _meta_text = _json.dumps(_fv.get("Metadata") or {})
+            for _fname in _all_field_names:
+                # Search for field name as a quoted JSON string value to reduce false positives
+                if f'"{_fname}"' in _meta_text:
+                    _e = _auto_map.setdefault(_fname, {"types": set(), "names": []})
+                    _e["types"].add("Flow")
+                    _tag = f"Flow: {_flabel}"
+                    if _tag not in _e["names"]:
+                        _e["names"].append(_tag)
+
+        _auto_status.empty()
+
+        # ── Update Source column and Automation column ─────────────────────────
+        _auto_df = df.copy()
+        for _fname, _info in _auto_map.items():
+            _idx = _auto_df.index[_auto_df["API Name"] == _fname].tolist()
+            if not _idx:
+                continue
+            _i = _idx[0]
+            _types = _info["types"]
+            if "Workflow Rule" in _types and "Flow" in _types:
+                _new_src = "Workflow + Flow"
+            elif "Workflow Rule" in _types:
+                _new_src = "Workflow Rule"
+            else:
+                _new_src = "Flow"
+            # Only overwrite Source if the current value is Editable/Integration
+            # (don't overwrite Formula / System / Auto-number)
+            if _auto_df.at[_i, "Source"] in ("Editable", "Integration"):
+                _auto_df.at[_i, "Source"] = _new_src
+            # Cap names list to 5 to keep the cell readable
+            _auto_df.at[_i, "Automation"] = "; ".join(_info["names"][:5])
+
+        st.session_state["_oe_df"]       = _auto_df
+        st.session_state["_oe_auto_map"] = _auto_map
+        df = _auto_df
+
+        wf_count   = sum(1 for v in _auto_map.values() if "Workflow Rule" in v["types"])
+        flow_count = sum(1 for v in _auto_map.values() if "Flow"          in v["types"])
+        st.success(
+            f"Automation scan complete — "
+            f"**{wf_count}** fields touched by Workflow Rules, "
+            f"**{flow_count}** fields referenced in active Flows."
+        )
+
     # ── Apply field search and view mode ──────────────────────────────────────
     view = df.copy()
     if field_search:
@@ -19376,10 +19500,13 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     _has_counts   = "PopCount"     in view.columns and view["PopCount"].notna().any()
     _has_activity = "LastActivity" in view.columns and view["LastActivity"].notna().any()
     _has_source   = "Source"       in view.columns
+    _has_auto     = "Automation"   in view.columns and view["Automation"].notna().any()
 
     _display_cols = ["Label", "API Name", "Type", "Owner"]
     if _has_source:
         _display_cols += ["Source"]
+    if _has_auto:
+        _display_cols += ["Automation"]
     if _has_counts:
         _display_cols += ["PopCount", "PopRate"]
     else:
@@ -19413,7 +19540,12 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     if _has_source:
         _col_config["Source"] = st.column_config.TextColumn(
             "Source",
-            help="Formula = calculated field  |  Integration = populated by an external tool  |  Editable = set manually or by automation",
+            help="Formula / Auto-number / System / Integration / Workflow Rule / Flow / Workflow + Flow / Editable",
+        )
+    if _has_auto:
+        _col_config["Automation"] = st.column_config.TextColumn(
+            "Automation",
+            help="Workflow Rules and/or Flows that reference this field (writes, reads, or conditions)",
         )
 
     col_m1, col_m2, col_m3 = st.columns(3)
