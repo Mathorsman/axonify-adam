@@ -21473,6 +21473,7 @@ dirty_data_rules:
   flag_all_caps_names bool       Flag two-word all-caps full names
   flag_missing_last_name bool    Flag contacts with no Last Name
   flag_no_contact_info bool      Flag contacts with no email and no phone of any kind
+  flag_no_email        bool      Flag contacts with no email address (regardless of phone)
 """
 
 _BUCKET_DESCRIPTIONS = {
@@ -21484,6 +21485,7 @@ _BUCKET_DESCRIPTIONS = {
     "06_no_email_no_phone":      "No Email, no Phone, and no Mobile Phone",
     "07_orphaned_no_account":    "No Account AND no email/phone (completely floating records)",
     "08_uncontactable_no_title": "No email/phone AND no Title or Job Level populated",
+    "09_no_email":               "No Email address (may still have a phone number)",
 }
 
 _STALE_BAND_LABELS = {
@@ -21509,7 +21511,7 @@ def _load_purge_rules() -> dict:
     _REQUIRED_DIRTY_KEYS = {
         "junk_name_keywords", "short_name_max_chars",
         "flag_numeric_names", "flag_all_caps_names",
-        "flag_missing_last_name", "flag_no_contact_info",
+        "flag_missing_last_name", "flag_no_contact_info", "flag_no_email",
     }
 
     def _validate(rules: dict) -> list[str]:
@@ -21580,6 +21582,7 @@ def _load_purge_rules() -> dict:
             "flag_all_caps_names": True,
             "flag_missing_last_name": True,
             "flag_no_contact_info": True,
+            "flag_no_email": True,
         },
     }
 
@@ -21884,6 +21887,7 @@ def _purge_classify_dirty(
     flag_caps        = d["flag_all_caps_names"]
     flag_no_last     = d["flag_missing_last_name"]
     flag_no_contact  = d["flag_no_contact_info"]
+    flag_no_email    = d.get("flag_no_email", True)
 
     _pat_numeric = _re.compile(r"^\d+$")
     _pat_short   = _re.compile(rf"^.{{1,{short_max}}}$")
@@ -21966,6 +21970,10 @@ def _purge_classify_dirty(
             and not str(row.get(_CUSTOM_FIELD_JOB_LEVEL, "")).strip()
         ):
             buckets["08_uncontactable_no_title"].append(row)
+
+        if flag_no_email and not str(row.get("Email", "")).strip():
+            flags.append("NO_EMAIL")
+            buckets["09_no_email"].append(row)
 
         if flags:
             flagged_ids.add(cid)
@@ -22110,7 +22118,7 @@ def _diff_rules_plain_english(old: dict, new: dict) -> list[str]:
         if removed:
             changes.append(f"Removing from {label}: {', '.join(sorted(removed))}")
 
-    bool_keys = ["flag_numeric_names", "flag_all_caps_names", "flag_missing_last_name", "flag_no_contact_info"]
+    bool_keys = ["flag_numeric_names", "flag_all_caps_names", "flag_missing_last_name", "flag_no_contact_info", "flag_no_email"]
     for k in bool_keys:
         ov, nv = od.get(k), nd.get(k)
         if ov != nv:
@@ -22145,6 +22153,7 @@ def _rules_readable_summary(rules: dict) -> str:
         f"- Flag all-caps names: {'Yes' if d.get('flag_all_caps_names') else 'No'}",
         f"- Flag missing last name: {'Yes' if d.get('flag_missing_last_name') else 'No'}",
         f"- Flag no contact info: {'Yes' if d.get('flag_no_contact_info') else 'No'}",
+        f"- Flag no email address: {'Yes' if d.get('flag_no_email', True) else 'No'}",
     ]
     return "\n".join(lines)
 
