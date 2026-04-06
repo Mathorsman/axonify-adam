@@ -21511,7 +21511,7 @@ def _load_purge_rules() -> dict:
     _REQUIRED_DIRTY_KEYS = {
         "junk_name_keywords", "short_name_max_chars",
         "flag_numeric_names", "flag_all_caps_names",
-        "flag_missing_last_name", "flag_no_contact_info", "flag_no_email",
+        "flag_missing_last_name", "flag_no_contact_info",
     }
 
     def _validate(rules: dict) -> list[str]:
