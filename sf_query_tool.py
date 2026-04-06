@@ -3489,13 +3489,14 @@ def find_duplicate_candidates(
                 )
 
                 # City boost: same non-empty BillingCity
-                city_a = (a.get("BillingCity") or "").strip()
-                city_b = (b.get("BillingCity") or "").strip()
+                # Use str() cast to guard against pandas NaN values (float) from null SF fields
+                city_a = ("" if pd.isna(a.get("BillingCity")) else str(a.get("BillingCity"))).strip()
+                city_b = ("" if pd.isna(b.get("BillingCity")) else str(b.get("BillingCity"))).strip()
                 city_match = bool(city_a and city_b and city_a.lower() == city_b.lower())
 
                 # Country conflict penalty: both non-empty but different
-                country_a = (a.get("BillingCountry") or "").strip()
-                country_b = (b.get("BillingCountry") or "").strip()
+                country_a = ("" if pd.isna(a.get("BillingCountry")) else str(a.get("BillingCountry"))).strip()
+                country_b = ("" if pd.isna(b.get("BillingCountry")) else str(b.get("BillingCountry"))).strip()
                 country_conflict = bool(
                     country_a and country_b and country_a.lower() != country_b.lower()
                 )
