@@ -6435,12 +6435,14 @@ def render_contact_dedupe_tab(auto_backup: bool, dry_run_mode: bool):
         with st.spinner("Fetching all Contacts and running fuzzy matching — this may take 30–90 seconds for large orgs..."):
             try:
                 df_contacts = fetch_contacts_for_dedupe(sf.sf_instance)
-                st.session_state.contact_dedupe_candidates = find_contact_duplicate_candidates(
+                contact_count = len(df_contacts)
+                pairs = find_contact_duplicate_candidates(
                     df_contacts,
                     name_threshold=threshold,
                     same_account_boost=same_account_boost,
                     email_boost=email_boost,
                 )
+                st.session_state.contact_dedupe_candidates = pairs
                 st.session_state.contact_dedupe_review_idx = 0
                 st.session_state.contact_dedupe_dismissed  = set()
                 st.session_state.pop("contact_bulk_include_states", None)
@@ -6449,9 +6451,10 @@ def render_contact_dedupe_tab(auto_backup: bool, dry_run_mode: bool):
                     "same_account_boost": same_account_boost,
                     "email_boost":        email_boost,
                 }
+                st.session_state["contact_dedupe_last_contact_count"] = contact_count
                 st.rerun()
-            except RuntimeError as e:
-                st.error(str(e))
+            except Exception as e:
+                st.error(f"Scan failed: {e}")
                 return
 
     if candidates is None:
@@ -6480,7 +6483,14 @@ def render_contact_dedupe_tab(auto_backup: bool, dry_run_mode: bool):
         if total_merged > 0 or total_skipped > 0:
             st.success("✅ All duplicate pairs have been reviewed. Re-scan to check for new duplicates.")
         else:
-            st.success("✅ No duplicate pairs found above the current threshold. Try lowering the match score.")
+            _scanned_count = st.session_state.get("contact_dedupe_last_contact_count", 0)
+            _last_params = st.session_state.get("contact_dedupe_last_scan_params", {})
+            _used_threshold = _last_params.get("name_threshold", threshold)
+            st.warning(
+                f"No duplicate pairs detected after scanning **{_scanned_count:,} contacts** "
+                f"(match threshold: **{_used_threshold}%**). "
+                "If you expected to find duplicates, try lowering the **Minimum match score** in Scan Settings and scanning again."
+            )
         return
 
     st.markdown("---")
@@ -22784,6 +22794,7 @@ def main():
         "contact_dedupe_dismissed":   set(),
         "contact_dedupe_merged":      set(),
         "contact_dedupe_case_ids":    None,
+        "contact_dedupe_last_contact_count": 0,
         # Reassignment Wizard state
         "rz_step":             1,
         "rz_territory":        "",
