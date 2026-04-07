@@ -5266,7 +5266,8 @@ def find_contact_duplicate_candidates(
     for r in records:
         full_name = str(r.get("Name", "") or "")
         r["_norm_name"]  = _normalise_name(full_name)
-        r["_norm_email"] = str(r.get("Email", "") or "").strip().lower()
+        raw_email = r.get("Email")
+        r["_norm_email"] = "" if pd.isna(raw_email) else str(raw_email).strip().lower()
         # Blocking key: first word of last name (normalised)
         last = _normalise_name(str(r.get("LastName", "") or ""))
         r["_block_key"]  = last.split()[0] if last.split() else BLANK_BLOCK_KEY
