@@ -5305,8 +5305,10 @@ def find_contact_duplicate_candidates(
             signals.append(boost_label)
 
         # Add phone signal if both have the same phone
-        phone_a = re.sub(r"\D", "", str(a.get("Phone", "") or ""))
-        phone_b = re.sub(r"\D", "", str(b.get("Phone", "") or ""))
+        raw_pa = a.get("Phone")
+        raw_pb = b.get("Phone")
+        phone_a = re.sub(r"\D", "", str(raw_pa)) if not pd.isna(raw_pa) else ""
+        phone_b = re.sub(r"\D", "", str(raw_pb)) if not pd.isna(raw_pb) else ""
         if phone_a and phone_b and phone_a == phone_b:
             total_boost += 10
             signals.append("Same phone number")
