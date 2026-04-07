@@ -5271,6 +5271,8 @@ def find_contact_duplicate_candidates(
         # Blocking key: first word of last name (normalised)
         last = _normalise_name(str(r.get("LastName", "") or ""))
         r["_block_key"]  = last.split()[0] if last.split() else BLANK_BLOCK_KEY
+        # Normalised first name for first-name gate (see Step 2)
+        r["_norm_first"] = _normalise_name(str(r.get("FirstName", "") or ""))
 
     # ── Build blocks: same first-word-of-last-name ────────────────────────────
     from collections import defaultdict
@@ -5366,6 +5368,16 @@ def find_contact_duplicate_candidates(
                 name_score = fuzz.token_sort_ratio(a["_norm_name"], b["_norm_name"])
                 if name_score < name_threshold:
                     continue  # not similar enough — skip before building boosts
+
+                # First-name gate: if both records have a first name and they are
+                # clearly different (fuzz.ratio < 65%), skip the pair.
+                # token_sort_ratio is dominated by a shared last name, so without
+                # this check "Ian Phillips" and "Arianne Phillips" score ~86%.
+                # Email-exact pairs (Step 1) bypass this gate entirely.
+                first_a = a["_norm_first"]
+                first_b = b["_norm_first"]
+                if first_a and first_b and fuzz.ratio(first_a, first_b) < 65:
+                    continue
 
                 boosts = []
                 if a["_norm_email"] and b["_norm_email"] and a["_norm_email"] == b["_norm_email"]:
