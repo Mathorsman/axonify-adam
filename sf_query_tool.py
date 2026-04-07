@@ -5174,11 +5174,16 @@ CONTACT_READ_ONLY_FIELDS = {
 # Child objects to re-parent when merging Contacts.
 # Each tuple is (SObject API name, field that holds the Contact FK).
 CONTACT_CHILD_OBJECTS = [
-    ("Task",              "WhoId"),
-    ("Event",             "WhoId"),
-    ("CampaignMember",    "ContactId"),
-    ("Case",              "ContactId"),
-    ("EmailMessage",      "RelatedToId"),  # may not exist in all orgs
+    ("Task",                    "WhoId"),
+    ("Event",                   "WhoId"),
+    ("CampaignMember",          "ContactId"),
+    ("Case",                    "ContactId"),
+    ("EmailMessage",            "RelatedToId"),  # may not exist in all orgs
+    # OpportunityContactRole is NOT re-parented via the generic engine because
+    # of the ContactId+OpportunityId uniqueness constraint.  It is handled
+    # separately in execute_contact_merge() with conflict resolution.
+    # Listed here so the child-count display shows opportunity exposure.
+    ("OpportunityContactRole",  "ContactId"),
 ]
 
 
@@ -5400,8 +5405,85 @@ def execute_contact_merge(
     duplicate_id: str,
     dry_run: bool = True,
 ) -> dict:
-    """Merges duplicate Contact into master. Delegates to the generic engine."""
-    return _execute_generic_merge(sf, "Contact", CONTACT_CHILD_OBJECTS, master_id, duplicate_id, dry_run)
+    """
+    Merges duplicate Contact into master.
+
+    Re-parents all standard child objects via the generic engine, then handles
+    OpportunityContactRole separately because of the ContactId+OpportunityId
+    uniqueness constraint: if the master is already a contact role on the same
+    opportunity, the duplicate's OCR is deleted rather than re-parented to
+    avoid a constraint violation.
+    """
+    # Exclude OCR from the generic engine — handled below
+    standard_children = [c for c in CONTACT_CHILD_OBJECTS
+                         if c[0] != "OpportunityContactRole"]
+    result = _execute_generic_merge(sf, "Contact", standard_children,
+                                    master_id, duplicate_id, dry_run)
+
+    # ── OpportunityContactRole re-parenting with conflict resolution ──────────
+    try:
+        # Fetch OCRs on the duplicate
+        ocr_result = sf.query(
+            f"SELECT Id, OpportunityId FROM OpportunityContactRole "
+            f"WHERE ContactId = '{duplicate_id}' AND IsDeleted = false LIMIT 2000"
+        )
+        dup_ocrs = ocr_result.get("records", [])
+
+        if dup_ocrs:
+            dup_opp_ids = [r["OpportunityId"] for r in dup_ocrs]
+
+            # Fetch which of those opportunities the master is already on
+            id_list = ", ".join(f"'{oid}'" for oid in dup_opp_ids)
+            master_result = sf.query(
+                f"SELECT OpportunityId FROM OpportunityContactRole "
+                f"WHERE ContactId = '{master_id}' "
+                f"AND OpportunityId IN ({id_list}) AND IsDeleted = false"
+            )
+            master_opp_ids = {r["OpportunityId"]
+                              for r in master_result.get("records", [])}
+
+            to_reparent = [r for r in dup_ocrs
+                           if r["OpportunityId"] not in master_opp_ids]
+            to_delete   = [r for r in dup_ocrs
+                           if r["OpportunityId"] in master_opp_ids]
+
+            ocr_moved   = 0
+            ocr_deleted = 0
+
+            if not dry_run:
+                if to_reparent:
+                    payload = [{"Id": r["Id"], "ContactId": master_id}
+                               for r in to_reparent]
+                    res = sf.bulk.OpportunityContactRole.update(payload)
+                    failed = [r for r in res if not r.get("success")]
+                    if failed:
+                        result["errors"].append(
+                            f"OpportunityContactRole: {len(failed)} re-parent failures"
+                        )
+                    else:
+                        ocr_moved = len(to_reparent)
+
+                for r in to_delete:
+                    try:
+                        sf.OpportunityContactRole.delete(r["Id"])
+                        ocr_deleted += 1
+                    except Exception as e:
+                        result["errors"].append(
+                            f"OpportunityContactRole delete {r['Id']}: {e}"
+                        )
+            else:
+                ocr_moved   = len(to_reparent)
+                ocr_deleted = len(to_delete)
+
+            if ocr_moved:
+                result["children_moved"]["OpportunityContactRole"] = ocr_moved
+            if ocr_deleted:
+                result["children_moved"]["OpportunityContactRole (conflict-deleted)"] = ocr_deleted
+
+    except Exception as e:
+        result["errors"].append(f"OpportunityContactRole: {e}")
+
+    return result
 
 
 def get_contact_ai_recommendation(
@@ -5726,16 +5808,49 @@ def fetch_open_case_contact_ids(contact_ids: list[str]) -> set[str]:
     return affected
 
 
+def fetch_opp_contact_ids(contact_ids: list[str]) -> set[str]:
+    """
+    Given a list of Contact IDs, returns the subset that appear in at least
+    one OpportunityContactRole record (i.e. are linked to any Opportunity).
+
+    Contacts with opportunity associations require manual review before merging
+    to ensure OCR records are handled correctly.
+    """
+    if not contact_ids:
+        return set()
+
+    sf = get_sf_connection()
+    affected = set()
+
+    for i in range(0, len(contact_ids), 200):
+        chunk   = contact_ids[i : i + 200]
+        id_list = ", ".join(f"'{cid}'" for cid in chunk)
+        try:
+            result = sf.query_all(
+                f"SELECT ContactId FROM OpportunityContactRole "
+                f"WHERE ContactId IN ({id_list}) AND IsDeleted = false"
+            )
+            for r in result.get("records", []):
+                if r.get("ContactId"):
+                    affected.add(r["ContactId"])
+        except Exception:
+            pass  # fail safe — don't block bulk review if query fails
+
+    return affected
+
+
 def _bulk_triage_contact_pairs(
     active_pairs: list[dict],
     open_case_contact_ids: set[str],
+    opp_contact_ids: set[str],
 ) -> tuple[list[dict], list[dict]]:
     """
     Splits Contact pairs into bulk_eligible vs manual_only.
 
     A pair goes to manual_only if ANY of these are true:
-      1. score < 90                       — not confident enough to auto-merge
-      2. Either contact has an open Case  — live support activity risk
+      1. score < 90                            — not confident enough to auto-merge
+      2. Either contact has an open Case       — live support activity risk
+      3. Either contact is on an Opportunity   — OCR re-parenting requires review
 
     Unlike Account triage, there is no holding-account classification.
 
@@ -5774,6 +5889,14 @@ def _bulk_triage_contact_pairs(
             reasons.append(
                 f"'{p['rec_b'].get('FirstName','')} {p['rec_b'].get('LastName','')}' has open Cases"
             )
+        if id_a in opp_contact_ids:
+            reasons.append(
+                f"'{p['rec_a'].get('FirstName','')} {p['rec_a'].get('LastName','')}' is linked to one or more Opportunities"
+            )
+        if id_b in opp_contact_ids:
+            reasons.append(
+                f"'{p['rec_b'].get('FirstName','')} {p['rec_b'].get('LastName','')}' is linked to one or more Opportunities"
+            )
 
         if reasons:
             manual_only.append({**p, "_manual_reasons": reasons})
@@ -5803,38 +5926,47 @@ def render_contact_bulk_review_panel(
     st.caption(
         "Pairs are triaged automatically. To reach **Bulk Eligible**, a pair must: "
         "(1) score ≥90%, (2) have at least one corroborating signal beyond name similarity "
-        "(matching email, same account, or same phone), and (3) have no open Cases on either contact. "
+        "(matching email, same account, or same phone), (3) have no open Cases on either contact, "
+        "and (4) neither contact is linked to an Opportunity. "
         "Everything else goes to **Manual Review** below."
     )
 
-    # ── Step 1: Open Case check ───────────────────────────────────────────────
+    # ── Step 1: Open Case + Opportunity checks ────────────────────────────────
     CASE_CACHE_KEY = "contact_bulk_open_case_ids"
+    OPP_CACHE_KEY  = "contact_bulk_opp_ids"
+
+    all_ids = list({
+        cid
+        for p in active_pairs
+        for cid in [p["rec_a"].get("Id",""), p["rec_b"].get("Id","")]
+        if cid
+    })
 
     if CASE_CACHE_KEY not in st.session_state:
-        all_ids = list({
-            cid
-            for p in active_pairs
-            for cid in [p["rec_a"].get("Id",""), p["rec_b"].get("Id","")]
-            if cid
-        })
         with st.spinner(f"Checking {len(all_ids)} contacts for open Cases..."):
             st.session_state[CASE_CACHE_KEY] = fetch_open_case_contact_ids(all_ids)
 
-    open_case_ids = st.session_state[CASE_CACHE_KEY]
+    if OPP_CACHE_KEY not in st.session_state:
+        with st.spinner(f"Checking {len(all_ids)} contacts for Opportunity associations..."):
+            st.session_state[OPP_CACHE_KEY] = fetch_opp_contact_ids(all_ids)
 
-    if st.button("↻  Re-check Cases", key="contact_bulk_case_recheck"):
-        del st.session_state[CASE_CACHE_KEY]
+    open_case_ids = st.session_state[CASE_CACHE_KEY]
+    opp_ids       = st.session_state[OPP_CACHE_KEY]
+
+    if st.button("↻  Re-check Cases & Opportunities", key="contact_bulk_case_recheck"):
+        st.session_state.pop(CASE_CACHE_KEY, None)
+        st.session_state.pop(OPP_CACHE_KEY, None)
         st.rerun()
 
     # ── Step 2: Triage ────────────────────────────────────────────────────────
-    bulk_eligible, manual_only = _bulk_triage_contact_pairs(active_pairs, open_case_ids)
+    bulk_eligible, manual_only = _bulk_triage_contact_pairs(active_pairs, open_case_ids, opp_ids)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Active Pairs",  len(active_pairs))
     c2.metric("Bulk Eligible",       len(bulk_eligible),
-              help="Score ≥90%, no open Cases")
+              help="Score ≥90%, corroborating signal present, no open Cases, not on any Opportunity")
     c3.metric("Manual Review Only",  len(manual_only),
-              help="Below 90% score or contact has open Cases")
+              help="Below 90% score, name-only match, has open Cases, or linked to an Opportunity")
 
     st.markdown("---")
 
@@ -5994,6 +6126,7 @@ def render_contact_bulk_review_panel(
             to_dismiss = set(selected["pair_key"].tolist())
             st.session_state.contact_dedupe_dismissed.update(to_dismiss)
             st.session_state.pop(CASE_CACHE_KEY, None)
+            st.session_state.pop(OPP_CACHE_KEY, None)
             st.success(f"✅ {len(to_dismiss)} pair(s) dismissed.")
             st.rerun()
 
@@ -6114,6 +6247,7 @@ def render_contact_bulk_review_panel(
                             st.warning(f"Re-scan failed ({e}) — click Scan to refresh manually.")
 
                 st.session_state.pop(CASE_CACHE_KEY, None)
+                st.session_state.pop(OPP_CACHE_KEY, None)
                 st.rerun()
 
     # ── Step 4: Manual-only pairs ─────────────────────────────────────────────
@@ -6788,6 +6922,23 @@ def render_contact_dedupe_tab(auto_backup: bool, dry_run_mode: bool):
             st.dataframe(pd.DataFrame(child_rows), width="stretch", hide_index=True)
         else:
             st.info("No child records found on the duplicate — safe to delete.")
+
+        # ── Opportunity warning ───────────────────────────────────────────────
+        dupl_rec = rec_b if master_choice == "A" else rec_a
+        dupl_ocr_count = (children_b if master_choice == "A" else children_a).get(
+            "OpportunityContactRole", 0
+        )
+        if dupl_ocr_count:
+            dupl_name = (
+                f"{dupl_rec.get('FirstName','')} {dupl_rec.get('LastName','')}".strip()
+                or "the duplicate"
+            )
+            st.warning(
+                f"**{dupl_name}** is linked to **{dupl_ocr_count} Opportunity Contact Role(s)**. "
+                "These will be re-parented to the master record where possible; "
+                "any that conflict (master already on the same Opportunity) will be deleted. "
+                "Verify the Opportunity associations are correct after merging."
+            )
 
         # ── Action Buttons ────────────────────────────────────────────────────
         st.markdown("---")
