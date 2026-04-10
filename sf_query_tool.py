@@ -1394,6 +1394,27 @@ Currently supported Python strategies:
    - extra_fields: list of Account field API names the user wants beyond the default hierarchy
      columns. Parse these from the request. If none specified, leave as empty list.
 
+   IMPORTANT: At least one of seed_names or seed_ids must be non-empty. If the user's request
+   does not specify any seed accounts, ask them to clarify — return an empty soql with an
+   explanation. Do NOT return this strategy with empty seeds.
+
+2. "owner_pure_hierarchy" — Use when the user asks for accounts that:
+   - Are owned by a specific person/queue AND are not part of a hierarchy that includes accounts
+     owned by anyone else (i.e. "pure" or "uncontaminated" hierarchies)
+   - Example: "show Prospect accounts owned by Axonify where no other account in the hierarchy
+     is owned by someone else"
+
+   This cannot be done in SOQL because it requires walking the full hierarchy of every matching
+   account to check ownership of ALL members, which is not expressible in a single query.
+
+   Params:
+   - account_type (str): The Account Type value to filter on (e.g. "Prospect", "Customer").
+     Leave as empty string if the user did not specify a type.
+   - owner_name (str): The owner name (user or queue) to filter by, as a case-insensitive
+     substring match against Owner.Name (e.g. "Axonify", "John Smith"). Leave as empty string
+     if not specified. At least one of account_type or owner_name must be non-empty.
+   - extra_fields (list[str]): Additional Account field API names to include. Empty list if none.
+
 When returning a Python strategy, use this JSON shape:
 {
   "strategy": "python",
@@ -1402,11 +1423,7 @@ When returning a Python strategy, use this JSON shape:
   "explanation": "Why this needs Python instead of SOQL.",
   "safety_notes": [],
   "detected_object": "Account"
-}
-
-At least one of seed_names or seed_ids must be non-empty. If the user's request does not specify
-any seed accounts, ask them to clarify — return an empty soql with an explanation asking them to
-name the accounts or provide IDs. Do NOT return a Python strategy with empty seeds."""
+}"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2898,8 +2915,202 @@ def run_account_hierarchy(params: dict, status_cb=None) -> "pd.DataFrame":
     return result_df
 
 
+def run_owner_pure_hierarchy(params: dict, status_cb=None) -> "pd.DataFrame":
+    """
+    Returns accounts of a given Type that are owned by a specified owner AND whose
+    full hierarchy contains no account owned by anyone else ("pure" hierarchies).
+
+    Strategy:
+      1. Fetch ALL accounts with Id, Name, ParentId, Type, OwnerId, Owner.Name
+      2. Build hierarchy lookup structures (parent→children, id→row)
+      3. Find candidate accounts: match account_type (if given) AND owner_name (if given)
+      4. For each candidate, find its ultimate parent then collect every member of that tree
+      5. Exclude candidates whose tree contains any account with a different OwnerId
+      6. Return the surviving candidates with computed hierarchy columns
+
+    Params:
+        account_type  (str)       : Account Type to filter on (e.g. "Prospect"). Empty = no filter.
+        owner_name    (str)       : Exact or partial Owner Name to match (case-insensitive contains).
+        extra_fields  (list[str]) : Additional Account field API names to include in output.
+    """
+    def _status(msg, style="info"):
+        if status_cb:
+            status_cb(msg, style)
+
+    account_type = (params.get("account_type") or "").strip()
+    owner_name   = (params.get("owner_name")   or "").strip()
+    extra_fields = [f.strip() for f in (params.get("extra_fields") or []) if f.strip()]
+
+    if not account_type and not owner_name:
+        raise ValueError(
+            "owner_pure_hierarchy requires at least one of account_type or owner_name."
+        )
+
+    # ── Step 1: Fetch all accounts ─────────────────────────────────────────
+    _status("Fetching all accounts from Salesforce...")
+    base_fields = ["Id", "Name", "ParentId", "Type", "OwnerId", "Owner.Name"]
+    seen = set(base_fields)
+    all_fields = list(base_fields)
+    for f in extra_fields:
+        if f not in seen:
+            all_fields.append(f)
+            seen.add(f)
+
+    soql = f"SELECT {', '.join(all_fields)} FROM Account"
+    full_df = run_soql(soql)
+
+    if full_df.empty:
+        raise RuntimeError("No accounts found in Salesforce. Cannot traverse hierarchy.")
+
+    _status(f"✓ Loaded {len(full_df):,} accounts", "success")
+
+    # ── Step 2: Build hierarchy lookup structures ──────────────────────────
+    _status("Building hierarchy index...")
+    id_to_row: dict = {}
+    parent_to_children: dict = {}
+    for rec in full_df.to_dict("records"):
+        aid = rec["Id"]
+        id_to_row[aid] = rec
+        pid = rec.get("ParentId")
+        if pid and not pd.isna(pid):
+            parent_to_children.setdefault(pid, []).append(aid)
+
+    def _walk_up(start_id: str) -> tuple:
+        """Walk ParentId to root. Returns (root_id, level, path_str)."""
+        path_ids = [start_id]
+        current = start_id
+        for _ in range(15):
+            row = id_to_row.get(current)
+            if row is None:
+                break
+            pid = row.get("ParentId")
+            if not pid or pd.isna(pid):
+                break
+            path_ids.append(pid)
+            current = pid
+        path_ids.reverse()
+        level = len(path_ids) - 1
+        path_str = " > ".join(
+            id_to_row[p]["Name"] if p in id_to_row else p for p in path_ids
+        )
+        return current, level, path_str
+
+    def _collect_tree(root_id: str) -> set:
+        """BFS down from root to collect all descendant IDs (including root)."""
+        members = {root_id}
+        frontier = {root_id}
+        for _ in range(15):
+            next_f = set()
+            for pid in frontier:
+                next_f.update(parent_to_children.get(pid, []))
+            new = next_f - members
+            if not new:
+                break
+            members |= new
+            frontier = new
+        return members
+
+    # ── Step 3: Find candidate accounts ───────────────────────────────────
+    _status("Filtering candidate accounts...")
+    mask = pd.Series(True, index=full_df.index)
+
+    if account_type:
+        mask &= full_df["Type"].str.strip().str.lower() == account_type.lower()
+
+    owner_col = "Owner.Name" if "Owner.Name" in full_df.columns else None
+    if owner_name and owner_col:
+        mask &= full_df[owner_col].str.contains(owner_name, case=False, na=False)
+    elif owner_name:
+        # Owner.Name may have been flattened differently — try OwnerId lookup by name
+        _status("⚠️ Owner.Name column not found — results may be incomplete", "warning")
+
+    candidates = full_df[mask]
+    if candidates.empty:
+        filters = []
+        if account_type:
+            filters.append(f"Type = '{account_type}'")
+        if owner_name:
+            filters.append(f"Owner containing '{owner_name}'")
+        raise RuntimeError(
+            f"No accounts matched the filter ({' AND '.join(filters)}). "
+            "Check the account type spelling or owner name."
+        )
+
+    _status(f"✓ Found {len(candidates):,} candidate account(s)", "success")
+
+    # ── Step 4: Walk each candidate's full tree and check for contamination ─
+    _status("Checking hierarchies for ownership contamination...")
+
+    # Determine which OwnerId values correspond to owner_name (if given)
+    # so we can do the contamination check by ID (faster, handles display name variants)
+    if owner_name and owner_col:
+        allowed_owner_ids: set | None = set(
+            full_df.loc[
+                full_df[owner_col].str.contains(owner_name, case=False, na=False),
+                "OwnerId",
+            ].dropna()
+        )
+    else:
+        allowed_owner_ids = None  # no owner filter → skip contamination check
+
+    pure_ids: set = set()
+    contaminated_count = 0
+
+    for cand_id in candidates["Id"]:
+        root_id, _, _ = _walk_up(cand_id)
+        tree_ids = _collect_tree(root_id)
+
+        if allowed_owner_ids is not None:
+            # Contaminated if ANY tree member is owned by someone outside allowed set
+            tree_owner_ids = {
+                id_to_row[tid]["OwnerId"]
+                for tid in tree_ids
+                if tid in id_to_row and id_to_row[tid].get("OwnerId")
+            }
+            if tree_owner_ids - allowed_owner_ids:
+                contaminated_count += 1
+                continue  # exclude this candidate
+
+        pure_ids.add(cand_id)
+
+    _status(
+        f"✓ {len(pure_ids):,} pure / {contaminated_count:,} excluded (contaminated hierarchies)",
+        "success",
+    )
+
+    if not pure_ids:
+        raise RuntimeError(
+            "All matching accounts belong to hierarchies that contain accounts "
+            "owned by other owners. No pure results to return."
+        )
+
+    # ── Step 5: Build result DataFrame with hierarchy columns ──────────────
+    _status("Building output...")
+    result_df = full_df[full_df["Id"].isin(pure_ids)].copy()
+
+    meta_list = [_walk_up(aid) for aid in result_df["Id"]]
+    result_df["Ultimate_Parent_Id"] = [m[0] for m in meta_list]
+    result_df["Ultimate_Parent_Name"] = [
+        id_to_row[m[0]]["Name"] if m[0] in id_to_row else m[0] for m in meta_list
+    ]
+    result_df["Hierarchy_Level"] = [m[1] for m in meta_list]
+    result_df["Hierarchy_Path"]  = [m[2] for m in meta_list]
+
+    result_df = result_df.sort_values(
+        ["Ultimate_Parent_Name", "Hierarchy_Level", "Name"],
+        ignore_index=True,
+    )
+
+    _status(
+        f"✓ Returning {len(result_df):,} account(s) with pure hierarchies",
+        "success",
+    )
+    return result_df
+
+
 PYTHON_STRATEGIES: dict = {
     "account_hierarchy": run_account_hierarchy,
+    "owner_pure_hierarchy": run_owner_pure_hierarchy,
 }
 
 
