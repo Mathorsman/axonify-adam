@@ -69,6 +69,23 @@ def _build_alignment_defaults(users: list[dict]) -> dict:
     return result
 
 
+def _is_bdr_sop_eligible(record: dict) -> bool:
+    """
+    Returns True if this account meets the SOP criteria for BDR assignment.
+
+    Rule: BDR is eligible if EITHER:
+      - ICP_Account__c is True (checkbox), OR
+      - NumberOfEmployees >= 1000
+
+    If neither condition is met, the account should never receive a BDR,
+    even if BDR_on_Account__c is currently blank.
+    """
+    icp = record.get("ICP_Account__c") or False
+    employees = record.get("NumberOfEmployees") or 0
+
+    return bool(icp) or int(employees) >= 1000
+
+
 def render_alignment_subtab():
     """
     Editable Rep/BDR alignment table.
@@ -442,6 +459,7 @@ def render_reassign_subtab():
             _select_fields = (
                 "Id, Name, BillingState, BillingCountry, Type, "
                 "Owner.Name, Owner.IsActive, BDR_on_Account__c, "
+                "ICP_Account__c, NumberOfEmployees, "
                 "Parent.Name, Parent.BillingState, Parent.BillingCountry, Parent.Type, "
                 "Parent.Parent.Type, Parent.Parent.BillingState, Parent.Parent.BillingCountry, "
                 "Parent.Parent.Parent.Type, Parent.Parent.Parent.BillingState, "
@@ -669,19 +687,30 @@ def render_reassign_subtab():
                     _status = f"Review (active owner: {_owner_name})"
                     _include = False
 
-                # BDR eligibility: only update if current BDR is null
-                # or belongs to an inactive user
-                _current_bdr = r.get("BDR_on_Account__c") or ""
-                if not _current_bdr:
-                    _bdr_eligible = True
-                    _bdr_status   = "Eligible (empty)"
-                elif _current_bdr not in _active_user_ids:
-                    _bdr_eligible = True
-                    _bdr_status   = "Eligible (inactive BDR)"
-                else:
+                # BDR eligibility — two-stage check:
+                #   Stage 1: Does this account meet SOP criteria (ICP or size)?
+                #   Stage 2: Is the BDR field currently empty or inactive?
+                # Both stages must pass for the BDR assignment to apply.
+
+                _sop_eligible = _is_bdr_sop_eligible(r)
+
+                if not _sop_eligible:
+                    # Account does not meet ICP or employee threshold — never assign a BDR
                     _bdr_eligible = False
-                    _bdr_name_match = _user_by_id.get(_current_bdr, {}).get("name", _current_bdr)
-                    _bdr_status   = f"Skipped (active: {_bdr_name_match})"
+                    _bdr_status   = "Skipped (SOP: low ICP & <1k employees)"
+                else:
+                    # Account meets SOP — now check whether the field is already occupied
+                    _current_bdr = r.get("BDR_on_Account__c") or ""
+                    if not _current_bdr:
+                        _bdr_eligible = True
+                        _bdr_status   = "Eligible (empty)"
+                    elif _current_bdr not in _active_user_ids:
+                        _bdr_eligible = True
+                        _bdr_status   = "Eligible (inactive BDR)"
+                    else:
+                        _bdr_eligible = False
+                        _bdr_name_match = _user_by_id.get(_current_bdr, {}).get("name", _current_bdr)
+                        _bdr_status   = f"Skipped (active: {_bdr_name_match})"
 
                 _match_label = (
                     "Own address"
