@@ -7758,6 +7758,22 @@ def _is_bdr_sop_eligible(record: dict) -> bool:
     return bool(icp) or int(employees) >= 1000
 
 
+def _is_ae_sop_eligible(record: dict) -> bool:
+    """
+    Returns True if this account meets SOP criteria for AE (Rep) assignment as owner.
+
+    Rule: AE is eligible as account owner if BOTH:
+      - ICP_Account__c is True (checkbox), AND
+      - NumberOfEmployees >= 1000
+
+    If either condition is not met, the account owner stays as Axonify (no OwnerId change).
+    """
+    icp = record.get("ICP_Account__c") or False
+    employees = record.get("NumberOfEmployees") or 0
+
+    return bool(icp) and int(employees) >= 1000
+
+
 def render_reassign_subtab():
     """
     4-step wizard for bulk-reassigning account ownership (AE) and/or
@@ -8359,6 +8375,10 @@ def render_reassign_subtab():
                             _bdr_name_match = _user_by_id.get(_current_bdr, {}).get("name", _current_bdr)
                             _bdr_status   = f"Skipped (active: {_bdr_name_match})"
 
+                    # AE eligibility — Rep assigned as owner only if ICP=True AND size≥1k
+                    _ae_eligible = _is_ae_sop_eligible(r)
+                    _ae_status   = "Eligible (ICP + 1k+)" if _ae_eligible else "Skipped (SOP: not ICP or <1k)"
+
                     _src = r.get("_match_source", "")
                     if _src == "direct":
                         _match_label = "Own address"
@@ -8376,6 +8396,8 @@ def render_reassign_subtab():
                         "Employees":    r.get("NumberOfEmployees"),
                         "Status":       _status,
                         "Source":       _match_label,
+                        "AE Eligible":  _ae_eligible,
+                        "AE Status":    _ae_status,
                         "BDR Eligible": _bdr_eligible,
                         "BDR Status":   _bdr_status,
                     })
@@ -8499,8 +8521,15 @@ def render_reassign_subtab():
             "Source":       st.column_config.TextColumn("Source",       disabled=True),
             "Contacts":     st.column_config.NumberColumn("Contacts",   disabled=True),
             "Open Opps":    st.column_config.NumberColumn("Open Opps",  disabled=True),
+            "AE Eligible":  None,  # hide boolean column from grid
             "BDR Eligible": None,  # hide boolean column from grid
         }
+
+        # Show AE Status column only when AE assignment is selected
+        if ae_user_id:
+            _col_config["AE Status"] = st.column_config.TextColumn("AE Status", disabled=True)
+        else:
+            _col_config["AE Status"] = None  # hide when not relevant
 
         # Show BDR Status column only when BDR assignment is selected
         if bdr_user_id:
@@ -8690,6 +8719,15 @@ def render_reassign_subtab():
         _n_conts         = int(_selected["Contacts"].sum()) if not _selected.empty else 0
         _n_opps          = int(_selected["Open Opps"].sum()) if not _selected.empty else 0
         _account_ids     = _selected["Id"].tolist()
+
+        # AE-eligible subset: only accounts where ICP=True AND Employees≥1000
+        _ae_eligible_ids = set()
+        if ae_user_id and "AE Eligible" in _selected.columns:
+            _ae_eligible_ids = set(
+                _selected[_selected["AE Eligible"] == True]["Id"].tolist()
+            )
+        _n_ae_eligible = len(_ae_eligible_ids)
+        _n_ae_skipped  = _n_accts - _n_ae_eligible if ae_user_id else 0
 
         # BDR-eligible subset: only accounts where current BDR is null or inactive
         _bdr_eligible_ids = set()
@@ -8882,7 +8920,7 @@ def render_reassign_subtab():
                 _acct_payload = []
                 for _aid in _account_ids:
                     _rec = {"Id": _aid}
-                    if ae_user_id:
+                    if ae_user_id and _aid in _ae_eligible_ids:
                         _rec["OwnerId"] = ae_user_id
                     if bdr_user_id and _aid in _bdr_eligible_ids:
                         _rec["BDR_on_Account__c"] = bdr_user_id
@@ -8923,8 +8961,9 @@ def render_reassign_subtab():
                     st.write(f"⏳ **Phase {_phase}/{_total_phases}** — Querying & migrating contacts…")
 
                     _cont_ids = []
-                    for _ci in range(0, len(_account_ids), _CHUNK):
-                        _chunk   = _account_ids[_ci : _ci + _CHUNK]
+                    _ae_account_ids = list(_ae_eligible_ids) if _ae_eligible_ids else []
+                    for _ci in range(0, len(_ae_account_ids), _CHUNK):
+                        _chunk   = _ae_account_ids[_ci : _ci + _CHUNK]
                         _ids_str = ", ".join(f"'{x}'" for x in _chunk)
                         _cres    = sf.query_all(
                             f"SELECT Id FROM Contact "
@@ -8958,8 +8997,9 @@ def render_reassign_subtab():
 
                     _stage_not_in = ", ".join(f"'{s}'" for s in CLOSED_STAGES)
                     _opp_ids      = []
-                    for _ci in range(0, len(_account_ids), _CHUNK):
-                        _chunk   = _account_ids[_ci : _ci + _CHUNK]
+                    _ae_account_ids = list(_ae_eligible_ids) if _ae_eligible_ids else []
+                    for _ci in range(0, len(_ae_account_ids), _CHUNK):
+                        _chunk   = _ae_account_ids[_ci : _ci + _CHUNK]
                         _ids_str = ", ".join(f"'{x}'" for x in _chunk)
                         _ores    = sf.query_all(
                             f"SELECT Id FROM Opportunity "
