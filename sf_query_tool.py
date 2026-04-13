@@ -8379,6 +8379,10 @@ def render_reassign_subtab():
                     _ae_eligible = _is_ae_sop_eligible(r)
                     _ae_status   = "Eligible (ICP + 1k+)" if _ae_eligible else "Skipped (SOP: not ICP or <1k)"
 
+                    # If AE is selected but this account is SOP-ineligible, uncheck it
+                    if ae_user_id and not _ae_eligible:
+                        _include = False
+
                     _src = r.get("_match_source", "")
                     if _src == "direct":
                         _match_label = "Own address"
