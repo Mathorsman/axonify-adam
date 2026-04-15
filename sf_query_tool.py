@@ -4514,12 +4514,83 @@ def render_bulk_review_panel(
             results_log = st.session_state.get("_merge_results_log", [])
             n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
             n_err = len(results_log) - n_ok
-            st.success(f"Last merge run: {n_ok} succeeded, {n_err} failed.")
+            if n_err == 0:
+                st.success(f"✅ All {n_ok} pair(s) merged successfully.")
+            else:
+                st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
             display_log = [{k: v for k, v in r.items() if k != "pair_key"} for r in results_log]
             st.dataframe(pd.DataFrame(display_log), use_container_width=True, hide_index=True)
+            log_path = st.session_state.get("_merge_log_path", "")
+            if log_path:
+                st.info(f"📋 Merge log saved → `{log_path}`")
             if st.button("🔄  Rescan for Duplicates", key="persisted_rescan_account"):
                 st.session_state.pop("_merge_results_log", None)
                 st.session_state.pop("_merge_results_ready", None)
+                st.session_state.pop("_merge_log_path", None)
+                st.rerun()
+            return
+
+        # ── Continue an in-progress merge (chunk-by-chunk via st.rerun) ──────────
+        # Each render processes CHUNK_SIZE pairs, saves progress, then reruns.
+        # This resets Streamlit's execution timer every chunk so long jobs don't
+        # hit the platform timeout.
+        CHUNK_SIZE = 10
+        if st.session_state.get("_merge_in_progress"):
+            merge_plan  = st.session_state.get("_merge_plan", [])
+            backup_path = st.session_state.get("_merge_backup_path", "")
+            results_log = st.session_state.get("_merge_results_log", [])
+            completed_keys = {r["pair_key"] for r in results_log if r.get("pair_key")}
+            remaining_plan = [m for m in merge_plan if m["pair_key"] not in completed_keys]
+            total_pairs    = len(merge_plan)
+            done_count     = len(results_log)
+
+            st.info(f"⏳ Merging in progress — {done_count}/{total_pairs} complete. Do not close this tab.")
+            progress = st.progress(
+                done_count / total_pairs if total_pairs else 0,
+                text=f"Merging {done_count}/{total_pairs}…"
+            )
+
+            for m in remaining_plan[:CHUNK_SIZE]:
+                try:
+                    result = execute_account_merge(
+                        sf,
+                        master_id=m["master_id"],
+                        duplicate_id=m["dupl_id"],
+                        dry_run=False,
+                    )
+                    status = "✅ Success" if not result["errors"] else "⚠️ Partial"
+                    moved  = ", ".join(f"{v} {k}" for k, v in result["children_moved"].items()) or "—"
+                    results_log.append({
+                        "pair_key": m["pair_key"],
+                        "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
+                        "Status":   status,
+                        "Moved":    moved,
+                        "Errors":   "; ".join(result["errors"]),
+                    })
+                    if not result["errors"]:
+                        st.session_state.dedupe_merged.add(m["pair_key"])
+                except Exception as e:
+                    results_log.append({
+                        "pair_key": m["pair_key"],
+                        "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
+                        "Status":   "❌ Failed",
+                        "Moved":    "—",
+                        "Errors":   str(e),
+                    })
+
+            st.session_state["_merge_results_log"] = results_log
+            done_count = len(results_log)
+
+            if done_count < total_pairs:
+                progress.progress(done_count / total_pairs, text=f"Merging {done_count}/{total_pairs}…")
+                st.rerun()
+            else:
+                progress.progress(1.0, text="Done.")
+                log_path = write_merge_log("Account", results_log, backup_path)
+                st.session_state["_merge_log_path"]      = log_path
+                st.session_state["_merge_in_progress"]   = False
+                st.session_state["_merge_results_ready"] = True
+                st.session_state.pop("_merge_plan", None)
                 st.rerun()
             return
 
@@ -4543,9 +4614,12 @@ def render_bulk_review_panel(
                     "dupl_name":   dupl_rec.get("Name",""),
                 })
 
-            # Clear any results from a previous merge run before starting a new one
+            # Clear any state from a previous merge run before starting a new one
             st.session_state.pop("_merge_results_log", None)
             st.session_state.pop("_merge_results_ready", None)
+            st.session_state.pop("_merge_plan", None)
+            st.session_state.pop("_merge_in_progress", None)
+            st.session_state.pop("_merge_log_path", None)
 
             # Dry-run: just show the plan, don't execute
             if dry_run_mode:
@@ -4581,129 +4655,14 @@ def render_bulk_review_panel(
                         st.error(f"Backup failed: {e} — aborting for safety.")
                         return  # never proceed without a backup
 
-                # Execute merges in chunks of 10 (crash-recovery aware)
-                CHUNK_SIZE     = 10
-                results_log    = st.session_state.get("_merge_results_log", [])
-                completed_keys = {r["pair_key"] for r in results_log if r.get("pair_key")}
-
-                # Filter out already-completed pairs (crash recovery)
-                remaining_plan = [m for m in merge_plan if m["pair_key"] not in completed_keys]
-
-                total_pairs = len(merge_plan)
-                done_count  = len(completed_keys)
-
-                progress   = st.progress(done_count / total_pairs if total_pairs else 0, text="Merging...")
-                status_box = st.empty()
-
-                for chunk_start in range(0, len(remaining_plan), CHUNK_SIZE):
-                    chunk = remaining_plan[chunk_start : chunk_start + CHUNK_SIZE]
-
-                    for m in chunk:
-                        done_count += 1
-                        progress.progress(
-                            done_count / total_pairs,
-                            text=f"Merging {done_count}/{total_pairs}: {m['master_name']}"
-                        )
-                        status_box.caption(f"Processing: {m['master_name']} ← {m['dupl_name']}")
-                        try:
-                            result = execute_account_merge(
-                                sf,
-                                master_id=m["master_id"],
-                                duplicate_id=m["dupl_id"],
-                                dry_run=False,
-                            )
-                            status = "✅ Success" if not result["errors"] else "⚠️ Partial"
-                            moved  = ", ".join(f"{v} {k}" for k, v in result["children_moved"].items()) or "—"
-                            results_log.append({
-                                "pair_key": m["pair_key"],
-                                "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
-                                "Status":   status,
-                                "Moved":    moved,
-                                "Errors":   "; ".join(result["errors"]),
-                            })
-                            if not result["errors"]:
-                                st.session_state.dedupe_merged.add(m["pair_key"])
-                        except Exception as e:
-                            results_log.append({
-                                "pair_key": m["pair_key"],
-                                "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
-                                "Status":   "❌ Failed",
-                                "Moved":    "—",
-                                "Errors":   str(e),
-                            })
-
-                    # Save progress after every chunk so a crash doesn't lose completed work
-                    st.session_state["_merge_results_log"] = results_log
-
-                progress.progress(1.0, text="Done.")
-                status_box.empty()
-
-                # Persist results so they survive any subsequent rerun
-                st.session_state["_merge_results_log"] = results_log
-                st.session_state["_merge_results_ready"] = True
-
-                # Show summary
-                n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
-                n_err = len(results_log) - n_ok
-                if n_err == 0:
-                    st.success(f"✅ All {n_ok} pair(s) merged successfully.")
-                else:
-                    st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
-
-                # Show results table (exclude internal pair_key column)
-                display_log = [{k: v for k, v in r.items() if k != "pair_key"} for r in results_log]
-                st.dataframe(pd.DataFrame(display_log), use_container_width=True, hide_index=True)
-
-                # Verify: check which duplicate IDs still exist in Salesforce
-                with st.spinner("Verifying merges in Salesforce…"):
-                    try:
-                        completed = [r for r in results_log if r["Status"].startswith("✅")]
-                        dupl_ids  = [m["dupl_id"] for m in merge_plan
-                                     if any(r["Pair"].endswith(m["dupl_name"]) for r in completed)]
-                        if dupl_ids:
-                            id_list     = ", ".join(f"'{i}'" for i in dupl_ids[:200])
-                            still_exist = run_soql(
-                                f"SELECT Id, Name FROM Account WHERE Id IN ({id_list})"
-                            )
-                            if still_exist.empty:
-                                st.success(f"✅ Verification passed — all {len(dupl_ids)} duplicate records confirmed deleted.")
-                            else:
-                                st.warning(
-                                    f"⚠️ {len(still_exist)} record(s) still exist in Salesforce after merge. "
-                                    f"They may need manual review."
-                                )
-                                st.dataframe(still_exist[["Id", "Name"]], hide_index=True)
-                    except Exception as e:
-                        st.caption(f"Verification query failed: {e} — check Salesforce manually.")
-
-                # Write merge log
-                log_path = write_merge_log("Account", results_log, backup_path)
-                st.info(f"📋 Merge log saved → `{log_path}`")
-
-                # Let the user trigger the rescan manually — do NOT call st.rerun() here
-                st.info("Merge complete. Click **Rescan for Duplicates** to refresh the list.")
-                if st.button("🔄  Rescan for Duplicates", key="post_merge_rescan_account"):
-                    st.session_state.pop("_merge_results_log", None)
-                    st.session_state.pop("_merge_results_ready", None)
-                    fetch_accounts_for_dedupe.clear()
-                    params = st.session_state.get("dedupe_last_scan_params", {})
-                    if params:
-                        try:
-                            df_fresh = fetch_accounts_for_dedupe(sf.sf_instance)
-                            st.session_state.dedupe_candidates = find_duplicate_candidates(
-                                df_fresh,
-                                name_threshold=params.get("name_threshold", 85),
-                                domain_boost=params.get("domain_boost", 10),
-                                city_boost=params.get("city_boost", 5),
-                                country_conflict_penalty=params.get("country_conflict_penalty", -20),
-                            )
-                            st.session_state.dedupe_review_idx = 0
-                            st.session_state.dedupe_dismissed  = set()
-                            st.session_state.pop("bulk_include_states", None)
-                        except Exception as e:
-                            st.warning(f"Re-scan failed ({e}) — click Scan to refresh manually.")
-                    st.session_state.pop(OPP_CACHE_KEY, None)
-                    st.rerun()
+                # Store plan in session_state and kick off chunk-by-chunk execution.
+                # The in-progress block above will process CHUNK_SIZE pairs per render,
+                # calling st.rerun() after each chunk to reset the platform timeout.
+                st.session_state["_merge_plan"]        = merge_plan
+                st.session_state["_merge_results_log"] = []
+                st.session_state["_merge_in_progress"] = True
+                st.session_state["_merge_backup_path"] = backup_path
+                st.rerun()
 
     # ── Step 4: Manual-only pairs ─────────────────────────────────────────────
     st.markdown("---")
@@ -6421,12 +6380,80 @@ def render_contact_bulk_review_panel(
             results_log = st.session_state.get("_contact_merge_results_log", [])
             n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
             n_err = len(results_log) - n_ok
-            st.success(f"Last merge run: {n_ok} succeeded, {n_err} failed.")
+            if n_err == 0:
+                st.success(f"✅ All {n_ok} pair(s) merged successfully.")
+            else:
+                st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
             display_log = [{k: v for k, v in r.items() if k != "pair_key"} for r in results_log]
             st.dataframe(pd.DataFrame(display_log), use_container_width=True, hide_index=True)
+            log_path = st.session_state.get("_contact_merge_log_path", "")
+            if log_path:
+                st.info(f"📋 Merge log saved → `{log_path}`")
             if st.button("🔄  Rescan for Duplicates", key="persisted_rescan_contact"):
                 st.session_state.pop("_contact_merge_results_log", None)
                 st.session_state.pop("_contact_merge_results_ready", None)
+                st.session_state.pop("_contact_merge_log_path", None)
+                st.rerun()
+            return
+
+        # ── Continue an in-progress merge (chunk-by-chunk via st.rerun) ──────────
+        CHUNK_SIZE = 10
+        if st.session_state.get("_contact_merge_in_progress"):
+            merge_plan  = st.session_state.get("_contact_merge_plan", [])
+            backup_path = st.session_state.get("_contact_merge_backup_path", "")
+            results_log = st.session_state.get("_contact_merge_results_log", [])
+            completed_keys = {r["pair_key"] for r in results_log if r.get("pair_key")}
+            remaining_plan = [m for m in merge_plan if m["pair_key"] not in completed_keys]
+            total_pairs    = len(merge_plan)
+            done_count     = len(results_log)
+
+            st.info(f"⏳ Merging in progress — {done_count}/{total_pairs} complete. Do not close this tab.")
+            progress = st.progress(
+                done_count / total_pairs if total_pairs else 0,
+                text=f"Merging {done_count}/{total_pairs}…"
+            )
+
+            for m in remaining_plan[:CHUNK_SIZE]:
+                try:
+                    result = execute_contact_merge(
+                        sf,
+                        master_id=m["master_id"],
+                        duplicate_id=m["dupl_id"],
+                        dry_run=False,
+                    )
+                    status = "✅ Success" if not result["errors"] else "⚠️ Partial"
+                    moved  = ", ".join(f"{v} {k}" for k, v in result["children_moved"].items()) or "—"
+                    results_log.append({
+                        "pair_key": m["pair_key"],
+                        "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
+                        "Status":   status,
+                        "Moved":    moved,
+                        "Errors":   "; ".join(result["errors"]),
+                    })
+                    if not result["errors"]:
+                        st.session_state.contact_dedupe_merged.add(m["pair_key"])
+                except Exception as e:
+                    results_log.append({
+                        "pair_key": m["pair_key"],
+                        "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
+                        "Status":   "❌ Failed",
+                        "Moved":    "—",
+                        "Errors":   str(e),
+                    })
+
+            st.session_state["_contact_merge_results_log"] = results_log
+            done_count = len(results_log)
+
+            if done_count < total_pairs:
+                progress.progress(done_count / total_pairs, text=f"Merging {done_count}/{total_pairs}…")
+                st.rerun()
+            else:
+                progress.progress(1.0, text="Done.")
+                log_path = write_merge_log("Contact", results_log, backup_path)
+                st.session_state["_contact_merge_log_path"]      = log_path
+                st.session_state["_contact_merge_in_progress"]   = False
+                st.session_state["_contact_merge_results_ready"] = True
+                st.session_state.pop("_contact_merge_plan", None)
                 st.rerun()
             return
 
@@ -6449,9 +6476,12 @@ def render_contact_bulk_review_panel(
                     "dupl_name":   f"{dupl_rec.get('FirstName','')} {dupl_rec.get('LastName','')}".strip(),
                 })
 
-            # Clear any results from a previous merge run before starting a new one
+            # Clear any state from a previous merge run before starting a new one
             st.session_state.pop("_contact_merge_results_log", None)
             st.session_state.pop("_contact_merge_results_ready", None)
+            st.session_state.pop("_contact_merge_plan", None)
+            st.session_state.pop("_contact_merge_in_progress", None)
+            st.session_state.pop("_contact_merge_log_path", None)
 
             if dry_run_mode:
                 st.warning(f"**DRY RUN** — {len(merge_plan)} merge(s) planned. No changes will be made.")
@@ -6486,129 +6516,14 @@ def render_contact_bulk_review_panel(
                         st.error(f"Backup failed: {e} — aborting for safety.")
                         return
 
-                # Execute merges in chunks of 10 (crash-recovery aware)
-                CHUNK_SIZE     = 10
-                results_log    = st.session_state.get("_contact_merge_results_log", [])
-                completed_keys = {r["pair_key"] for r in results_log if r.get("pair_key")}
-
-                # Filter out already-completed pairs (crash recovery)
-                remaining_plan = [m for m in merge_plan if m["pair_key"] not in completed_keys]
-
-                total_pairs = len(merge_plan)
-                done_count  = len(completed_keys)
-
-                progress   = st.progress(done_count / total_pairs if total_pairs else 0, text="Merging...")
-                status_box = st.empty()
-
-                for chunk_start in range(0, len(remaining_plan), CHUNK_SIZE):
-                    chunk = remaining_plan[chunk_start : chunk_start + CHUNK_SIZE]
-
-                    for m in chunk:
-                        done_count += 1
-                        progress.progress(
-                            done_count / total_pairs,
-                            text=f"Merging {done_count}/{total_pairs}: {m['master_name']}"
-                        )
-                        status_box.caption(f"Processing: {m['master_name']} ← {m['dupl_name']}")
-                        try:
-                            result = execute_contact_merge(
-                                sf,
-                                master_id=m["master_id"],
-                                duplicate_id=m["dupl_id"],
-                                dry_run=False,
-                            )
-                            status = "✅ Success" if not result["errors"] else "⚠️ Partial"
-                            moved  = ", ".join(f"{v} {k}" for k, v in result["children_moved"].items()) or "—"
-                            results_log.append({
-                                "pair_key": m["pair_key"],
-                                "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
-                                "Status":   status,
-                                "Moved":    moved,
-                                "Errors":   "; ".join(result["errors"]),
-                            })
-                            if not result["errors"]:
-                                st.session_state.contact_dedupe_merged.add(m["pair_key"])
-                        except Exception as e:
-                            results_log.append({
-                                "pair_key": m["pair_key"],
-                                "Pair":     f"{m['master_name']} ← {m['dupl_name']}",
-                                "Status":   "❌ Failed",
-                                "Moved":    "—",
-                                "Errors":   str(e),
-                            })
-
-                    # Save progress after every chunk so a crash doesn't lose completed work
-                    st.session_state["_contact_merge_results_log"] = results_log
-
-                progress.progress(1.0, text="Done.")
-                status_box.empty()
-
-                # Persist results so they survive any subsequent rerun
-                st.session_state["_contact_merge_results_log"] = results_log
-                st.session_state["_contact_merge_results_ready"] = True
-
-                # Show summary
-                n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
-                n_err = len(results_log) - n_ok
-                if n_err == 0:
-                    st.success(f"✅ All {n_ok} pair(s) merged successfully.")
-                else:
-                    st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
-
-                # Show results table (exclude internal pair_key column)
-                display_log = [{k: v for k, v in r.items() if k != "pair_key"} for r in results_log]
-                st.dataframe(pd.DataFrame(display_log), use_container_width=True, hide_index=True)
-
-                # Verify: check which duplicate IDs still exist in Salesforce
-                with st.spinner("Verifying merges in Salesforce…"):
-                    try:
-                        completed = [r for r in results_log if r["Status"].startswith("✅")]
-                        dupl_ids  = [m["dupl_id"] for m in merge_plan
-                                     if any(r["Pair"].endswith(m["dupl_name"]) for r in completed)]
-                        if dupl_ids:
-                            id_list     = ", ".join(f"'{i}'" for i in dupl_ids[:200])
-                            still_exist = run_soql(
-                                f"SELECT Id, Name FROM Contact WHERE Id IN ({id_list})"
-                            )
-                            if still_exist.empty:
-                                st.success(f"✅ Verification passed — all {len(dupl_ids)} duplicate records confirmed deleted.")
-                            else:
-                                st.warning(
-                                    f"⚠️ {len(still_exist)} record(s) still exist in Salesforce after merge. "
-                                    f"They may need manual review."
-                                )
-                                st.dataframe(still_exist[["Id", "Name"]], hide_index=True)
-                    except Exception as e:
-                        st.caption(f"Verification query failed: {e} — check Salesforce manually.")
-
-                # Write merge log
-                log_path = write_merge_log("Contact", results_log, backup_path)
-                st.info(f"📋 Merge log saved → `{log_path}`")
-
-                # Let the user trigger the rescan manually — do NOT call st.rerun() here
-                st.info("Merge complete. Click **Rescan for Duplicates** to refresh the list.")
-                if st.button("🔄  Rescan for Duplicates", key="post_merge_rescan_contact"):
-                    st.session_state.pop("_contact_merge_results_log", None)
-                    st.session_state.pop("_contact_merge_results_ready", None)
-                    fetch_contacts_for_dedupe.clear()
-                    params = st.session_state.get("contact_dedupe_last_scan_params", {})
-                    if params:
-                        try:
-                            df_fresh = fetch_contacts_for_dedupe(sf.sf_instance)
-                            st.session_state.contact_dedupe_candidates = find_contact_duplicate_candidates(
-                                df_fresh,
-                                name_threshold=params.get("name_threshold", 85),
-                                same_account_boost=params.get("same_account_boost", 10),
-                                email_boost=params.get("email_boost", 15),
-                            )
-                            st.session_state.contact_dedupe_review_idx = 0
-                            st.session_state.contact_dedupe_dismissed  = set()
-                            st.session_state.pop("contact_bulk_include_states", None)
-                        except Exception as e:
-                            st.warning(f"Re-scan failed ({e}) — click Scan to refresh manually.")
-                    st.session_state.pop(CASE_CACHE_KEY, None)
-                    st.session_state.pop(OPP_CACHE_KEY, None)
-                    st.rerun()
+                # Store plan in session_state and kick off chunk-by-chunk execution.
+                # The in-progress block above will process CHUNK_SIZE pairs per render,
+                # calling st.rerun() after each chunk to reset the platform timeout.
+                st.session_state["_contact_merge_plan"]        = merge_plan
+                st.session_state["_contact_merge_results_log"] = []
+                st.session_state["_contact_merge_in_progress"] = True
+                st.session_state["_contact_merge_backup_path"] = backup_path
+                st.rerun()
 
     # ── Step 4: Manual-only pairs ─────────────────────────────────────────────
     st.markdown("---")
