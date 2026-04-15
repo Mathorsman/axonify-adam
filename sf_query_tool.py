@@ -22075,11 +22075,14 @@ _BUCKET_DESCRIPTIONS = {
 }
 
 _STALE_BAND_LABELS = {
-    "ACTIVE":     "Active (< 24 months) — shown for context, NOT a purge candidate",
-    "STALE_2YR":  "Stale 2–3 years — no signal in 24–36 months",
-    "STALE_3YR":  "Stale 3–4 years — no signal in 36–48 months",
-    "STALE_4YR+": "Stale 4+ years — no signal in 48+ months",
-    "NEVER":      "Never had any activity — no Task, Event, or Bizible ever",
+    "ACTIVE":      "Active (< 24 months) — shown for context, NOT a purge candidate",
+    "STALE_2YR":   "Stale 2–3 years — no signal in 24–36 months",
+    "STALE_3YR":   "Stale 3–4 years — no signal in 36–48 months",
+    "STALE_4YR+":  "Stale 4+ years — no signal in 48+ months",
+    "NEVER_<2YR":  "Never active, < 2 years old — no Task, Event, or Bizible ever; contact created < 24 months ago",
+    "NEVER_2YR":   "Never active, 2–3 years old — no Task, Event, or Bizible ever; contact created 24–36 months ago",
+    "NEVER_3YR":   "Never active, 3–4 years old — no Task, Event, or Bizible ever; contact created 36–48 months ago",
+    "NEVER_4YR+":  "Never active, 4+ years old — no Task, Event, or Bizible ever; contact created 48+ months ago",
 }
 
 
@@ -22645,7 +22648,19 @@ def _purge_classify_stale(df: pd.DataFrame, bizible_dates: dict, rules: dict, mi
             last_signal, source = None, "none"
 
         if last_signal is None:
-            band = "NEVER"
+            # Break "never active" into age bands based on CreatedDate
+            if created_dt:
+                contact_age_months = (now - created_dt).days / 30.0
+                if contact_age_months < 24:
+                    band = "NEVER_<2YR"
+                elif contact_age_months < 36:
+                    band = "NEVER_2YR"
+                elif contact_age_months < 48:
+                    band = "NEVER_3YR"
+                else:
+                    band = "NEVER_4YR+"
+            else:
+                band = "NEVER_4YR+"  # unknown created date — treat as oldest tier
         else:
             age_months = (now - last_signal).days / 30.0
             band = "ACTIVE"
@@ -23096,15 +23111,21 @@ def _render_stale_tab(rules: dict, dry_run_mode: bool, auto_backup: bool):
     evaluated = classified[~classified["excluded_reason"].isin(["protected_persona", "record_too_new"])]
 
     if threshold_choice == "Show all bands":
-        stale_bands = ["ACTIVE", "STALE_2YR", "STALE_3YR", "STALE_4YR+", "NEVER"]
+        stale_bands = [
+            "ACTIVE",
+            "STALE_2YR",   "STALE_3YR",  "STALE_4YR+",
+            "NEVER_<2YR",  "NEVER_2YR",  "NEVER_3YR",  "NEVER_4YR+",
+        ]
     else:
         months_thresh = threshold_map[threshold_choice]
         if months_thresh == 24:
-            stale_bands = ["STALE_2YR", "STALE_3YR", "STALE_4YR+", "NEVER"]
+            stale_bands = ["STALE_2YR", "STALE_3YR", "STALE_4YR+",
+                           "NEVER_2YR", "NEVER_3YR", "NEVER_4YR+"]
         elif months_thresh == 36:
-            stale_bands = ["STALE_3YR", "STALE_4YR+", "NEVER"]
+            stale_bands = ["STALE_3YR", "STALE_4YR+",
+                           "NEVER_3YR", "NEVER_4YR+"]
         else:
-            stale_bands = ["STALE_4YR+", "NEVER"]
+            stale_bands = ["STALE_4YR+", "NEVER_4YR+"]
 
     display_df = evaluated[evaluated["inactivity_band"].isin(stale_bands)]
 
