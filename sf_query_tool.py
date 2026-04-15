@@ -5695,11 +5695,76 @@ def execute_contact_merge(
     opportunity, the duplicate's OCR is deleted rather than re-parented to
     avoid a constraint violation.
     """
-    # Exclude OCR from the generic engine — handled below
+    # Exclude OCR and CampaignMember from the generic engine — both have
+    # uniqueness constraints (Contact+Opportunity and Contact+Campaign) that
+    # cause bulk re-parent failures when the master is already a member.
+    _CONSTRAINED = {"OpportunityContactRole", "CampaignMember"}
     standard_children = [c for c in CONTACT_CHILD_OBJECTS
-                         if c[0] != "OpportunityContactRole"]
+                         if c[0] not in _CONSTRAINED]
     result = _execute_generic_merge(sf, "Contact", standard_children,
                                     master_id, duplicate_id, dry_run)
+
+    # ── CampaignMember re-parenting with conflict resolution ─────────────────
+    # ContactId + CampaignId must be unique; if the master is already a member
+    # of the same campaign, delete the duplicate's record instead of re-parenting.
+    try:
+        cm_result = sf.query(
+            f"SELECT Id, CampaignId FROM CampaignMember "
+            f"WHERE ContactId = '{duplicate_id}' LIMIT 2000"
+        )
+        dup_cms = cm_result.get("records", [])
+
+        if dup_cms:
+            dup_campaign_ids = [r["CampaignId"] for r in dup_cms]
+            id_list = ", ".join(f"'{cid}'" for cid in dup_campaign_ids)
+            master_result = sf.query(
+                f"SELECT CampaignId FROM CampaignMember "
+                f"WHERE ContactId = '{master_id}' "
+                f"AND CampaignId IN ({id_list})"
+            )
+            master_campaign_ids = {r["CampaignId"]
+                                   for r in master_result.get("records", [])}
+
+            to_reparent = [r for r in dup_cms
+                           if r["CampaignId"] not in master_campaign_ids]
+            to_delete   = [r for r in dup_cms
+                           if r["CampaignId"] in master_campaign_ids]
+
+            cm_moved   = 0
+            cm_deleted = 0
+
+            if not dry_run:
+                if to_reparent:
+                    payload = [{"Id": r["Id"], "ContactId": master_id}
+                               for r in to_reparent]
+                    res = sf.bulk.CampaignMember.update(payload)
+                    failed = [r for r in res if not r.get("success")]
+                    if failed:
+                        result["errors"].append(
+                            f"CampaignMember: {len(failed)} re-parent failures"
+                        )
+                    else:
+                        cm_moved = len(to_reparent)
+
+                for r in to_delete:
+                    try:
+                        sf.CampaignMember.delete(r["Id"])
+                        cm_deleted += 1
+                    except Exception as e:
+                        result["errors"].append(
+                            f"CampaignMember delete {r['Id']}: {e}"
+                        )
+            else:
+                cm_moved   = len(to_reparent)
+                cm_deleted = len(to_delete)
+
+            if cm_moved:
+                result["children_moved"]["CampaignMember"] = cm_moved
+            if cm_deleted:
+                result["children_moved"]["CampaignMember (conflict-deleted)"] = cm_deleted
+
+    except Exception as e:
+        result["errors"].append(f"CampaignMember: {e}")
 
     # ── OpportunityContactRole re-parenting with conflict resolution ──────────
     try:
