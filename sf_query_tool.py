@@ -4512,9 +4512,13 @@ def render_bulk_review_panel(
         # ── Show persisted results from previous merge run ────────────────────
         if st.session_state.get("_merge_results_ready"):
             results_log = st.session_state.get("_merge_results_log", [])
+            stopped     = st.session_state.get("_merge_stopped", False)
+            total_plan  = len(st.session_state.get("_merge_plan", results_log))
             n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
             n_err = len(results_log) - n_ok
-            if n_err == 0:
+            if stopped:
+                st.warning(f"⏹ Merge stopped — {len(results_log)}/{total_plan} pairs processed ({n_ok} succeeded, {n_err} failed).")
+            elif n_err == 0:
                 st.success(f"✅ All {n_ok} pair(s) merged successfully.")
             else:
                 st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
@@ -4523,13 +4527,20 @@ def render_bulk_review_panel(
             log_path = st.session_state.get("_merge_log_path", "")
             if log_path:
                 st.info(f"📋 Merge log saved → `{log_path}`")
-            if st.button("🔄  Rescan for Duplicates", key="persisted_rescan_account"):
-                st.session_state.pop("_merge_results_log", None)
-                st.session_state.pop("_merge_results_ready", None)
-                st.session_state.pop("_merge_log_path", None)
-                # Clear the open-Opp cache so triage uses fresh data
-                st.session_state.pop("bulk_open_opp_ids", None)
-                st.rerun()
+            col_resume, col_rescan, _ = st.columns([1, 1, 4])
+            if stopped:
+                with col_resume:
+                    if st.button("▶  Resume Merge", key="merge_resume_btn"):
+                        st.session_state["_merge_in_progress"] = True
+                        st.session_state.pop("_merge_results_ready", None)
+                        st.session_state.pop("_merge_stopped", None)
+                        st.rerun()
+            with col_rescan:
+                if st.button("🔄  Rescan for Duplicates", key="persisted_rescan_account"):
+                    for k in ("_merge_results_log", "_merge_results_ready", "_merge_log_path",
+                              "_merge_plan", "_merge_stopped", "bulk_open_opp_ids"):
+                        st.session_state.pop(k, None)
+                    st.rerun()
             return
 
         # ── Continue an in-progress merge (chunk-by-chunk via st.rerun) ──────────
@@ -4546,11 +4557,25 @@ def render_bulk_review_panel(
             total_pairs    = len(merge_plan)
             done_count     = len(results_log)
 
-            st.info(f"⏳ Merging in progress — {done_count}/{total_pairs} complete. Do not close this tab.")
+            st.info(f"⏳ Merging in progress — {done_count}/{total_pairs} complete.")
             progress = st.progress(
                 done_count / total_pairs if total_pairs else 0,
                 text=f"Merging {done_count}/{total_pairs}…"
             )
+            if st.button("⏹  Stop after this chunk", key="merge_stop_btn"):
+                st.session_state["_merge_stop_requested"] = True
+
+            # Stop check — fires on the render where the button was clicked,
+            # before any new chunk begins, so we always finish the current 10.
+            if st.session_state.get("_merge_stop_requested"):
+                log_path = write_merge_log("Account", results_log, backup_path)
+                st.session_state["_merge_log_path"]      = log_path
+                st.session_state["_merge_in_progress"]   = False
+                st.session_state["_merge_results_ready"] = True
+                st.session_state["_merge_stopped"]       = True
+                st.session_state.pop("_merge_stop_requested", None)
+                st.rerun()
+                return
 
             for m in remaining_plan[:CHUNK_SIZE]:
                 try:
@@ -4582,6 +4607,15 @@ def render_bulk_review_panel(
 
             st.session_state["_merge_results_log"] = results_log
             done_count = len(results_log)
+
+            # Partial-run log — written after every chunk so a browser close
+            # doesn't lose the audit trail for completed pairs.
+            try:
+                user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+                db_save_merge_log(user, "Account", results_log, backup_path or None,
+                                  f"In progress: {done_count}/{total_pairs}")
+            except Exception:
+                pass
 
             if done_count < total_pairs:
                 progress.progress(done_count / total_pairs, text=f"Merging {done_count}/{total_pairs}…")
@@ -6380,9 +6414,13 @@ def render_contact_bulk_review_panel(
         # ── Show persisted results from previous merge run ────────────────────
         if st.session_state.get("_contact_merge_results_ready"):
             results_log = st.session_state.get("_contact_merge_results_log", [])
+            stopped     = st.session_state.get("_contact_merge_stopped", False)
+            total_plan  = len(st.session_state.get("_contact_merge_plan", results_log))
             n_ok  = sum(1 for r in results_log if r["Status"].startswith("✅"))
             n_err = len(results_log) - n_ok
-            if n_err == 0:
+            if stopped:
+                st.warning(f"⏹ Merge stopped — {len(results_log)}/{total_plan} pairs processed ({n_ok} succeeded, {n_err} failed).")
+            elif n_err == 0:
                 st.success(f"✅ All {n_ok} pair(s) merged successfully.")
             else:
                 st.warning(f"{n_ok} succeeded, {n_err} failed — see table below.")
@@ -6391,14 +6429,22 @@ def render_contact_bulk_review_panel(
             log_path = st.session_state.get("_contact_merge_log_path", "")
             if log_path:
                 st.info(f"📋 Merge log saved → `{log_path}`")
-            if st.button("🔄  Rescan for Duplicates", key="persisted_rescan_contact"):
-                st.session_state.pop("_contact_merge_results_log", None)
-                st.session_state.pop("_contact_merge_results_ready", None)
-                st.session_state.pop("_contact_merge_log_path", None)
-                # Clear the open-Case/Opp cache so triage uses fresh data
-                st.session_state.pop("contact_bulk_open_case_ids", None)
-                st.session_state.pop("contact_bulk_opp_ids", None)
-                st.rerun()
+            col_resume, col_rescan, _ = st.columns([1, 1, 4])
+            if stopped:
+                with col_resume:
+                    if st.button("▶  Resume Merge", key="contact_merge_resume_btn"):
+                        st.session_state["_contact_merge_in_progress"] = True
+                        st.session_state.pop("_contact_merge_results_ready", None)
+                        st.session_state.pop("_contact_merge_stopped", None)
+                        st.rerun()
+            with col_rescan:
+                if st.button("🔄  Rescan for Duplicates", key="persisted_rescan_contact"):
+                    for k in ("_contact_merge_results_log", "_contact_merge_results_ready",
+                              "_contact_merge_log_path", "_contact_merge_plan",
+                              "_contact_merge_stopped", "contact_bulk_open_case_ids",
+                              "contact_bulk_opp_ids"):
+                        st.session_state.pop(k, None)
+                    st.rerun()
             return
 
         # ── Continue an in-progress merge (chunk-by-chunk via st.rerun) ──────────
@@ -6412,11 +6458,23 @@ def render_contact_bulk_review_panel(
             total_pairs    = len(merge_plan)
             done_count     = len(results_log)
 
-            st.info(f"⏳ Merging in progress — {done_count}/{total_pairs} complete. Do not close this tab.")
+            st.info(f"⏳ Merging in progress — {done_count}/{total_pairs} complete.")
             progress = st.progress(
                 done_count / total_pairs if total_pairs else 0,
                 text=f"Merging {done_count}/{total_pairs}…"
             )
+            if st.button("⏹  Stop after this chunk", key="contact_merge_stop_btn"):
+                st.session_state["_contact_merge_stop_requested"] = True
+
+            if st.session_state.get("_contact_merge_stop_requested"):
+                log_path = write_merge_log("Contact", results_log, backup_path)
+                st.session_state["_contact_merge_log_path"]      = log_path
+                st.session_state["_contact_merge_in_progress"]   = False
+                st.session_state["_contact_merge_results_ready"] = True
+                st.session_state["_contact_merge_stopped"]       = True
+                st.session_state.pop("_contact_merge_stop_requested", None)
+                st.rerun()
+                return
 
             for m in remaining_plan[:CHUNK_SIZE]:
                 try:
@@ -6448,6 +6506,15 @@ def render_contact_bulk_review_panel(
 
             st.session_state["_contact_merge_results_log"] = results_log
             done_count = len(results_log)
+
+            # Partial-run log — written after every chunk so a browser close
+            # doesn't lose the audit trail for completed pairs.
+            try:
+                user = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+                db_save_merge_log(user, "Contact", results_log, backup_path or None,
+                                  f"In progress: {done_count}/{total_pairs}")
+            except Exception:
+                pass
 
             if done_count < total_pairs:
                 progress.progress(done_count / total_pairs, text=f"Merging {done_count}/{total_pairs}…")
