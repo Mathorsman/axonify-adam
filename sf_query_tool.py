@@ -19362,7 +19362,9 @@ def render_integration_map():
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Field types that cannot be queried with GROUP BY or NULL check
-_SKIP_SAMPLE_TYPES = {"textarea", "encryptedstring", "base64", "anytype"}
+_SKIP_SAMPLE_TYPES = {"encryptedstring", "base64", "anytype"}
+# Field types that cannot use COUNT(field) in aggregate SOQL — must use COUNT(Id) WHERE field != null
+_INDIVIDUAL_QUERY_TYPES = {"textarea"}
 # Field types that are always populated (exclude from cleanup)
 _ALWAYS_POPULATED_TYPES = {"id", "autonumber", "formula", "rollup"}
 
@@ -19529,7 +19531,7 @@ def _fetch_population_rates(
             record = res["records"][0] if res.get("records") else {}
             for j, fld in enumerate(batch):
                 raw = record.get(f"f{j}", 0) or 0
-                rates[fld] = round(raw / total_count * 100, 1) if total_count > 0 else 0.0
+                rates[fld] = round(raw / total_count * 100, 2) if total_count > 0 else 0.0
         except Exception:
             # If the batch fails (e.g. one field is non-aggregatable),
             # fall back to one query per field in this batch only.
@@ -19542,7 +19544,7 @@ def _fetch_population_rates(
                         f"SELECT COUNT(Id) cnt FROM {object_name} WHERE {fld_where}"
                     )
                     populated = r["records"][0]["cnt"]
-                    rates[fld] = round(populated / total_count * 100, 1) if total_count > 0 else 0.0
+                    rates[fld] = round(populated / total_count * 100, 2) if total_count > 0 else 0.0
                 except Exception:
                     rates[fld] = None
 
@@ -19840,13 +19842,18 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
 
     # ── Calculate population rates ────────────────────────────────────────────
     if calc_clicked:
-        # Exclude field types that cannot be used inside COUNT()
+        # Split queryable fields: most use COUNT(field) in a batch aggregate;
+        # textarea must use COUNT(Id) WHERE field != null individually.
+        _type_map = dict(zip(df["API Name"], df["Type"].str.lower()))
         queryable_fields = [
             row["API Name"]
             for _, row in df.iterrows()
             if row["Type"].lower() not in _SKIP_SAMPLE_TYPES
             and row["Type"].lower() not in _ALWAYS_POPULATED_TYPES
         ]
+        batch_fields     = [f for f in queryable_fields if _type_map.get(f, "") not in _INDIVIDUAL_QUERY_TYPES]
+        individual_fields = [f for f in queryable_fields if _type_map.get(f, "") in _INDIVIDUAL_QUERY_TYPES]
+        total_queryable  = len(queryable_fields)
 
         # Get total record count for the scoped set
         count_soql = f"SELECT COUNT(Id) cnt FROM {stored_object}"
@@ -19860,7 +19867,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
 
         scope_label = f" matching `{pop_where}`" if pop_where else " (all records)"
         st.caption(
-            f"Calculating rates for **{len(queryable_fields)} fields** "
+            f"Calculating rates for **{total_queryable} fields** "
             f"across **{total:,} {stored_object}** records{scope_label}…"
         )
 
@@ -19870,9 +19877,14 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         BATCH = 20
         _prog = st.progress(0)
         _status = st.empty()
+        processed = 0
 
-        for i in range(0, len(queryable_fields), BATCH):
-            batch = queryable_fields[i : i + BATCH]
+        def _rate(raw, tot):
+            return round(raw / tot * 100, 2) if tot else 0.0
+
+        # ── Batch aggregate queries (non-textarea) ────────────────────────────
+        for i in range(0, len(batch_fields), BATCH):
+            batch = batch_fields[i : i + BATCH]
             select_parts = [f"COUNT({fld}) f{j}" for j, fld in enumerate(batch)]
             soql = f"SELECT {', '.join(select_parts)} FROM {stored_object}{where_sql}"
             try:
@@ -19880,7 +19892,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                 for j, fld in enumerate(batch):
                     raw = rec.get(f"f{j}") or 0
                     counts[fld] = raw
-                    rates[fld]  = round(raw / total * 100, 1) if total else 0.0
+                    rates[fld]  = _rate(raw, total)
             except Exception:
                 # Batch failed — fall back to individual queries for this batch only
                 for fld in batch:
@@ -19893,14 +19905,34 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                         )
                         populated = _r["records"][0]["cnt"]
                         counts[fld] = populated
-                        rates[fld]  = round(populated / total * 100, 1) if total else 0.0
+                        rates[fld]  = _rate(populated, total)
                     except Exception:
                         counts[fld] = None
                         rates[fld]  = None
 
-            done = min(i + BATCH, len(queryable_fields))
-            _prog.progress(done / len(queryable_fields))
-            _status.caption(f"{done} / {len(queryable_fields)} fields processed…")
+            processed += len(batch)
+            _prog.progress(processed / total_queryable)
+            _status.caption(f"{processed} / {total_queryable} fields processed…")
+
+        # ── Individual queries for TextArea fields ────────────────────────────
+        for fld in individual_fields:
+            try:
+                fld_filter = f"{fld} != null AND {fld} != ''"
+                if pop_where:
+                    fld_filter += f" AND ({pop_where})"
+                _r = sf.query(
+                    f"SELECT COUNT(Id) cnt FROM {stored_object} WHERE {fld_filter}"
+                )
+                populated = _r["records"][0]["cnt"]
+                counts[fld] = populated
+                rates[fld]  = _rate(populated, total)
+            except Exception:
+                counts[fld] = None
+                rates[fld]  = None
+            processed += 1
+            _prog.progress(processed / total_queryable)
+            if processed % 10 == 0:
+                _status.caption(f"{processed} / {total_queryable} fields processed…")
 
         _prog.empty()
         _status.empty()
@@ -20178,7 +20210,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
     _col_config = {
         "Completion %": st.column_config.NumberColumn(
             "Completion %",
-            format="%.1f%%",
+            format="%.2f%%",
             help="Percentage of records in scope where this field is populated",
         ),
     }
