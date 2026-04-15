@@ -19791,6 +19791,7 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         st.session_state[_desc_key] = fresh_desc
 
         rows = []
+        _picklist_defaults: dict[str, str | None] = {}  # field name → default value or None
         for _f in fresh_desc.get("fields", []):
             owner, _ = _detect_integration_owner(_f["name"])
             _ftype = _f.get("type", "").lower()
@@ -19805,6 +19806,14 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
                 _src = "Integration"
             else:
                 _src = "Editable"
+            # Capture the active default picklist value (if any)
+            _default_pl = None
+            if _ftype in ("picklist", "multipicklist"):
+                for _pv in (_f.get("picklistValues") or []):
+                    if _pv.get("defaultValue") and _pv.get("active"):
+                        _default_pl = _pv.get("value")
+                        break
+                _picklist_defaults[_f["name"]] = _default_pl
             rows.append({
                 "Label":        _f.get("label", ""),
                 "API Name":     _f["name"],
@@ -19817,8 +19826,9 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         _new_df["PopCount"]     = None   # filled in when rates are calculated
         _new_df["LastActivity"] = None   # filled in when last activity is fetched
         _new_df["Automation"]   = None   # filled in when automation analysis runs
-        st.session_state["_oe_df"]     = _new_df
-        st.session_state["_oe_object"] = selected_object
+        st.session_state["_oe_df"]               = _new_df
+        st.session_state["_oe_object"]           = selected_object
+        st.session_state["_oe_picklist_defaults"] = _picklist_defaults
         st.session_state.pop("_oe_rates",        None)
         st.session_state.pop("_oe_counts",       None)
         st.session_state.pop("_oe_total",        None)
@@ -19842,18 +19852,34 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
 
     # ── Calculate population rates ────────────────────────────────────────────
     if calc_clicked:
-        # Split queryable fields: most use COUNT(field) in a batch aggregate;
-        # textarea must use COUNT(Id) WHERE field != null individually.
+        # Split queryable fields:
+        #   batch_fields     — COUNT(field) aggregate, up to 20 per SOQL call
+        #   individual_fields — COUNT(Id) WHERE ... per field:
+        #     • textarea (aggregate COUNT not supported for long text)
+        #     • picklist/multipicklist that have a Salesforce default value
+        #       (batch COUNT would include "default-filled" records as populated)
         _type_map = dict(zip(df["API Name"], df["Type"].str.lower()))
+        _pl_defaults: dict = st.session_state.get("_oe_picklist_defaults", {})
         queryable_fields = [
             row["API Name"]
             for _, row in df.iterrows()
             if row["Type"].lower() not in _SKIP_SAMPLE_TYPES
             and row["Type"].lower() not in _ALWAYS_POPULATED_TYPES
         ]
-        batch_fields     = [f for f in queryable_fields if _type_map.get(f, "") not in _INDIVIDUAL_QUERY_TYPES]
-        individual_fields = [f for f in queryable_fields if _type_map.get(f, "") in _INDIVIDUAL_QUERY_TYPES]
-        total_queryable  = len(queryable_fields)
+        # Picklist fields whose Salesforce-defined default is a non-blank string
+        # must be counted individually so we can exclude that default value.
+        _pl_with_default = {
+            f for f in queryable_fields
+            if _type_map.get(f, "") in ("picklist", "multipicklist")
+            and _pl_defaults.get(f)
+        }
+        batch_fields      = [f for f in queryable_fields
+                              if _type_map.get(f, "") not in _INDIVIDUAL_QUERY_TYPES
+                              and f not in _pl_with_default]
+        individual_fields = [f for f in queryable_fields
+                              if _type_map.get(f, "") in _INDIVIDUAL_QUERY_TYPES
+                              or f in _pl_with_default]
+        total_queryable   = len(queryable_fields)
 
         # Get total record count for the scoped set
         count_soql = f"SELECT COUNT(Id) cnt FROM {stored_object}"
@@ -19914,12 +19940,19 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
             _prog.progress(processed / total_queryable)
             _status.caption(f"{processed} / {total_queryable} fields processed…")
 
-        # ── Individual queries for TextArea fields ────────────────────────────
+        # ── Individual queries for TextArea and picklist-with-default fields ───
         for fld in individual_fields:
-            try:
+            ftype = _type_map.get(fld, "")
+            if ftype in ("picklist", "multipicklist") and _pl_defaults.get(fld):
+                # Exclude the Salesforce-defined default value from "populated" count
+                _dv = _pl_defaults[fld].replace("'", "\\'")
+                fld_filter = f"{fld} != null AND {fld} != '{_dv}'"
+            else:
+                # TextArea: exclude null and empty string
                 fld_filter = f"{fld} != null AND {fld} != ''"
-                if pop_where:
-                    fld_filter += f" AND ({pop_where})"
+            if pop_where:
+                fld_filter += f" AND ({pop_where})"
+            try:
                 _r = sf.query(
                     f"SELECT COUNT(Id) cnt FROM {stored_object} WHERE {fld_filter}"
                 )
@@ -20211,7 +20244,11 @@ def render_schema_explorer_page(dry_run_mode: bool, auto_backup: bool):
         "Completion %": st.column_config.NumberColumn(
             "Completion %",
             format="%.2f%%",
-            help="Percentage of records in scope where this field is populated",
+            help=(
+                "Percentage of records in scope where this field is populated. "
+                "For picklist fields with a Salesforce-defined default value, records "
+                "set to that default are excluded — only deliberate selections count."
+            ),
         ),
     }
     if _has_counts:
