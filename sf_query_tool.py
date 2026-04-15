@@ -4527,6 +4527,8 @@ def render_bulk_review_panel(
                 st.session_state.pop("_merge_results_log", None)
                 st.session_state.pop("_merge_results_ready", None)
                 st.session_state.pop("_merge_log_path", None)
+                # Clear the open-Opp cache so triage uses fresh data
+                st.session_state.pop("bulk_open_opp_ids", None)
                 st.rerun()
             return
 
@@ -6393,6 +6395,9 @@ def render_contact_bulk_review_panel(
                 st.session_state.pop("_contact_merge_results_log", None)
                 st.session_state.pop("_contact_merge_results_ready", None)
                 st.session_state.pop("_contact_merge_log_path", None)
+                # Clear the open-Case/Opp cache so triage uses fresh data
+                st.session_state.pop("contact_bulk_open_case_ids", None)
+                st.session_state.pop("contact_bulk_opp_ids", None)
                 st.rerun()
             return
 
