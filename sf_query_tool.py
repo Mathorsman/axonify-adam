@@ -22170,24 +22170,47 @@ def render_csv_loader_page(dry_run_mode: bool, auto_backup: bool):
     if not confirm:
         return
 
-    with st.spinner(f"Running {operation} via Salesforce Bulk API…"):
-        sf = get_sf_connection()
+    # ── Chunked execution with progress bar ───────────────────────────────────
+    # Processes records in chunks of 10,000 to avoid Streamlit connection
+    # timeouts on large files. Each chunk is a separate Bulk API job so
+    # partial progress is never lost if the connection drops.
+    CHUNK_SIZE = 10_000
+    total      = len(records)
+    chunks     = [records[i:i + CHUNK_SIZE] for i in range(0, total, CHUNK_SIZE)]
+    n_chunks   = len(chunks)
+
+    progress   = st.progress(0, text=f"Submitting chunk 1 of {n_chunks}…")
+    all_raw    : list[dict] = []
+    total_ok   = 0
+    total_fail = 0
+    all_errors : list      = []
+
+    sf = get_sf_connection()
+    for ci, chunk in enumerate(chunks):
+        progress.progress(ci / n_chunks, text=f"Chunk {ci+1}/{n_chunks} — {len(chunk):,} records…")
         try:
             if operation == "Delete":
-                ids = [r["Id"] for r in records]
-                result = execute_delete(sf, object_name, ids)
+                chunk_ids = [r["Id"] for r in chunk]
+                chunk_result = execute_delete(sf, object_name, chunk_ids)
             elif operation == "Insert":
-                result = _bulk_execute(sf, object_name, records, "insert")
+                chunk_result = _bulk_execute(sf, object_name, chunk, "insert")
             elif operation == "Update":
-                result = execute_update(sf, object_name, records)
+                chunk_result = execute_update(sf, object_name, chunk)
             elif operation == "Upsert":
-                result = _bulk_execute(sf, object_name, records, "upsert", external_id_field=ext_id_field)
+                chunk_result = _bulk_execute(sf, object_name, chunk, "upsert", external_id_field=ext_id_field)
             else:
-                result = {"success": 0, "failed": 0, "errors": ["Unknown operation"]}
+                chunk_result = {"success": 0, "failed": len(chunk), "errors": ["Unknown operation"], "raw_results": []}
         except Exception as e:
-            st.error(f"Bulk API error: {e}")
-            return
+            st.error(f"Bulk API error on chunk {ci+1}: {e}")
+            chunk_result = {"success": 0, "failed": len(chunk), "errors": [str(e)], "raw_results": []}
 
+        total_ok   += chunk_result.get("success", 0)
+        total_fail += chunk_result.get("failed",  0)
+        all_errors += [err for err in chunk_result.get("errors", []) if err]
+        all_raw    += chunk_result.get("raw_results", [])
+
+    progress.progress(1.0, text=f"Done — {total_ok:,} succeeded, {total_fail:,} failed.")
+    result = {"success": total_ok, "failed": total_fail, "errors": all_errors, "raw_results": all_raw}
     st.session_state["_loader_result"] = result
 
     # ── Write audit log ──────────────────────────────────────────────────────
