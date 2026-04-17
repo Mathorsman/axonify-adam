@@ -2246,17 +2246,29 @@ def backup_records(df: pd.DataFrame, operation: str, object_name: str) -> str:
     """
     Saves a DataFrame backup before any update or delete.
     Writes to Supabase backups table when configured; falls back to a local CSV file.
+    Also stores the CSV in session state so a sidebar download button is rendered immediately.
     Returns the backup UUID (Supabase) or file path (local fallback).
     """
-    csv_text = df.to_csv(index=False)
-    user     = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+    csv_text  = df.to_csv(index=False)
+    timestamp = datetime.datetime.now().strftime(TIMESTAMP_FMT)
+    user      = st.session_state.get("sf_user_info", {}).get("email", "unknown")
+
+    # Always keep last backup in session state for the sidebar download widget
+    st.session_state["_last_backup"] = {
+        "csv":       csv_text,
+        "operation": operation,
+        "object":    object_name,
+        "rows":      len(df),
+        "timestamp": timestamp,
+        "filename":  f"backup_{object_name}_{operation}_{timestamp}.csv",
+    }
+
     backup_id = db_save_backup(user, operation, object_name, len(df), csv_text)
     if backup_id is not None:
         return backup_id
     # Fallback: disk write for local dev without Supabase configured
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime(TIMESTAMP_FMT)
-    filename  = f"{BACKUP_DIR}/{object_name}_{operation}_{timestamp}.csv"
+    filename = f"{BACKUP_DIR}/{object_name}_{operation}_{timestamp}.csv"
     df.to_csv(filename, index=False)
     return filename
 
@@ -11970,6 +11982,24 @@ def render_sidebar_nav():
             st.markdown('<div class="safety-banner">⚠️ Dry Run OFF — changes execute immediately.</div>', unsafe_allow_html=True)
         if not auto_backup:
             st.markdown('<div class="safety-banner">⚠️ Auto-Backup OFF — no CSV created before changes.</div>', unsafe_allow_html=True)
+
+    # ── Last Backup Download ───────────────────────────────────────────────────────────
+    last_bk = st.session_state.get("_last_backup")
+    if last_bk:
+        st.markdown("---")
+        st.markdown("**💾  Last Backup Ready**")
+        st.caption(
+            f"{last_bk['object']} · {last_bk['operation']} · "
+            f"{last_bk['rows']:,} records · {last_bk['timestamp']}"
+        )
+        st.download_button(
+            "⬇  Download Backup CSV",
+            data=last_bk["csv"].encode("utf-8"),
+            file_name=last_bk["filename"],
+            mime="text/csv",
+            key="sidebar_backup_dl",
+            use_container_width=True,
+        )
 
     # ── Org Reference ─────────────────────────────────────────────────────────────────
     st.markdown("---")
