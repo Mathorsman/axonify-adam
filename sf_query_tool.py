@@ -25014,8 +25014,8 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
         )
         scan_all_toggle = col4.checkbox("Scan all contacts (no limit)", key="crm_stale_scan_all")
 
-    # offset state for resumable multi-batch scanning
-    if "crm_stale_offset"        not in st.session_state: st.session_state["crm_stale_offset"]        = 0
+    # keyset cursor state for resumable multi-batch scanning (avoids Salesforce's 2,000-row OFFSET cap)
+    if "crm_stale_last_id"       not in st.session_state: st.session_state["crm_stale_last_id"]       = ""
     if "crm_stale_total_scanned" not in st.session_state: st.session_state["crm_stale_total_scanned"] = 0
     if "crm_stale_results"       not in st.session_state: st.session_state["crm_stale_results"]       = []
 
@@ -25024,14 +25024,16 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
         quoted = ", ".join(f"'{t}'" for t in acct_types)
         tf = f"AND Account.Type IN ({quoted})"
 
-    def _soql_for_offset(offset: int, limit: int) -> str:
+    def _soql_keyset(last_id: str, limit: int) -> str:
+        # Keyset pagination: no OFFSET (Salesforce caps OFFSET at 2,000 rows)
+        id_filter = f"AND Id > '{last_id}'" if last_id else ""
         return (
             "SELECT Id, Name, Email, Phone, MobilePhone, Title, "
             "LastActivityDate, Account.Name, Account.Type "
             "FROM Contact "
-            f"WHERE IsDeleted = false {tf} "
-            "ORDER BY LastActivityDate ASC NULLS FIRST "
-            f"LIMIT {limit} OFFSET {offset}"
+            f"WHERE IsDeleted = false {tf} {id_filter} "
+            "ORDER BY Id ASC "
+            f"LIMIT {limit}"
         )
 
     def _score_records(records: list) -> list:
@@ -25063,42 +25065,43 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
 
     col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
 
+    has_more = bool(st.session_state.get("crm_stale_last_id"))
+    scanned_so_far = st.session_state.get("crm_stale_total_scanned", 0)
+
     with col_btn1:
         start_new = st.button("🔍  New Scan (reset)", key="crm_stale_scan", type="primary")
     with col_btn2:
         resume    = st.button(
-            f"▶  Next Batch (offset {st.session_state['crm_stale_offset']:,})",
+            f"▶  Next Batch ({scanned_so_far:,} scanned so far)",
             key="crm_stale_resume",
-            disabled=st.session_state["crm_stale_offset"] == 0 and not st.session_state["crm_stale_results"],
+            disabled=not has_more,
         )
     with col_btn3:
         if st.button("🗑  Clear", key="crm_stale_clear"):
             st.session_state["crm_stale_results"]       = []
-            st.session_state["crm_stale_offset"]        = 0
+            st.session_state["crm_stale_last_id"]       = ""
             st.session_state["crm_stale_total_scanned"] = 0
             st.rerun()
 
     if start_new:
         st.session_state["crm_stale_results"]       = []
-        st.session_state["crm_stale_offset"]        = 0
+        st.session_state["crm_stale_last_id"]       = ""
         st.session_state["crm_stale_total_scanned"] = 0
 
     if start_new or resume:
-        sf = get_sf_connection()
-        offset = st.session_state["crm_stale_offset"]
+        sf      = get_sf_connection()
+        last_id = "" if start_new else st.session_state.get("crm_stale_last_id", "")
 
         if scan_all_toggle:
-            # fetch everything from current offset in one query_all call (handles SF cursor pagination)
+            # query_all uses SF server-side cursor (queryMore) — no OFFSET, no row cap
             soql_all = (
                 "SELECT Id, Name, Email, Phone, MobilePhone, Title, "
                 "LastActivityDate, Account.Name, Account.Type "
                 "FROM Contact "
                 f"WHERE IsDeleted = false {tf} "
-                "ORDER BY LastActivityDate ASC NULLS FIRST"
+                "ORDER BY Id ASC"
             )
-            if offset:
-                soql_all += f" OFFSET {offset}"
-            prog_bar  = st.progress(0, text="Fetching all contacts from Salesforce…")
+            prog_bar = st.progress(0, text="Fetching all contacts from Salesforce…")
             try:
                 records = sf.query_all(soql_all).get("records", [])
             except Exception as exc:
@@ -25109,14 +25112,14 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
             existing = {r["Id"] for r in st.session_state["crm_stale_results"]}
             st.session_state["crm_stale_results"] += [r for r in new_rows if r["Id"] not in existing]
             st.session_state["crm_stale_total_scanned"] += len(records)
-            st.session_state["crm_stale_offset"] = 0  # exhausted
+            st.session_state["crm_stale_last_id"] = ""  # fully exhausted
             prog_bar.progress(100, text=f"Done — {len(records):,} contacts scanned.")
         else:
-            # batched OFFSET scan
-            limit = int(batch_size)
-            prog_bar = st.progress(0, text=f"Querying batch at offset {offset:,}…")
+            # keyset batch scan — WHERE Id > last_id, no OFFSET used
+            limit    = int(batch_size)
+            prog_bar = st.progress(0, text=f"Querying next {limit:,} contacts…")
             try:
-                records = sf.query(_soql_for_offset(offset, limit)).get("records", [])
+                records = sf.query(_soql_keyset(last_id, limit)).get("records", [])
             except Exception as exc:
                 st.error(f"Query failed: {exc}")
                 return
@@ -25125,9 +25128,11 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
             existing = {r["Id"] for r in st.session_state["crm_stale_results"]}
             st.session_state["crm_stale_results"] += [r for r in new_rows if r["Id"] not in existing]
             st.session_state["crm_stale_total_scanned"] += len(records)
-            next_offset = offset + len(records)
-            st.session_state["crm_stale_offset"] = next_offset if len(records) == limit else 0
-            done_msg = "Done — no more records." if len(records) < limit else f"Batch done. {next_offset:,} scanned so far."
+            # advance cursor: last Id in this batch becomes the next lower bound
+            new_last_id = records[-1]["Id"] if records else ""
+            st.session_state["crm_stale_last_id"] = new_last_id if len(records) == limit else ""
+            total = st.session_state["crm_stale_total_scanned"]
+            done_msg = "Done — no more records." if len(records) < limit else f"Batch done. {total:,} scanned so far — click Next Batch to continue."
             prog_bar.progress(100, text=done_msg)
 
         st.session_state["crm_stale_results"].sort(key=lambda x: x["Staleness Score"], reverse=True)
@@ -25139,7 +25144,7 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
 
     results       = st.session_state.get("crm_stale_results") or []
     total_scanned = st.session_state.get("crm_stale_total_scanned", 0)
-    next_offset   = st.session_state.get("crm_stale_offset", 0)
+    more_to_scan  = bool(st.session_state.get("crm_stale_last_id"))
 
     if not results:
         st.info("Run a scan to see results.")
@@ -25149,8 +25154,8 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
     medium = sum(1 for r in results if 40 <= r["Staleness Score"] < 70)
     low    = sum(1 for r in results if r["Staleness Score"] < 40)
 
-    pct = f" ({len(results)/total_scanned:.1%} hit rate)" if total_scanned else ""
-    more_hint = f" — click **Next Batch** to continue scanning from {next_offset:,}" if next_offset else ""
+    pct       = f" ({len(results)/total_scanned:.1%} hit rate)" if total_scanned else ""
+    more_hint = " — click **Next Batch** to continue" if more_to_scan else ""
     st.success(f"**{len(results)}** potentially stale contacts from **{total_scanned:,}** scanned{pct}.{more_hint}")
     m1, m2, m3 = st.columns(3)
     m1.metric("High confidence (≥70)", high,   delta="Flag + action")
