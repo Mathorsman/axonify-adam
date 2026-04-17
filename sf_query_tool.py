@@ -352,6 +352,21 @@ def db_get_operation_logs(n: int = 30) -> list[dict]:
         return []
 
 
+def db_get_backups(limit: int = 50) -> list[dict]:
+    sb = _get_db_connection()
+    if sb is None:
+        return []
+    try:
+        res = (sb.table("backups")
+               .select("id,sf_user,operation,object_name,record_count,created_at")
+               .order("created_at", desc=True)
+               .limit(limit)
+               .execute())
+        return res.data or []
+    except Exception:
+        return []
+
+
 def db_get_runbook_runs(runbook_id: "int | None" = None, limit: int = 50) -> list[dict]:
     sb = _get_db_connection()
     if sb is None:
@@ -20910,7 +20925,7 @@ def render_change_log_page(dry_run_mode: bool, auto_backup: bool):
         "AI-formatted release notes. SetupAuditTrail retains 180 days of history."
     )
 
-    tab_audit, tab_stakeholder = st.tabs(["Audit Trail", "Stakeholder Summary"])
+    tab_audit, tab_stakeholder, tab_backups = st.tabs(["Audit Trail", "Stakeholder Summary", "💾  Backup Downloads"])
 
     with tab_stakeholder:
         st.subheader("Stakeholder Summary")
@@ -21073,6 +21088,66 @@ def render_change_log_page(dry_run_mode: bool, auto_backup: bool):
                             mime="text/markdown",
                             key="cl_export_md",
                         )
+
+    with tab_backups:
+        st.subheader("Backup Downloads")
+        st.caption(
+            "Every write operation creates a pre-change snapshot stored in Supabase. "
+            "Download any backup here as a CSV."
+        )
+
+        if _get_db_connection() is None:
+            st.info("Backup downloads require Supabase to be configured.")
+        else:
+            col_lim, col_refresh = st.columns([2, 1])
+            with col_lim:
+                bk_limit = st.number_input(
+                    "Show most recent N backups", min_value=5, max_value=500, value=50, step=5,
+                    key="bk_limit",
+                )
+            with col_refresh:
+                st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+                if st.button("🔄  Refresh", key="bk_refresh"):
+                    st.session_state.pop("_bk_list", None)
+
+            if "_bk_list" not in st.session_state:
+                with st.spinner("Loading backups…"):
+                    st.session_state["_bk_list"] = db_get_backups(limit=int(bk_limit))
+
+            backups = st.session_state.get("_bk_list", [])
+            if not backups:
+                st.info("No backups found. Run any write operation with auto-backup enabled to create one.")
+            else:
+                st.caption(f"{len(backups)} backup(s) found — most recent first.")
+                for bk in backups:
+                    bk_id    = bk.get("id", "")
+                    op       = bk.get("operation", "unknown")
+                    obj      = bk.get("object_name", "")
+                    count    = bk.get("record_count", 0)
+                    user     = bk.get("sf_user", "")
+                    ts       = str(bk.get("created_at", ""))[:16].replace("T", " ")
+                    label    = f"{ts}  ·  {op}  ·  {obj}  ·  {count:,} records  ·  {user}"
+
+                    col_label, col_btn = st.columns([5, 1])
+                    with col_label:
+                        st.markdown(f"`{label}`")
+                    with col_btn:
+                        # Fetch CSV on demand — avoid loading all blobs upfront
+                        btn_key = f"bk_dl_{bk_id}"
+                        if st.button("📥  Download", key=btn_key):
+                            csv_text = db_get_backup(str(bk_id))
+                            if csv_text:
+                                safe_ts  = ts.replace(" ", "_").replace(":", "")
+                                filename = f"backup_{obj}_{op}_{safe_ts}.csv"
+                                st.download_button(
+                                    "⬇  Save CSV",
+                                    data=csv_text.encode("utf-8"),
+                                    file_name=filename,
+                                    mime="text/csv",
+                                    key=f"bk_save_{bk_id}",
+                                )
+                            else:
+                                st.error("Could not retrieve backup data.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
