@@ -367,6 +367,49 @@ def db_get_backups(limit: int = 50) -> list[dict]:
         return []
 
 
+def db_save_receipt(sf_user: str, operation: str, object_name: str,
+                    source_file: str, record_count: int,
+                    succeeded: int, failed: int, csv_text: str) -> str | None:
+    sb = _get_db_connection()
+    if sb is None:
+        return None
+    try:
+        res = sb.table("loader_receipts").insert({
+            "sf_user": sf_user, "operation": operation, "object_name": object_name,
+            "source_file": source_file, "record_count": record_count,
+            "succeeded": succeeded, "failed": failed, "csv_data": csv_text,
+        }).execute()
+        return str(res.data[0]["id"]) if res.data else None
+    except Exception as e:
+        st.warning(f"Could not save receipt to database: {e}")
+        return None
+
+
+def db_get_receipts(limit: int = 50) -> list[dict]:
+    sb = _get_db_connection()
+    if sb is None:
+        return []
+    try:
+        return (sb.table("loader_receipts")
+                .select("id,sf_user,operation,object_name,source_file,record_count,succeeded,failed,created_at")
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()).data or []
+    except Exception:
+        return []
+
+
+def db_get_receipt(receipt_id: str) -> str | None:
+    sb = _get_db_connection()
+    if sb is None:
+        return None
+    try:
+        res = sb.table("loader_receipts").select("csv_data").eq("id", receipt_id).execute()
+        return res.data[0]["csv_data"] if res.data else None
+    except Exception:
+        return None
+
+
 def db_get_runbook_runs(runbook_id: "int | None" = None, limit: int = 50) -> list[dict]:
     sb = _get_db_connection()
     if sb is None:
@@ -20955,7 +20998,7 @@ def render_change_log_page(dry_run_mode: bool, auto_backup: bool):
         "AI-formatted release notes. SetupAuditTrail retains 180 days of history."
     )
 
-    tab_audit, tab_stakeholder, tab_backups = st.tabs(["Audit Trail", "Stakeholder Summary", "💾  Backup Downloads"])
+    tab_audit, tab_stakeholder, tab_backups, tab_receipts = st.tabs(["Audit Trail", "Stakeholder Summary", "💾  Backup Downloads", "🧾  Receipt Downloads"])
 
     with tab_stakeholder:
         st.subheader("Stakeholder Summary")
@@ -21178,6 +21221,66 @@ def render_change_log_page(dry_run_mode: bool, auto_backup: bool):
                                 )
                             else:
                                 st.error("Could not retrieve backup data.")
+
+    with tab_receipts:
+        st.subheader("Receipt Downloads")
+        st.caption(
+            "Per-record results from every CSV Data Loader operation — "
+            "SalesforceId, Status, ErrorCode, ErrorMessage for each row."
+        )
+
+        if _get_db_connection() is None:
+            st.info("Receipt downloads require Supabase to be configured.")
+        else:
+            col_lim2, col_refresh2 = st.columns([2, 1])
+            with col_lim2:
+                rc_limit = st.number_input(
+                    "Show most recent N receipts", min_value=5, max_value=500, value=50, step=5,
+                    key="rc_limit",
+                )
+            with col_refresh2:
+                st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+                if st.button("🔄  Refresh", key="rc_refresh"):
+                    st.session_state.pop("_rc_list", None)
+
+            if "_rc_list" not in st.session_state:
+                with st.spinner("Loading receipts…"):
+                    st.session_state["_rc_list"] = db_get_receipts(limit=int(rc_limit))
+
+            receipts = st.session_state.get("_rc_list", [])
+            if not receipts:
+                st.info("No receipts found. Run a CSV Data Loader operation to create one.")
+            else:
+                st.caption(f"{len(receipts)} receipt(s) found — most recent first.")
+                for rc in receipts:
+                    rc_id    = rc.get("id", "")
+                    op       = rc.get("operation", "")
+                    obj      = rc.get("object_name", "")
+                    src      = rc.get("source_file", "")
+                    count    = rc.get("record_count", 0)
+                    ok       = rc.get("succeeded", 0)
+                    fail     = rc.get("failed", 0)
+                    ts       = str(rc.get("created_at", ""))[:16].replace("T", " ")
+                    label    = f"{ts}  ·  {op}  ·  {obj}  ·  {ok:,} ok / {fail:,} failed  ·  {src}"
+
+                    col_label, col_btn = st.columns([5, 1])
+                    with col_label:
+                        st.markdown(f"`{label}`")
+                    with col_btn:
+                        if st.button("📥  Download", key=f"rc_dl_{rc_id}"):
+                            csv_text = db_get_receipt(str(rc_id))
+                            if csv_text:
+                                safe_ts   = ts.replace(" ", "_").replace(":", "")
+                                fname     = f"receipt_{obj}_{op}_{safe_ts}.csv"
+                                st.download_button(
+                                    "⬇  Save CSV",
+                                    data=csv_text.encode("utf-8"),
+                                    file_name=fname,
+                                    mime="text/csv",
+                                    key=f"rc_save_{rc_id}",
+                                )
+                            else:
+                                st.error("Could not retrieve receipt data.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -22232,6 +22335,19 @@ def render_csv_loader_page(dry_run_mode: bool, auto_backup: bool):
     receipt_path  = os.path.join(BACKUP_DIR, receipt_fname)
     os.makedirs(BACKUP_DIR, exist_ok=True)
     receipt_df.to_csv(receipt_path, index=False)
+
+    # Persist receipt to Supabase so it survives session resets
+    receipt_csv_text = receipt_df.to_csv(index=False)
+    db_save_receipt(
+        sf_user      = st.session_state.get("sf_user_info", {}).get("email", "unknown"),
+        operation    = operation,
+        object_name  = object_name,
+        source_file  = st.session_state.get("_loader_filename", ""),
+        record_count = len(records),
+        succeeded    = result["success"],
+        failed       = result["failed"],
+        csv_text     = receipt_csv_text,
+    )
 
     # ── Results summary ───────────────────────────────────────────────────────
     s, f = result["success"], result["failed"]
