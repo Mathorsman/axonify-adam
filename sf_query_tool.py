@@ -11917,6 +11917,7 @@ def render_sidebar_nav():
 
     # ── DATA HEALTH ───────────────────────────────────────────────────────────────────
     with st.expander("🧹  Data Health", expanded=True):
+        _nav_btn("🏥  CRM Health", "crm_health")
         _nav_btn("🧹  Data Quality Centre", "data_quality")
         _nav_btn("📦  Data Archival", "archival")
         _nav_btn("🗺️  Territory Management", "territory")
@@ -23546,6 +23547,12 @@ def main():
         "contact_dedupe_merged":      set(),
         "contact_dedupe_case_ids":    None,
         "contact_dedupe_last_contact_count": 0,
+        # CRM Health state
+        "crm_stale_results":         None,
+        "crm_val_results":           None,
+        "crm_fuzz_pairs":            None,
+        "crm_fuzz_review_idx":       0,
+        "crm_replace_acct_contacts": [],
         # Reassignment Wizard state
         "rz_step":             1,
         "rz_territory":        "",
@@ -23620,6 +23627,8 @@ def main():
         render_data_quality_page(dry_run_mode, auto_backup)
     elif page == "archival":
         render_archival_page(dry_run_mode, auto_backup)
+    elif page == "crm_health":
+        render_crm_health_page(dry_run_mode, auto_backup)
     elif page == "territory":
         render_territory_tab()
     elif page == "permissions":
@@ -23944,6 +23953,8 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
         render_data_quality_page(dry_run_mode, auto_backup)
     elif page == "archival":
         render_archival_page(dry_run_mode, auto_backup)
+    elif page == "crm_health":
+        render_crm_health_page(dry_run_mode, auto_backup)
     elif page == "territory":
         render_territory_tab()
     elif page == "permissions":
@@ -24700,6 +24711,1062 @@ def render_data_quality_page(dry_run_mode: bool, auto_backup: bool):
 
     with tab_rules:
         _render_rules_editor_tab()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: CRM HEALTH  (page = "crm_health")
+#
+# The Self-Cleaning CRM — four continuously-running pillars:
+#   Pillar 1  Staleness Detection   — score contacts by inactivity + title signals
+#   Pillar 2  Replacement Queue     — stage replacement contacts for stale ones
+#   Pillar 3  Email & Phone         — DNS/MX + syntax + role-address validation
+#   Pillar 4  Fuzzy Duplicates      — rapidfuzz pairwise scoring + merge queue
+# ══════════════════════════════════════════════════════════════════════════════
+
+import re as _crm_re
+
+try:
+    from rapidfuzz import fuzz as _rf_fuzz
+    _RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    _RAPIDFUZZ_AVAILABLE = False
+
+try:
+    import dns.resolver as _dns_resolver
+    _DNSPYTHON_AVAILABLE = True
+except ImportError:
+    _DNSPYTHON_AVAILABLE = False
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+_CRM_FUZZY_THRESHOLD    = 72   # minimum score to surface a dupe pair
+_CRM_ROLE_ADDRESSES     = frozenset({
+    "noreply", "no-reply", "donotreply", "admin", "info", "support",
+    "hello", "contact", "sales", "marketing", "team", "newsletter",
+    "help", "webmaster", "postmaster", "billing", "hr", "legal",
+    "jobs", "careers", "press", "media", "privacy", "abuse",
+})
+_CRM_STALE_TITLE_PATTERNS = [
+    r"\bformer\b", r"\bex[- ]\b", r"\balumni\b", r"\bretired\b",
+]
+
+
+# ── Supabase helpers ──────────────────────────────────────────────────────────
+
+def db_save_crm_health_run(run_type: str, stats: dict) -> None:
+    sb = _get_db_connection()
+    if sb is None:
+        return
+    try:
+        sb.table("crm_health_runs").insert({
+            "run_type": run_type,
+            "stats":    json.dumps(stats),
+            "ran_at":   datetime.datetime.utcnow().isoformat(),
+        }).execute()
+    except Exception:
+        pass
+
+
+def db_get_crm_health_runs(run_type: str | None = None, limit: int = 20) -> list[dict]:
+    sb = _get_db_connection()
+    if sb is None:
+        return []
+    try:
+        q = sb.table("crm_health_runs").select("*").order("ran_at", desc=True).limit(limit)
+        if run_type:
+            q = q.eq("run_type", run_type)
+        return q.execute().data or []
+    except Exception:
+        return []
+
+
+# ── Core utilities ────────────────────────────────────────────────────────────
+
+def _crm_check_email(email: str) -> tuple[str, str]:
+    """
+    Returns (status, reason).
+    status: "valid" | "invalid_syntax" | "no_mx" | "role" | "empty"
+    """
+    if not email or not email.strip():
+        return "empty", "No email address"
+
+    email = email.strip().lower()
+
+    if not _crm_re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+        return "invalid_syntax", "Failed syntax check"
+
+    local, domain = email.split("@", 1)
+
+    if local in _CRM_ROLE_ADDRESSES:
+        return "role", f"Role address ({local}@)"
+
+    if not _DNSPYTHON_AVAILABLE:
+        return "valid", "Syntax OK (MX check skipped — dnspython not installed)"
+
+    try:
+        _dns_resolver.resolve(domain, "MX", lifetime=4.0)
+        return "valid", f"MX record found for {domain}"
+    except _dns_resolver.NXDOMAIN:
+        return "no_mx", f"Domain {domain} does not exist"
+    except _dns_resolver.NoAnswer:
+        return "no_mx", f"No MX record for {domain}"
+    except Exception as exc:
+        return "valid", f"DNS inconclusive ({exc}) — treated as valid"
+
+
+def _crm_score_staleness(contact: dict) -> tuple[int, list[str]]:
+    """Score a contact's staleness 0–100. Returns (score, signals)."""
+    score   = 0
+    signals = []
+
+    last_act = contact.get("LastActivityDate")
+    if last_act is None:
+        score += 35
+        signals.append("No activity on record")
+    else:
+        try:
+            last_dt  = datetime.datetime.strptime(str(last_act)[:10], "%Y-%m-%d")
+            days_ago = (datetime.datetime.utcnow() - last_dt).days
+            if days_ago > 730:
+                score += 30
+                signals.append(f"Last activity {days_ago}d ago (>2 yr)")
+            elif days_ago > 365:
+                score += 20
+                signals.append(f"Last activity {days_ago}d ago (>1 yr)")
+        except Exception:
+            pass
+
+    if not contact.get("Email"):
+        score += 20
+        signals.append("No email address")
+
+    title = (contact.get("Title") or "").lower()
+    for pat in _CRM_STALE_TITLE_PATTERNS:
+        if _crm_re.search(pat, title):
+            score += 40
+            signals.append(f"Title signals departure: '{contact.get('Title')}'")
+            break
+
+    acct_type = (contact.get("Account_Type") or "").lower()
+    if "former" in acct_type or "churned" in acct_type:
+        score += 25
+        signals.append(f"Account type: {contact.get('Account_Type')}")
+
+    if not contact.get("Phone") and not contact.get("MobilePhone"):
+        score += 5
+        signals.append("No phone number")
+
+    return min(score, 100), signals
+
+
+def _crm_normalize_phone(phone: str) -> str:
+    return _crm_re.sub(r'\D', '', phone or '')
+
+
+def _crm_fuzzy_score_pair(c1: dict, c2: dict) -> int:
+    """Score two contacts as potential duplicates (0–100)."""
+    if not _RAPIDFUZZ_AVAILABLE:
+        return 0
+
+    scores: list[tuple[float, float]] = []
+
+    n1 = (c1.get("Name") or "").strip()
+    n2 = (c2.get("Name") or "").strip()
+    if n1 and n2:
+        scores.append((_rf_fuzz.token_sort_ratio(n1, n2), 0.40))
+
+    e1 = (c1.get("Email") or "").lower()
+    e2 = (c2.get("Email") or "").lower()
+    if e1 and e2:
+        if e1 == e2:
+            return 100
+        scores.append((_rf_fuzz.ratio(e1, e2), 0.35))
+
+    a1 = (c1.get("AccountName") or "").strip()
+    a2 = (c2.get("AccountName") or "").strip()
+    if a1 and a2:
+        scores.append((_rf_fuzz.token_sort_ratio(a1, a2), 0.25))
+
+    if not scores:
+        return 0
+
+    total_w  = sum(w for _, w in scores)
+    weighted = sum(s * w for s, w in scores) / total_w
+
+    p1 = _crm_normalize_phone(c1.get("Phone") or c1.get("MobilePhone") or "")
+    p2 = _crm_normalize_phone(c2.get("Phone") or c2.get("MobilePhone") or "")
+    if p1 and p2 and p1 == p2 and len(p1) >= 7:
+        weighted = min(100.0, weighted + 15)
+
+    return int(weighted)
+
+
+# ── Sub-tab: Health Dashboard ─────────────────────────────────────────────────
+
+def _render_crm_dashboard_tab() -> None:
+    st.subheader("CRM Health Overview")
+    st.caption("Live metrics from Salesforce. Run each pillar to see scan history below.")
+
+    sf = get_sf_connection()
+
+    with st.spinner("Loading org metrics..."):
+        try:
+            total     = sf.query("SELECT COUNT() FROM Contact WHERE IsDeleted = false").get("totalSize", 0)
+            no_email  = sf.query("SELECT COUNT() FROM Contact WHERE Email = null AND IsDeleted = false").get("totalSize", 0)
+            no_act    = sf.query("SELECT COUNT() FROM Contact WHERE LastActivityDate = null AND IsDeleted = false").get("totalSize", 0)
+            stale_ct  = 0
+            email_inv = 0
+            try:
+                stale_ct = sf.query("SELECT COUNT() FROM Contact WHERE Stale_Flag__c = true AND IsDeleted = false").get("totalSize", 0)
+            except Exception:
+                pass
+            try:
+                email_inv = sf.query("SELECT COUNT() FROM Contact WHERE Email_Valid__c = false AND IsDeleted = false").get("totalSize", 0)
+            except Exception:
+                pass
+        except Exception as exc:
+            st.error(f"Could not load metrics: {exc}")
+            return
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Contacts", f"{total:,}")
+    c2.metric("No Email",       f"{no_email:,}",
+              delta=f"{no_email / max(total, 1) * 100:.1f}%", delta_color="inverse")
+    c3.metric("Never Active",   f"{no_act:,}",
+              delta=f"{no_act / max(total, 1) * 100:.1f}%",   delta_color="inverse")
+    c4.metric("Flagged Stale",  f"{stale_ct:,}" if stale_ct else "—",
+              help="Requires Stale_Flag__c field")
+    c5.metric("Email Invalid",  f"{email_inv:,}" if email_inv else "—",
+              help="Requires Email_Valid__c field")
+
+    # Scan history
+    st.markdown("---")
+    st.markdown("**Recent Scan History**")
+    runs = db_get_crm_health_runs(limit=10)
+    if runs:
+        rows = []
+        for r in runs:
+            try:
+                stats = json.loads(r.get("stats", "{}"))
+            except Exception:
+                stats = {}
+            rows.append({
+                "Run Type": r.get("run_type", ""),
+                "Ran At":   (r.get("ran_at") or "")[:16].replace("T", " "),
+                "Scanned":  stats.get("scanned", "—"),
+                "Flagged":  stats.get("flagged", "—"),
+                "Written":  stats.get("written", "—"),
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    else:
+        st.info("No scan history yet. Supabase `crm_health_runs` table needed — see setup note below.")
+
+    # Custom field status check
+    st.markdown("---")
+    st.markdown("**Custom Field Status**")
+    st.caption("These fields must be created in Salesforce Setup before write-back works.")
+    fields = [
+        ("Stale_Flag__c",           "Checkbox", "Contact"),
+        ("Stale_Score__c",          "Percent",  "Contact"),
+        ("Email_Valid__c",          "Checkbox", "Contact"),
+        ("Phone_Valid__c",          "Checkbox", "Contact"),
+        ("Email_Validated_Date__c", "Date",     "Contact"),
+        ("Contact_Source__c",       "Text",     "Contact"),
+    ]
+    for field, ftype, obj in fields:
+        exists = False
+        try:
+            sf.query(f"SELECT {field} FROM {obj} LIMIT 1")
+            exists = True
+        except Exception:
+            pass
+        icon = "✅" if exists else "❌"
+        st.markdown(f"{icon}  `{field}` ({ftype} on {obj})")
+
+    with st.expander("📋  Supabase setup — crm_health_runs table", expanded=False):
+        st.code("""
+CREATE TABLE IF NOT EXISTS crm_health_runs (
+    id       BIGSERIAL PRIMARY KEY,
+    run_type TEXT      NOT NULL,
+    stats    JSONB,
+    ran_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX ON crm_health_runs (run_type, ran_at DESC);
+""", language="sql")
+
+
+# ── Sub-tab: Pillar 1 — Staleness Detection ───────────────────────────────────
+
+def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
+    st.subheader("Contact Staleness Detection")
+    st.caption(
+        "Scores contacts by inactivity, missing data, and title signals. "
+        "High-scoring contacts are likely to have left their company."
+    )
+
+    with st.expander("⚙️  Scan filters", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        min_score = col1.slider("Min staleness score to show", 20, 90, 40, key="crm_stale_min_score")
+        max_scan  = col2.number_input("Max contacts to scan", 50, 2000, 500, step=50, key="crm_stale_max_scan")
+        acct_types = col3.multiselect(
+            "Limit to account types (blank = all)",
+            ["Customer", "Prospect", "Partner", "Competitor", "Other"],
+            key="crm_stale_acct_types",
+        )
+
+    if st.button("🔍  Scan for Stale Contacts", key="crm_stale_scan", type="primary"):
+        sf  = get_sf_connection()
+        tf  = ""
+        if acct_types:
+            quoted = ", ".join(f"'{t}'" for t in acct_types)
+            tf = f"AND Account.Type IN ({quoted})"
+
+        soql = f"""
+            SELECT Id, Name, Email, Phone, MobilePhone, Title,
+                   LastActivityDate, Account.Name, Account.Type
+            FROM Contact
+            WHERE IsDeleted = false {tf}
+            ORDER BY LastActivityDate ASC NULLS FIRST
+            LIMIT {int(max_scan)}
+        """
+        with st.spinner(f"Querying up to {int(max_scan)} contacts..."):
+            try:
+                records = sf.query_all(soql).get("records", [])
+            except Exception as exc:
+                st.error(f"Query failed: {exc}")
+                return
+
+        if not records:
+            st.info("No contacts returned.")
+            return
+
+        rows = []
+        for r in records:
+            flat = {
+                "Id":               r.get("Id"),
+                "Name":             r.get("Name"),
+                "Email":            r.get("Email"),
+                "Phone":            r.get("Phone") or r.get("MobilePhone"),
+                "Title":            r.get("Title"),
+                "LastActivityDate": r.get("LastActivityDate"),
+                "Account_Name":     (r.get("Account") or {}).get("Name"),
+                "Account_Type":     (r.get("Account") or {}).get("Type"),
+            }
+            score, signals = _crm_score_staleness(flat)
+            if score >= min_score:
+                rows.append({
+                    "Id":              flat["Id"],
+                    "Name":            flat["Name"] or "",
+                    "Title":           flat["Title"] or "",
+                    "Account":         flat["Account_Name"] or "",
+                    "Email":           flat["Email"] or "",
+                    "Last Activity":   str(flat["LastActivityDate"] or "Never")[:10],
+                    "Staleness Score": score,
+                    "Signals":         " · ".join(signals),
+                })
+
+        rows.sort(key=lambda x: x["Staleness Score"], reverse=True)
+        st.session_state["crm_stale_results"] = rows
+        db_save_crm_health_run("staleness", {
+            "scanned": len(records),
+            "flagged": len(rows),
+            "written": 0,
+        })
+
+    results = st.session_state.get("crm_stale_results")
+    if not results:
+        st.info("Run a scan to see results.")
+        return
+
+    high   = sum(1 for r in results if r["Staleness Score"] >= 70)
+    medium = sum(1 for r in results if 40 <= r["Staleness Score"] < 70)
+    low    = sum(1 for r in results if r["Staleness Score"] < 40)
+
+    st.success(f"**{len(results)}** potentially stale contacts found.")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("High confidence (≥70)", high,   delta="Flag + action")
+    m2.metric("Medium (40–69)",         medium, delta="Review")
+    m3.metric("Low (<40)",              low,    delta="Monitor")
+
+    df = pd.DataFrame(results)
+    st.dataframe(
+        df.drop(columns=["Id"]),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Staleness Score": st.column_config.ProgressColumn(
+                "Staleness Score", min_value=0, max_value=100, format="%d"
+            )
+        },
+    )
+
+    st.markdown("---")
+    st.markdown("**Write flags to Salesforce**")
+    write_thresh = st.slider(
+        "Flag contacts with score ≥", 40, 100, 70, key="crm_stale_write_thresh",
+        help="Only contacts at or above this score will have Stale_Flag__c = true.",
+    )
+    to_write = [r for r in results if r["Staleness Score"] >= write_thresh]
+    st.caption(f"{len(to_write)} contacts will be updated · {len(results) - len(to_write)} below threshold skipped.")
+
+    if dry_run_mode:
+        st.info(f"**Dry Run:** Would set `Stale_Flag__c = true` on {len(to_write)} contacts.")
+        if to_write and st.button("Preview", key="crm_stale_preview"):
+            st.dataframe(
+                df[df["Staleness Score"] >= write_thresh][["Name", "Account", "Staleness Score", "Signals"]],
+                hide_index=True, use_container_width=True,
+            )
+    else:
+        if st.button(f"✅  Write Stale_Flag__c to {len(to_write)} contacts", key="crm_stale_write", type="primary"):
+            sf = get_sf_connection()
+            backup_records(
+                df[df["Staleness Score"] >= write_thresh][["Id", "Name", "Email", "Staleness Score"]],
+                "CRM Health - Stale Flag", "Contact",
+            )
+            updates = [
+                {"Id": r["Id"], "Stale_Flag__c": True, "Stale_Score__c": r["Staleness Score"]}
+                for r in to_write
+            ]
+            with st.spinner("Writing to Salesforce..."):
+                res = execute_update(sf, "Contact", updates)
+            if res["success"]:
+                st.success(f"Updated {res['success']} contacts.")
+                db_save_crm_health_run("staleness_write", {
+                    "scanned": len(results), "flagged": len(to_write), "written": res["success"],
+                })
+            if res["failed"]:
+                st.error(f"{res['failed']} records failed: {res.get('errors', [])[:3]}")
+
+    with st.expander("🔗  Export for Clay enrichment", expanded=False):
+        st.info(
+            "Import this CSV into your Clay staleness-check table. "
+            "Clay will cross-reference LinkedIn and write enriched results back to Salesforce."
+        )
+        csv_bytes = df[["Id", "Name", "Email", "Title", "Account"]].to_csv(index=False).encode()
+        st.download_button(
+            "⬇  Export stale candidates",
+            data=csv_bytes,
+            file_name=f"stale_contacts_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
+            mime="text/csv",
+            key="crm_stale_export",
+        )
+
+
+# ── Sub-tab: Pillar 2 — Replacement Queue ────────────────────────────────────
+
+def _render_crm_replacement_tab(dry_run_mode: bool) -> None:
+    st.subheader("Replacement Contact Queue")
+    st.caption(
+        "For each contact flagged as stale, find and stage a replacement "
+        "at the same account."
+    )
+
+    sf = get_sf_connection()
+
+    with st.spinner("Loading stale contacts..."):
+        stale_contacts = []
+        source_note    = ""
+        try:
+            stale_contacts = sf.query_all(
+                "SELECT Id, Name, Email, Title, Account.Name, Account.Id, LastActivityDate "
+                "FROM Contact WHERE Stale_Flag__c = true AND IsDeleted = false "
+                "ORDER BY LastActivityDate ASC NULLS FIRST LIMIT 200"
+            ).get("records", [])
+            source_note = "contacts with `Stale_Flag__c = true`"
+        except Exception:
+            raw = st.session_state.get("crm_stale_results", [])
+            stale_contacts = [
+                {
+                    "Id":               r["Id"],
+                    "Name":             r["Name"],
+                    "Email":            r["Email"],
+                    "Title":            r["Title"],
+                    "Account":          {"Name": r["Account"], "Id": None},
+                    "LastActivityDate": r["Last Activity"],
+                }
+                for r in raw
+            ]
+            source_note = "contacts from last Pillar 1 scan (Stale_Flag__c not yet created)"
+
+    if not stale_contacts:
+        st.info(
+            "No stale contacts loaded. Run **Staleness Detection** first, "
+            "or create and populate `Stale_Flag__c`."
+        )
+        return
+
+    st.success(f"{len(stale_contacts)} {source_note}")
+
+    labels = {
+        c["Id"]: (
+            f"{c.get('Name', '')} — "
+            f"{(c.get('Account') or {}).get('Name', 'Unknown account')} "
+            f"({c.get('Title') or 'No title'})"
+        )
+        for c in stale_contacts
+    }
+
+    selected_id = st.selectbox(
+        "Select a stale contact",
+        options=list(labels.keys()),
+        format_func=lambda x: labels.get(x, x),
+        key="crm_replace_selected",
+    )
+    selected = next((c for c in stale_contacts if c["Id"] == selected_id), None)
+    if not selected:
+        return
+
+    col_l, col_r = st.columns(2)
+    with col_l:
+        st.markdown("**Stale Contact**")
+        acct_name = (selected.get("Account") or {}).get("Name") or "—"
+        st.markdown(f"""
+| | |
+|---|---|
+| **Name** | {selected.get("Name", "—")} |
+| **Title** | {selected.get("Title") or "—"} |
+| **Email** | {selected.get("Email") or "—"} |
+| **Account** | {acct_name} |
+| **Last Activity** | {str(selected.get("LastActivityDate", "Never"))[:10]} |
+""")
+
+    with col_r:
+        st.markdown("**Existing contacts at this account**")
+        acct_id = (selected.get("Account") or {}).get("Id")
+        if acct_id and st.button(f"🔍  Load contacts at {acct_name}", key="crm_replace_load_acct"):
+            try:
+                existing = sf.query_all(
+                    f"SELECT Id, Name, Email, Title FROM Contact "
+                    f"WHERE AccountId = '{acct_id}' AND Id != '{selected_id}' "
+                    f"AND IsDeleted = false LIMIT 20"
+                ).get("records", [])
+                st.session_state["crm_replace_acct_contacts"] = existing
+            except Exception as exc:
+                st.error(f"Query failed: {exc}")
+
+        for c in st.session_state.get("crm_replace_acct_contacts", []):
+            st.markdown(f"• **{c.get('Name','')}** — {c.get('Title','—')} — {c.get('Email','—')}")
+
+    st.markdown("---")
+    st.markdown("**Stage a Replacement Contact**")
+    st.caption("Creates a new Contact in Salesforce linked to the same account.")
+
+    with st.form("crm_replacement_form"):
+        fc1, fc2 = st.columns(2)
+        new_first = fc1.text_input("First Name",  key="crm_rep_first")
+        new_last  = fc2.text_input("Last Name *", key="crm_rep_last")
+        ff1, ff2  = st.columns(2)
+        new_title = ff1.text_input("Title", value=selected.get("Title") or "", key="crm_rep_title")
+        new_email = ff2.text_input("Email *", key="crm_rep_email")
+        fg1, fg2  = st.columns(2)
+        new_phone = fg1.text_input("Phone", key="crm_rep_phone")
+        fg2.text_input("Account", value=acct_name, disabled=True, key="crm_rep_acct_display")
+        submitted = st.form_submit_button("Stage Replacement Contact")
+
+    if submitted:
+        if not new_last.strip() or not new_email.strip():
+            st.error("Last Name and Email are required.")
+        else:
+            new_rec = {k: v for k, v in {
+                "FirstName":        new_first.strip() or None,
+                "LastName":         new_last.strip(),
+                "Title":            new_title.strip() or None,
+                "Email":            new_email.strip(),
+                "Phone":            new_phone.strip() or None,
+                "AccountId":        acct_id,
+                "Contact_Source__c": "CRM Health — Replacement",
+                "Description":      f"Replacement for {selected.get('Name', selected_id)} — flagged stale by A.D.A.M.",
+            }.items() if v is not None}
+
+            if dry_run_mode:
+                st.info(f"**Dry Run:** Would create Contact: {new_first} {new_last} <{new_email}> at {acct_name}")
+                st.json(new_rec)
+            else:
+                try:
+                    result = sf.Contact.create(new_rec)
+                    if result.get("success"):
+                        st.success(f"Created: {new_first} {new_last} — ID {result['id']}")
+                        db_save_crm_health_run("replacement", {"written": 1})
+                    else:
+                        st.error(f"Create failed: {result}")
+                except Exception as exc:
+                    st.error(f"Create failed: {exc}")
+
+    with st.expander("🔗  Export full stale list for Clay", expanded=False):
+        st.info("Import into your Clay replacement-sourcing table.")
+        rows = [
+            {
+                "Id":      c.get("Id"),
+                "Name":    c.get("Name"),
+                "Email":   c.get("Email"),
+                "Title":   c.get("Title"),
+                "Account": (c.get("Account") or {}).get("Name"),
+            }
+            for c in stale_contacts
+        ]
+        st.download_button(
+            "⬇  Export for Clay",
+            data=pd.DataFrame(rows).to_csv(index=False).encode(),
+            file_name=f"stale_for_replacement_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
+            mime="text/csv",
+            key="crm_replace_export",
+        )
+
+
+# ── Sub-tab: Pillar 3 — Email & Phone Validation ──────────────────────────────
+
+def _render_crm_validation_tab(dry_run_mode: bool) -> None:
+    st.subheader("Email & Phone Validation")
+    st.caption(
+        "Validates emails via syntax check, MX record lookup, and role-address detection. "
+        "Phone validation checks that a parseable number is present."
+    )
+
+    if not _DNSPYTHON_AVAILABLE:
+        st.warning(
+            "**dnspython** is not installed — MX record checks are skipped. "
+            "Add `dnspython` to `requirements.txt` and redeploy for full validation."
+        )
+
+    with st.expander("⚙️  Scan filters", expanded=True):
+        col1, col2 = st.columns(2)
+        max_contacts     = col1.number_input("Max contacts to validate", 50, 2000, 500, step=50, key="crm_val_max")
+        unvalidated_only = col2.checkbox(
+            "Only contacts not yet validated (Email_Validated_Date__c is null)",
+            value=True, key="crm_val_unvalidated_only",
+        )
+
+    if st.button("✉️  Run Email Validation", key="crm_val_run", type="primary"):
+        sf = get_sf_connection()
+
+        date_filter = ""
+        if unvalidated_only:
+            try:
+                sf.query("SELECT Email_Validated_Date__c FROM Contact LIMIT 1")
+                date_filter = "AND Email_Validated_Date__c = null"
+            except Exception:
+                date_filter = ""
+
+        soql = (
+            f"SELECT Id, Name, Email, Phone, MobilePhone, Account.Name "
+            f"FROM Contact WHERE IsDeleted = false {date_filter} "
+            f"LIMIT {int(max_contacts)}"
+        )
+        with st.spinner("Querying contacts..."):
+            try:
+                records = sf.query_all(soql).get("records", [])
+            except Exception as exc:
+                st.error(f"Query failed: {exc}")
+                return
+
+        if not records:
+            st.info("No contacts to validate.")
+            return
+
+        domain_cache: dict[str, tuple[str, str]] = {}
+        results   = []
+        progress  = st.progress(0, text="Validating emails...")
+
+        for i, rec in enumerate(records):
+            raw_email = (rec.get("Email") or "").strip().lower()
+
+            if raw_email and "@" in raw_email:
+                local, domain = raw_email.split("@", 1)
+                if local in _CRM_ROLE_ADDRESSES:
+                    status, reason = "role", f"Role address ({local}@)"
+                elif not _crm_re.match(r'^[a-zA-Z0-9._%+\-]+$', local):
+                    status, reason = "invalid_syntax", "Invalid local part"
+                elif domain in domain_cache:
+                    status, reason = domain_cache[domain]
+                else:
+                    status, reason = _crm_check_email(raw_email)
+                    if status not in ("role", "invalid_syntax", "empty"):
+                        domain_cache[domain] = (status, reason)
+            else:
+                status, reason = "empty", "No email address"
+
+            phone     = rec.get("Phone") or rec.get("MobilePhone") or ""
+            phone_ok  = len(_crm_normalize_phone(phone)) >= 7
+
+            results.append({
+                "Id":            rec.get("Id"),
+                "Name":          rec.get("Name") or "",
+                "Email":         rec.get("Email") or "",
+                "Email Status":  status,
+                "Reason":        reason,
+                "Phone":         phone,
+                "Phone Valid":   "✅" if phone_ok else "❌",
+                "Account":       (rec.get("Account") or {}).get("Name") or "",
+            })
+
+            if (i + 1) % 10 == 0:
+                progress.progress((i + 1) / len(records), text=f"Validated {i+1}/{len(records)}...")
+
+        progress.empty()
+        st.session_state["crm_val_results"] = results
+        db_save_crm_health_run("validation", {
+            "scanned": len(records),
+            "flagged": sum(1 for r in results if r["Email Status"] != "valid"),
+            "written": 0,
+        })
+
+    results = st.session_state.get("crm_val_results")
+    if not results:
+        st.info("Run validation to see results.")
+        return
+
+    # Summary metrics
+    status_counts: dict[str, int] = {}
+    for r in results:
+        status_counts[r["Email Status"]] = status_counts.get(r["Email Status"], 0) + 1
+
+    label_map = {
+        "valid":          "✅ Valid",
+        "no_mx":          "❌ Dead Domain",
+        "invalid_syntax": "❌ Bad Syntax",
+        "role":           "⚠️ Role Address",
+        "empty":          "— No Email",
+    }
+    cols = st.columns(len(status_counts) + 1)
+    cols[0].metric("Total Scanned", len(results))
+    for i, (status, count) in enumerate(sorted(status_counts.items())):
+        cols[i + 1].metric(label_map.get(status, status), count)
+
+    df             = pd.DataFrame(results)
+    status_filter  = st.multiselect(
+        "Show status",
+        list(status_counts.keys()),
+        default=[s for s in ["no_mx", "invalid_syntax", "role", "empty"] if s in status_counts],
+        key="crm_val_filter",
+    )
+    filtered = df[df["Email Status"].isin(status_filter)] if status_filter else df
+    st.dataframe(filtered.drop(columns=["Id"]), hide_index=True, use_container_width=True)
+
+    # Write-back
+    st.markdown("---")
+    st.markdown("**Write results to Salesforce**")
+    invalid_statuses = st.multiselect(
+        "Mark as invalid (Email_Valid__c = false)",
+        ["no_mx", "invalid_syntax", "role", "empty"],
+        default=["no_mx", "invalid_syntax"],
+        key="crm_val_write_statuses",
+    )
+    to_invalid = [r for r in results if r["Email Status"] in invalid_statuses]
+    to_valid   = [r for r in results if r["Email Status"] == "valid"]
+    today_str  = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    st.caption(
+        f"{len(to_valid)} → `Email_Valid__c = true`  ·  "
+        f"{len(to_invalid)} → `Email_Valid__c = false`"
+    )
+
+    if dry_run_mode:
+        st.info(f"**Dry Run:** Would update {len(to_valid) + len(to_invalid)} contacts.")
+    else:
+        if st.button(
+            f"✅  Write Email_Valid__c to {len(to_valid) + len(to_invalid)} contacts",
+            key="crm_val_write", type="primary",
+        ):
+            sf      = get_sf_connection()
+            updates = (
+                [{"Id": r["Id"], "Email_Valid__c": False, "Email_Validated_Date__c": today_str}
+                 for r in to_invalid]
+                + [{"Id": r["Id"], "Email_Valid__c": True, "Email_Validated_Date__c": today_str}
+                   for r in to_valid]
+            )
+            backup_records(
+                pd.DataFrame([{"Id": r["Id"], "Email": r["Email"]} for r in results]),
+                "CRM Health - Email Validation", "Contact",
+            )
+            with st.spinner("Writing to Salesforce..."):
+                res = execute_update(sf, "Contact", updates)
+            if res["success"]:
+                st.success(f"Updated {res['success']} contacts.")
+                db_save_crm_health_run("validation_write", {
+                    "scanned": len(results), "flagged": len(to_invalid), "written": res["success"],
+                })
+            if res["failed"]:
+                st.error(f"{res['failed']} records failed.")
+
+    st.download_button(
+        "⬇  Export validation results",
+        data=df.drop(columns=["Id"]).to_csv(index=False).encode(),
+        file_name=f"email_validation_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
+        mime="text/csv",
+        key="crm_val_export",
+    )
+
+
+# ── Sub-tab: Pillar 4 — Fuzzy Duplicate Detection ────────────────────────────
+
+def _render_crm_fuzzy_dupes_tab(dry_run_mode: bool, auto_backup: bool) -> None:
+    st.subheader("Fuzzy Duplicate Detection")
+    st.caption(
+        "Finds near-duplicate Contacts using name, email, phone, and account similarity. "
+        "Grouped by Salesforce Account — so comparisons are fast and meaningful."
+    )
+
+    if not _RAPIDFUZZ_AVAILABLE:
+        st.error(
+            "**rapidfuzz** is not installed. Add `rapidfuzz` to `requirements.txt` and redeploy."
+        )
+        return
+
+    with st.expander("⚙️  Scan settings", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        threshold  = col1.slider(
+            "Min match score", 50, 95, _CRM_FUZZY_THRESHOLD, key="crm_fuzz_threshold",
+            help="Pairs above this score are flagged as potential duplicates.",
+        )
+        max_accts  = col2.number_input(
+            "Max accounts to scan", 10, 500, 100, step=10, key="crm_fuzz_max_accts",
+        )
+        min_per    = col3.number_input(
+            "Min contacts per account", 2, 20, 2, key="crm_fuzz_min_per",
+        )
+
+    if st.button("🔍  Scan for Fuzzy Duplicates", key="crm_fuzz_scan", type="primary"):
+        sf = get_sf_connection()
+
+        with st.spinner("Finding accounts with multiple contacts..."):
+            try:
+                acct_recs = sf.query_all(f"""
+                    SELECT AccountId, COUNT(Id) cnt
+                    FROM Contact
+                    WHERE IsDeleted = false AND AccountId != null
+                    GROUP BY AccountId
+                    HAVING COUNT(Id) >= {int(min_per)}
+                    ORDER BY COUNT(Id) DESC
+                    LIMIT {int(max_accts)}
+                """).get("records", [])
+                acct_ids = [r["AccountId"] for r in acct_recs]
+            except Exception as exc:
+                st.error(f"Account query failed: {exc}")
+                return
+
+        if not acct_ids:
+            st.info("No accounts with multiple contacts found.")
+            return
+
+        all_contacts: list[dict] = []
+        batch      = 50
+        progress   = st.progress(0, text="Loading contacts...")
+        for i in range(0, len(acct_ids), batch):
+            chunk   = acct_ids[i:i + batch]
+            id_list = ", ".join(f"'{aid}'" for aid in chunk)
+            try:
+                recs = sf.query_all(
+                    f"SELECT Id, Name, Email, Phone, MobilePhone, Title, AccountId, Account.Name "
+                    f"FROM Contact WHERE AccountId IN ({id_list}) AND IsDeleted = false"
+                ).get("records", [])
+                all_contacts.extend(recs)
+            except Exception:
+                pass
+            progress.progress(
+                min((i + batch) / len(acct_ids), 1.0),
+                text=f"Loading contacts ({min(i + batch, len(acct_ids))}/{len(acct_ids)} accounts)...",
+            )
+        progress.empty()
+
+        if not all_contacts:
+            st.info("No contacts loaded.")
+            return
+
+        # Group by account, run pairwise
+        from collections import defaultdict
+        groups: dict[str, list] = defaultdict(list)
+        for c in all_contacts:
+            groups[c.get("AccountId", "")].append({
+                "Id":          c.get("Id"),
+                "Name":        c.get("Name") or "",
+                "Email":       c.get("Email") or "",
+                "Phone":       c.get("Phone") or c.get("MobilePhone") or "",
+                "Title":       c.get("Title") or "",
+                "AccountName": (c.get("Account") or {}).get("Name") or "",
+            })
+
+        pairs: list[dict] = []
+        for contacts in groups.values():
+            if len(contacts) < 2:
+                continue
+            for a_idx in range(len(contacts)):
+                for b_idx in range(a_idx + 1, len(contacts)):
+                    ca, cb = contacts[a_idx], contacts[b_idx]
+                    score  = _crm_fuzzy_score_pair(ca, cb)
+                    if score >= threshold:
+                        pairs.append({
+                            "Score":   score,
+                            "A_Id":    ca["Id"],
+                            "A_Name":  ca["Name"],
+                            "A_Email": ca["Email"],
+                            "A_Title": ca["Title"],
+                            "B_Id":    cb["Id"],
+                            "B_Name":  cb["Name"],
+                            "B_Email": cb["Email"],
+                            "B_Title": cb["Title"],
+                            "Account": ca["AccountName"],
+                            "Action":  "pending",
+                        })
+
+        pairs.sort(key=lambda x: x["Score"], reverse=True)
+        st.session_state["crm_fuzz_pairs"]      = pairs
+        st.session_state["crm_fuzz_review_idx"] = 0
+        db_save_crm_health_run("fuzzy_dedup", {
+            "scanned": len(all_contacts),
+            "flagged": len(pairs),
+            "written": 0,
+        })
+
+    pairs = st.session_state.get("crm_fuzz_pairs")
+    if pairs is None:
+        st.info("Run a scan to detect fuzzy duplicates.")
+        return
+
+    if not pairs:
+        st.success("No fuzzy duplicates found above the threshold.")
+        return
+
+    pending   = [p for p in pairs if p.get("Action") == "pending"]
+    merged    = [p for p in pairs if p.get("Action") == "merged"]
+    dismissed = [p for p in pairs if p.get("Action") == "dismissed"]
+
+    st.success(f"Found **{len(pairs)}** potential duplicate pairs.")
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("Pending Review", len(pending))
+    mc2.metric("Merged",         len(merged))
+    mc3.metric("Dismissed",      len(dismissed))
+
+    if not pending:
+        st.success("All pairs reviewed.")
+    else:
+        idx = min(st.session_state.get("crm_fuzz_review_idx", 0), len(pending) - 1)
+        pair = pending[idx]
+
+        st.markdown(f"**Reviewing pair {idx + 1} of {len(pending)}** — Match score: **{pair['Score']}%**")
+        st.progress(pair["Score"] / 100)
+
+        col_a, col_sep, col_b = st.columns([5, 1, 5])
+        with col_a:
+            st.markdown("**Contact A**")
+            st.markdown(f"""
+| | |
+|---|---|
+| **Name** | {pair['A_Name']} |
+| **Email** | {pair['A_Email'] or '—'} |
+| **Title** | {pair['A_Title'] or '—'} |
+| **Account** | {pair['Account']} |
+""")
+            sf_tmp = get_sf_connection()
+            st.markdown(
+                f"[Open in Salesforce](https://{sf_tmp.sf_instance}/lightning/r/Contact/{pair['A_Id']}/view)"
+            )
+        with col_sep:
+            st.markdown(
+                "<div style='text-align:center;padding-top:48px;font-size:1.4rem;'>⟷</div>",
+                unsafe_allow_html=True,
+            )
+        with col_b:
+            st.markdown("**Contact B**")
+            st.markdown(f"""
+| | |
+|---|---|
+| **Name** | {pair['B_Name']} |
+| **Email** | {pair['B_Email'] or '—'} |
+| **Title** | {pair['B_Title'] or '—'} |
+| **Account** | {pair['Account']} |
+""")
+            st.markdown(
+                f"[Open in Salesforce](https://{sf_tmp.sf_instance}/lightning/r/Contact/{pair['B_Id']}/view)"
+            )
+
+        # Find the global index once for all buttons
+        global_idx = next(
+            (i for i, p in enumerate(st.session_state["crm_fuzz_pairs"])
+             if p["A_Id"] == pair["A_Id"] and p["B_Id"] == pair["B_Id"]),
+            None,
+        )
+
+        st.markdown("")
+        b1, b2, b3, b4 = st.columns(4)
+
+        def _do_merge(keep_id: str, del_id: str, del_name: str, del_email: str) -> None:
+            if global_idx is not None:
+                st.session_state["crm_fuzz_pairs"][global_idx]["Action"] = "merged"
+            if not dry_run_mode:
+                sf2 = get_sf_connection()
+                backup_records(
+                    pd.DataFrame([{"Id": del_id, "Name": del_name, "Email": del_email}]),
+                    "CRM Health - Fuzzy Merge", "Contact",
+                )
+                res = execute_delete(sf2, "Contact", [del_id])
+                if res["success"]:
+                    st.success(f"Merged — deleted {del_name}.")
+                    db_save_crm_health_run("fuzzy_merge", {"written": 1})
+                else:
+                    st.error(f"Delete failed: {res.get('errors')}")
+            else:
+                st.info(f"Dry Run: Would delete {del_name} ({del_id}).")
+            st.session_state["crm_fuzz_review_idx"] = max(0, idx)
+            st.rerun()
+
+        if b1.button("✅  Keep A, delete B", key=f"crm_fuzz_ka_{idx}", type="primary"):
+            _do_merge(pair["A_Id"], pair["B_Id"], pair["B_Name"], pair["B_Email"])
+
+        if b2.button("✅  Keep B, delete A", key=f"crm_fuzz_kb_{idx}"):
+            _do_merge(pair["B_Id"], pair["A_Id"], pair["A_Name"], pair["A_Email"])
+
+        if b3.button("⏭️  Skip", key=f"crm_fuzz_skip_{idx}"):
+            st.session_state["crm_fuzz_review_idx"] = idx + 1
+            st.rerun()
+
+        if b4.button("🚫  Not a duplicate", key=f"crm_fuzz_dismiss_{idx}"):
+            if global_idx is not None:
+                st.session_state["crm_fuzz_pairs"][global_idx]["Action"] = "dismissed"
+            st.session_state["crm_fuzz_review_idx"] = max(0, idx)
+            st.rerun()
+
+    with st.expander(f"📋  All {len(pairs)} pairs", expanded=False):
+        st.dataframe(
+            pd.DataFrame([{
+                "Score":   p["Score"],
+                "A":       p["A_Name"],
+                "B":       p["B_Name"],
+                "Account": p["Account"],
+                "Status":  p.get("Action", "pending").title(),
+            } for p in pairs]),
+            hide_index=True, use_container_width=True,
+            column_config={
+                "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d")
+            },
+        )
+
+
+# ── Main page ─────────────────────────────────────────────────────────────────
+
+def render_crm_health_page(dry_run_mode: bool, auto_backup: bool) -> None:
+    st.header("🏥  CRM Health")
+    st.caption(
+        "The Self-Cleaning CRM — continuously detect stale contacts, "
+        "source replacements, validate emails, and catch fuzzy duplicates."
+    )
+
+    tab_dash, tab_stale, tab_replace, tab_validate, tab_fuzzy = st.tabs([
+        "📊  Health Dashboard",
+        "🔍  Staleness Detection",
+        "👤  Replacement Queue",
+        "✉️  Email & Phone",
+        "🔗  Fuzzy Duplicates",
+    ])
+
+    with tab_dash:
+        _render_crm_dashboard_tab()
+    with tab_stale:
+        _render_crm_staleness_tab(dry_run_mode)
+    with tab_replace:
+        _render_crm_replacement_tab(dry_run_mode)
+    with tab_validate:
+        _render_crm_validation_tab(dry_run_mode)
+    with tab_fuzzy:
+        _render_crm_fuzzy_dupes_tab(dry_run_mode, auto_backup)
 
 
 if __name__ == "__main__":
