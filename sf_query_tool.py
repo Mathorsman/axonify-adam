@@ -25004,41 +25004,37 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
     )
 
     with st.expander("⚙️  Scan filters", expanded=True):
-        col1, col2, col3 = st.columns(3)
-        min_score = col1.slider("Min staleness score to show", 20, 90, 40, key="crm_stale_min_score")
-        max_scan  = col2.number_input("Max contacts to scan", 50, 2000, 500, step=50, key="crm_stale_max_scan")
+        col1, col2, col3, col4 = st.columns(4)
+        min_score  = col1.slider("Min staleness score to show", 20, 90, 40, key="crm_stale_min_score")
+        batch_size = col2.selectbox("Batch size", [1000, 2000, 5000, 10000, 25000], index=1, key="crm_stale_batch_size")
         acct_types = col3.multiselect(
             "Limit to account types (blank = all)",
             ["Customer", "Prospect", "Partner", "Competitor", "Other"],
             key="crm_stale_acct_types",
         )
+        scan_all_toggle = col4.checkbox("Scan all contacts (no limit)", key="crm_stale_scan_all")
 
-    if st.button("🔍  Scan for Stale Contacts", key="crm_stale_scan", type="primary"):
-        sf  = get_sf_connection()
-        tf  = ""
-        if acct_types:
-            quoted = ", ".join(f"'{t}'" for t in acct_types)
-            tf = f"AND Account.Type IN ({quoted})"
+    # offset state for resumable multi-batch scanning
+    if "crm_stale_offset"        not in st.session_state: st.session_state["crm_stale_offset"]        = 0
+    if "crm_stale_total_scanned" not in st.session_state: st.session_state["crm_stale_total_scanned"] = 0
+    if "crm_stale_results"       not in st.session_state: st.session_state["crm_stale_results"]       = []
 
-        soql = f"""
-            SELECT Id, Name, Email, Phone, MobilePhone, Title,
-                   LastActivityDate, Account.Name, Account.Type
-            FROM Contact
-            WHERE IsDeleted = false {tf}
-            ORDER BY LastActivityDate ASC NULLS FIRST
-            LIMIT {int(max_scan)}
-        """
-        with st.spinner(f"Querying up to {int(max_scan)} contacts..."):
-            try:
-                records = sf.query_all(soql).get("records", [])
-            except Exception as exc:
-                st.error(f"Query failed: {exc}")
-                return
+    tf = ""
+    if acct_types:
+        quoted = ", ".join(f"'{t}'" for t in acct_types)
+        tf = f"AND Account.Type IN ({quoted})"
 
-        if not records:
-            st.info("No contacts returned.")
-            return
+    def _soql_for_offset(offset: int, limit: int) -> str:
+        return (
+            "SELECT Id, Name, Email, Phone, MobilePhone, Title, "
+            "LastActivityDate, Account.Name, Account.Type "
+            "FROM Contact "
+            f"WHERE IsDeleted = false {tf} "
+            "ORDER BY LastActivityDate ASC NULLS FIRST "
+            f"LIMIT {limit} OFFSET {offset}"
+        )
 
+    def _score_records(records: list) -> list:
         rows = []
         for r in records:
             flat = {
@@ -25052,7 +25048,7 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
                 "Account_Type":     (r.get("Account") or {}).get("Type"),
             }
             score, signals = _crm_score_staleness(flat)
-            if score >= min_score:
+            if score >= st.session_state.get("crm_stale_min_score", 40):
                 rows.append({
                     "Id":              flat["Id"],
                     "Name":            flat["Name"] or "",
@@ -25063,16 +25059,88 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
                     "Staleness Score": score,
                     "Signals":         " · ".join(signals),
                 })
+        return rows
 
-        rows.sort(key=lambda x: x["Staleness Score"], reverse=True)
-        st.session_state["crm_stale_results"] = rows
+    col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
+
+    with col_btn1:
+        start_new = st.button("🔍  New Scan (reset)", key="crm_stale_scan", type="primary")
+    with col_btn2:
+        resume    = st.button(
+            f"▶  Next Batch (offset {st.session_state['crm_stale_offset']:,})",
+            key="crm_stale_resume",
+            disabled=st.session_state["crm_stale_offset"] == 0 and not st.session_state["crm_stale_results"],
+        )
+    with col_btn3:
+        if st.button("🗑  Clear", key="crm_stale_clear"):
+            st.session_state["crm_stale_results"]       = []
+            st.session_state["crm_stale_offset"]        = 0
+            st.session_state["crm_stale_total_scanned"] = 0
+            st.rerun()
+
+    if start_new:
+        st.session_state["crm_stale_results"]       = []
+        st.session_state["crm_stale_offset"]        = 0
+        st.session_state["crm_stale_total_scanned"] = 0
+
+    if start_new or resume:
+        sf = get_sf_connection()
+        offset = st.session_state["crm_stale_offset"]
+
+        if scan_all_toggle:
+            # fetch everything from current offset in one query_all call (handles SF cursor pagination)
+            soql_all = (
+                "SELECT Id, Name, Email, Phone, MobilePhone, Title, "
+                "LastActivityDate, Account.Name, Account.Type "
+                "FROM Contact "
+                f"WHERE IsDeleted = false {tf} "
+                "ORDER BY LastActivityDate ASC NULLS FIRST"
+            )
+            if offset:
+                soql_all += f" OFFSET {offset}"
+            prog_bar  = st.progress(0, text="Fetching all contacts from Salesforce…")
+            try:
+                records = sf.query_all(soql_all).get("records", [])
+            except Exception as exc:
+                st.error(f"Query failed: {exc}")
+                return
+            prog_bar.progress(50, text=f"Scoring {len(records):,} contacts…")
+            new_rows = _score_records(records)
+            existing = {r["Id"] for r in st.session_state["crm_stale_results"]}
+            st.session_state["crm_stale_results"] += [r for r in new_rows if r["Id"] not in existing]
+            st.session_state["crm_stale_total_scanned"] += len(records)
+            st.session_state["crm_stale_offset"] = 0  # exhausted
+            prog_bar.progress(100, text=f"Done — {len(records):,} contacts scanned.")
+        else:
+            # batched OFFSET scan
+            limit = int(batch_size)
+            prog_bar = st.progress(0, text=f"Querying batch at offset {offset:,}…")
+            try:
+                records = sf.query(_soql_for_offset(offset, limit)).get("records", [])
+            except Exception as exc:
+                st.error(f"Query failed: {exc}")
+                return
+            prog_bar.progress(60, text=f"Scoring {len(records):,} contacts…")
+            new_rows = _score_records(records)
+            existing = {r["Id"] for r in st.session_state["crm_stale_results"]}
+            st.session_state["crm_stale_results"] += [r for r in new_rows if r["Id"] not in existing]
+            st.session_state["crm_stale_total_scanned"] += len(records)
+            next_offset = offset + len(records)
+            st.session_state["crm_stale_offset"] = next_offset if len(records) == limit else 0
+            done_msg = "Done — no more records." if len(records) < limit else f"Batch done. {next_offset:,} scanned so far."
+            prog_bar.progress(100, text=done_msg)
+
+        st.session_state["crm_stale_results"].sort(key=lambda x: x["Staleness Score"], reverse=True)
         db_save_crm_health_run("staleness", {
-            "scanned": len(records),
-            "flagged": len(rows),
+            "scanned": st.session_state["crm_stale_total_scanned"],
+            "flagged": len(st.session_state["crm_stale_results"]),
             "written": 0,
         })
 
-    results = st.session_state.get("crm_stale_results")
+    results       = st.session_state.get("crm_stale_results") or []
+    total_scanned = st.session_state.get("crm_stale_total_scanned", 0)
+    next_offset   = st.session_state.get("crm_stale_offset", 0)
+
     if not results:
         st.info("Run a scan to see results.")
         return
@@ -25081,7 +25149,9 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
     medium = sum(1 for r in results if 40 <= r["Staleness Score"] < 70)
     low    = sum(1 for r in results if r["Staleness Score"] < 40)
 
-    st.success(f"**{len(results)}** potentially stale contacts found.")
+    pct = f" ({len(results)/total_scanned:.1%} hit rate)" if total_scanned else ""
+    more_hint = f" — click **Next Batch** to continue scanning from {next_offset:,}" if next_offset else ""
+    st.success(f"**{len(results)}** potentially stale contacts from **{total_scanned:,}** scanned{pct}.{more_hint}")
     m1, m2, m3 = st.columns(3)
     m1.metric("High confidence (≥70)", high,   delta="Flag + action")
     m2.metric("Medium (40–69)",         medium, delta="Review")
