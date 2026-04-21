@@ -22274,23 +22274,34 @@ def render_csv_loader_page(dry_run_mode: bool, auto_backup: bool):
         return
 
     # ── Chunked execution with progress bar ───────────────────────────────────
-    # Processes records in chunks of 10,000 to avoid Streamlit connection
-    # timeouts on large files. Each chunk is a separate Bulk API job so
-    # partial progress is never lost if the connection drops.
-    CHUNK_SIZE = 10_000
+    # 2,000 records per chunk — small enough that each Salesforce Bulk API job
+    # completes in ~1-3 min, keeping the progress bar visibly moving.
+    CHUNK_SIZE = 2_000
     total      = len(records)
     chunks     = [records[i:i + CHUNK_SIZE] for i in range(0, total, CHUNK_SIZE)]
     n_chunks   = len(chunks)
 
-    progress   = st.progress(0, text=f"Submitting chunk 1 of {n_chunks}…")
-    all_raw    : list[dict] = []
-    total_ok   = 0
-    total_fail = 0
-    all_errors : list      = []
+    progress      = st.progress(0, text=f"Starting — {n_chunks} batches of up to {CHUNK_SIZE:,} records…")
+    status_text   = st.empty()
+    all_raw       : list[dict] = []
+    total_ok      = 0
+    total_fail    = 0
+    all_errors    : list       = []
+    job_start     = datetime.datetime.now()
 
     sf = get_sf_connection()
     for ci, chunk in enumerate(chunks):
-        progress.progress(ci / n_chunks, text=f"Chunk {ci+1}/{n_chunks} — {len(chunk):,} records…")
+        chunk_start = datetime.datetime.now()
+        pct         = ci / n_chunks
+        elapsed     = int((chunk_start - job_start).total_seconds())
+        progress.progress(pct, text=(
+            f"Batch {ci+1}/{n_chunks} — submitting {len(chunk):,} records to Salesforce…  "
+            f"({total_ok:,} done so far · {elapsed}s elapsed)"
+        ))
+        status_text.caption(
+            f"⏳  Waiting for Salesforce to process batch {ci+1}… "
+            f"this typically takes 1–3 min per batch."
+        )
         try:
             if operation == "Delete":
                 chunk_ids = [r["Id"] for r in chunk]
@@ -22304,15 +22315,21 @@ def render_csv_loader_page(dry_run_mode: bool, auto_backup: bool):
             else:
                 chunk_result = {"success": 0, "failed": len(chunk), "errors": ["Unknown operation"], "raw_results": []}
         except Exception as e:
-            st.error(f"Bulk API error on chunk {ci+1}: {e}")
+            st.error(f"Bulk API error on batch {ci+1}: {e}")
             chunk_result = {"success": 0, "failed": len(chunk), "errors": [str(e)], "raw_results": []}
 
+        chunk_secs  = int((datetime.datetime.now() - chunk_start).total_seconds())
         total_ok   += chunk_result.get("success", 0)
         total_fail += chunk_result.get("failed",  0)
         all_errors += [err for err in chunk_result.get("errors", []) if err]
         all_raw    += chunk_result.get("raw_results", [])
+        status_text.caption(
+            f"✅  Batch {ci+1} done in {chunk_secs}s — "
+            f"{chunk_result.get('success',0):,} succeeded, {chunk_result.get('failed',0):,} failed."
+        )
 
-    progress.progress(1.0, text=f"Done — {total_ok:,} succeeded, {total_fail:,} failed.")
+    total_secs = int((datetime.datetime.now() - job_start).total_seconds())
+    progress.progress(1.0, text=f"Done in {total_secs}s — {total_ok:,} succeeded, {total_fail:,} failed.")
     result = {"success": total_ok, "failed": total_fail, "errors": all_errors, "raw_results": all_raw}
     st.session_state["_loader_result"] = result
 
