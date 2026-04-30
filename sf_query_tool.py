@@ -25290,6 +25290,7 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
         id_filter = f"AND Id > '{last_id}'" if last_id else ""
         return (
             "SELECT Id, Name, Email, Phone, MobilePhone, Title, "
+            f"{_CUSTOM_FIELD_JOB_LEVEL}, {_CUSTOM_FIELD_RESPONSIBILITY}, "
             "LastActivityDate, Account.Name, Account.Type "
             "FROM Contact "
             f"WHERE IsDeleted = false {tf} {id_filter} "
@@ -25297,19 +25298,30 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
             f"LIMIT {limit}"
         )
 
-    def _score_records(records: list) -> list:
-        rows = []
+    # Load purge rules once for this scan run
+    _purge_rules = _load_purge_rules()
+
+    def _score_records(records: list) -> tuple[list, int]:
+        """Returns (scored_rows, protected_count)."""
+        rows      = []
+        protected = 0
         for r in records:
             flat = {
-                "Id":               r.get("Id"),
-                "Name":             r.get("Name"),
-                "Email":            r.get("Email"),
-                "Phone":            r.get("Phone") or r.get("MobilePhone"),
-                "Title":            r.get("Title"),
-                "LastActivityDate": r.get("LastActivityDate"),
-                "Account_Name":     (r.get("Account") or {}).get("Name"),
-                "Account_Type":     (r.get("Account") or {}).get("Type"),
+                "Id":                          r.get("Id"),
+                "Name":                        r.get("Name"),
+                "Email":                       r.get("Email"),
+                "Phone":                       r.get("Phone") or r.get("MobilePhone"),
+                "Title":                       r.get("Title"),
+                _CUSTOM_FIELD_JOB_LEVEL:       r.get(_CUSTOM_FIELD_JOB_LEVEL),
+                _CUSTOM_FIELD_RESPONSIBILITY:  r.get(_CUSTOM_FIELD_RESPONSIBILITY),
+                "LastActivityDate":            r.get("LastActivityDate"),
+                "Account_Name":                (r.get("Account") or {}).get("Name"),
+                "Account_Type":                (r.get("Account") or {}).get("Type"),
             }
+            # Skip contacts that match a protected persona (seniority / responsibility rules)
+            if _purge_is_protected_persona(pd.Series(flat), _purge_rules):
+                protected += 1
+                continue
             score, signals = _crm_score_staleness(flat)
             if score >= st.session_state.get("crm_stale_min_score", 40):
                 rows.append({
@@ -25322,7 +25334,7 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
                     "Staleness Score": score,
                     "Signals":         " · ".join(signals),
                 })
-        return rows
+        return rows, protected
 
     col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
 
@@ -25342,21 +25354,27 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
             st.session_state["crm_stale_results"]       = []
             st.session_state["crm_stale_last_id"]       = ""
             st.session_state["crm_stale_total_scanned"] = 0
+            st.session_state["crm_stale_protected"]     = 0
             st.rerun()
 
     if start_new:
         st.session_state["crm_stale_results"]       = []
         st.session_state["crm_stale_last_id"]       = ""
         st.session_state["crm_stale_total_scanned"] = 0
+        st.session_state["crm_stale_protected"]     = 0
 
     if start_new or resume:
         sf      = get_sf_connection()
         last_id = "" if start_new else st.session_state.get("crm_stale_last_id", "")
 
+        if "crm_stale_protected" not in st.session_state:
+            st.session_state["crm_stale_protected"] = 0
+
         if scan_all_toggle:
             # query_all uses SF server-side cursor (queryMore) — no OFFSET, no row cap
             soql_all = (
                 "SELECT Id, Name, Email, Phone, MobilePhone, Title, "
+                f"{_CUSTOM_FIELD_JOB_LEVEL}, {_CUSTOM_FIELD_RESPONSIBILITY}, "
                 "LastActivityDate, Account.Name, Account.Type "
                 "FROM Contact "
                 f"WHERE IsDeleted = false {tf} "
@@ -25369,12 +25387,13 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
                 st.error(f"Query failed: {exc}")
                 return
             prog_bar.progress(50, text=f"Scoring {len(records):,} contacts…")
-            new_rows = _score_records(records)
+            new_rows, n_protected = _score_records(records)
             existing = {r["Id"] for r in st.session_state["crm_stale_results"]}
-            st.session_state["crm_stale_results"] += [r for r in new_rows if r["Id"] not in existing]
+            st.session_state["crm_stale_results"]   += [r for r in new_rows if r["Id"] not in existing]
             st.session_state["crm_stale_total_scanned"] += len(records)
-            st.session_state["crm_stale_last_id"] = ""  # fully exhausted
-            prog_bar.progress(100, text=f"Done — {len(records):,} contacts scanned.")
+            st.session_state["crm_stale_protected"] += n_protected
+            st.session_state["crm_stale_last_id"]    = ""  # fully exhausted
+            prog_bar.progress(100, text=f"Done — {len(records):,} contacts scanned, {n_protected:,} protected personas skipped.")
         else:
             # keyset batch scan — WHERE Id > last_id, no OFFSET used
             limit    = int(batch_size)
@@ -25385,10 +25404,11 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
                 st.error(f"Query failed: {exc}")
                 return
             prog_bar.progress(60, text=f"Scoring {len(records):,} contacts…")
-            new_rows = _score_records(records)
+            new_rows, n_protected = _score_records(records)
             existing = {r["Id"] for r in st.session_state["crm_stale_results"]}
-            st.session_state["crm_stale_results"] += [r for r in new_rows if r["Id"] not in existing]
+            st.session_state["crm_stale_results"]   += [r for r in new_rows if r["Id"] not in existing]
             st.session_state["crm_stale_total_scanned"] += len(records)
+            st.session_state["crm_stale_protected"] += n_protected
             # advance cursor: last Id in this batch becomes the next lower bound
             new_last_id = records[-1]["Id"] if records else ""
             st.session_state["crm_stale_last_id"] = new_last_id if len(records) == limit else ""
@@ -25405,6 +25425,7 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
 
     results       = st.session_state.get("crm_stale_results") or []
     total_scanned = st.session_state.get("crm_stale_total_scanned", 0)
+    n_protected   = st.session_state.get("crm_stale_protected", 0)
     more_to_scan  = bool(st.session_state.get("crm_stale_last_id"))
 
     if not results:
@@ -25415,9 +25436,10 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
     medium = sum(1 for r in results if 40 <= r["Staleness Score"] < 70)
     low    = sum(1 for r in results if r["Staleness Score"] < 40)
 
-    pct       = f" ({len(results)/total_scanned:.1%} hit rate)" if total_scanned else ""
-    more_hint = " — click **Next Batch** to continue" if more_to_scan else ""
-    st.success(f"**{len(results)}** potentially stale contacts from **{total_scanned:,}** scanned{pct}.{more_hint}")
+    pct        = f" ({len(results)/total_scanned:.1%} hit rate)" if total_scanned else ""
+    more_hint  = " — click **Next Batch** to continue" if more_to_scan else ""
+    prot_hint  = f"  ·  🛡️ {n_protected:,} protected personas skipped" if n_protected else ""
+    st.success(f"**{len(results):,}** potentially stale contacts from **{total_scanned:,}** scanned{pct}.{more_hint}{prot_hint}")
     m1, m2, m3 = st.columns(3)
     m1.metric("High confidence (≥70)", high,   delta="Flag + action")
     m2.metric("Medium (40–69)",         medium, delta="Review")
