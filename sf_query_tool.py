@@ -25508,6 +25508,57 @@ def _render_crm_staleness_tab(dry_run_mode: bool) -> None:
             key="crm_stale_export",
         )
 
+    # ── Purge stale contacts ──────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("**🗑️  Purge stale contacts**")
+    st.caption(
+        "Permanently deletes contacts above the staleness threshold. "
+        "Protected personas are never included. Requires dry run OFF and auto-backup ON."
+    )
+
+    purge_thresh = st.slider(
+        "Purge contacts with score ≥", 40, 100, 70, key="crm_stale_purge_thresh",
+        help="Only unprotected contacts at or above this score will be deleted.",
+    )
+    to_purge = [r for r in results if r["Staleness Score"] >= purge_thresh]
+    st.caption(f"{len(to_purge):,} contacts will be permanently deleted · {len(results) - len(to_purge):,} below threshold kept.")
+
+    if dry_run_mode:
+        st.info(f"**Dry Run:** Would permanently delete {len(to_purge):,} contacts. Turn off Dry Run to execute.")
+    elif not auto_backup:
+        st.warning("⚠️  Auto-Backup must be ON before purging. Enable it in the sidebar.")
+    elif not to_purge:
+        st.info("No contacts meet the purge threshold.")
+    else:
+        if st.button(
+            f"🗑️  Permanently delete {len(to_purge):,} stale contacts",
+            key="crm_stale_purge_btn",
+            type="primary",
+        ):
+            sf          = get_sf_connection()
+            purge_df    = df[df["Staleness Score"] >= purge_thresh][["Id", "Name", "Email", "Staleness Score"]]
+            backup_records(purge_df, "CRM Health - Stale Purge", "Contact")
+            purge_ids   = [r["Id"] for r in to_purge]
+            CHUNK       = 2_000
+            chunks      = [purge_ids[i:i+CHUNK] for i in range(0, len(purge_ids), CHUNK)]
+            prog        = st.progress(0, text=f"Purging — 0 of {len(purge_ids):,} deleted…")
+            total_ok    = 0
+            total_fail  = 0
+            for ci, chunk in enumerate(chunks):
+                prog.progress(ci / len(chunks), text=f"Batch {ci+1}/{len(chunks)} — {total_ok:,} deleted so far…")
+                res = execute_delete(sf, "Contact", chunk)
+                total_ok   += res.get("success", 0)
+                total_fail += res.get("failed",  0)
+            prog.progress(1.0, text=f"Done — {total_ok:,} deleted, {total_fail:,} failed.")
+            db_save_crm_health_run("staleness_purge", {
+                "scanned": len(results), "flagged": len(to_purge),
+                "written": total_ok, "failed": total_fail,
+            })
+            if total_ok:
+                st.success(f"✅  {total_ok:,} contacts permanently deleted.")
+            if total_fail:
+                st.warning(f"⚠️  {total_fail:,} records failed — check the receipt in Change Log.")
+
 
 # ── Sub-tab: Pillar 2 — Replacement Queue ────────────────────────────────────
 
@@ -26100,6 +26151,133 @@ def _render_crm_fuzzy_dupes_tab(dry_run_mode: bool, auto_backup: bool) -> None:
 
 # ── Main page ─────────────────────────────────────────────────────────────────
 
+_ENRICHMENT_VP_LEVELS       = {"vp", "svp", "evp", "c-level", "c level", "cxo"}
+_ENRICHMENT_ROLES           = ["learning & development", "l&d", "operations"]
+_ENRICHMENT_CADENCE_DAYS    = 90
+_CLAY_ENRICHMENT_DATE_FIELD = "Clay_Last_Enrichment__c"
+
+
+def _render_crm_enrichment_tab(dry_run_mode: bool) -> None:
+    st.subheader("Enrichment Queue")
+    st.caption(
+        "Surfaces VP+ contacts in Learning & Development or Operations roles "
+        "whose Clay enrichment is overdue (null or > 90 days ago). "
+        "Export to Clay — Clay enriches and writes the date back."
+    )
+
+    cadence = st.number_input(
+        "Re-enrichment cadence (days)", min_value=30, max_value=365,
+        value=_ENRICHMENT_CADENCE_DAYS, step=30, key="crm_enrich_cadence",
+        help="Contacts not enriched within this window appear in the queue.",
+    )
+    cutoff_date = (
+        datetime.datetime.utcnow() - datetime.timedelta(days=int(cadence))
+    ).strftime("%Y-%m-%d")
+
+    if st.button("🔍  Load Enrichment Queue", key="crm_enrich_load", type="primary"):
+        sf = get_sf_connection()
+
+        # Build role filter — LIKE clauses for each keyword
+        role_filters = " OR ".join(
+            f"{_CUSTOM_FIELD_RESPONSIBILITY} LIKE '%{kw}%'"
+            for kw in _ENRICHMENT_ROLES
+        )
+
+        # Job level IN clause — VP or higher
+        level_list = ", ".join(f"'{v}'" for v in _ENRICHMENT_VP_LEVELS)
+
+        soql = f"""
+            SELECT Id, Name, FirstName, LastName, Email, Title,
+                   {_CUSTOM_FIELD_JOB_LEVEL}, {_CUSTOM_FIELD_RESPONSIBILITY},
+                   {_CLAY_ENRICHMENT_DATE_FIELD},
+                   Account.Name, Account.Type, LastActivityDate
+            FROM Contact
+            WHERE IsDeleted = false
+              AND (
+                  {_CUSTOM_FIELD_JOB_LEVEL} IN ({level_list})
+                  OR Title LIKE '%VP%' OR Title LIKE '%Vice President%'
+                  OR Title LIKE '%Chief%' OR Title LIKE '%SVP%' OR Title LIKE '%EVP%'
+              )
+              AND ({role_filters})
+              AND (
+                  {_CLAY_ENRICHMENT_DATE_FIELD} = null
+                  OR {_CLAY_ENRICHMENT_DATE_FIELD} < {cutoff_date}
+              )
+            ORDER BY {_CLAY_ENRICHMENT_DATE_FIELD} ASC NULLS FIRST
+            LIMIT 5000
+        """
+        with st.spinner("Querying Salesforce…"):
+            try:
+                records = sf.query_all(soql).get("records", [])
+            except Exception as exc:
+                st.error(f"Query failed: {exc}")
+                return
+
+        rows = []
+        for r in records:
+            last_enriched = str(r.get(_CLAY_ENRICHMENT_DATE_FIELD) or "Never")[:10]
+            rows.append({
+                "Id":            r.get("Id"),
+                "Name":          r.get("Name") or "",
+                "Email":         r.get("Email") or "",
+                "Title":         r.get("Title") or "",
+                "Job Level":     r.get(_CUSTOM_FIELD_JOB_LEVEL) or "",
+                "Responsibility":r.get(_CUSTOM_FIELD_RESPONSIBILITY) or "",
+                "Account":       (r.get("Account") or {}).get("Name") or "",
+                "Last Enriched": last_enriched,
+                "Last Activity": str(r.get("LastActivityDate") or "Never")[:10],
+            })
+
+        st.session_state["crm_enrich_results"] = rows
+
+    rows = st.session_state.get("crm_enrich_results")
+    if rows is None:
+        st.info("Click **Load Enrichment Queue** to see contacts overdue for enrichment.")
+        return
+
+    if not rows:
+        st.success("✅  All VP+ L&D / Operations contacts are enriched within your cadence window.")
+        return
+
+    never_enriched = sum(1 for r in rows if r["Last Enriched"] == "Never")
+    overdue        = len(rows) - never_enriched
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Overdue for enrichment", len(rows))
+    m2.metric("Never enriched",         never_enriched)
+    m3.metric("Enriched but stale",     overdue)
+
+    edf = pd.DataFrame(rows)
+    st.dataframe(
+        edf.drop(columns=["Id"]),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.markdown("---")
+    st.markdown("**Export to Clay**")
+    st.caption(
+        "Import this CSV into your Clay enrichment table. "
+        "Clay will verify current role, employer, and email, then write "
+        f"`{_CLAY_ENRICHMENT_DATE_FIELD}` back to Salesforce."
+    )
+
+    clay_cols = ["Id", "Name", "Email", "Title", "Job Level", "Responsibility", "Account", "Last Enriched"]
+    clay_csv  = edf[[c for c in clay_cols if c in edf.columns]].to_csv(index=False).encode()
+    st.download_button(
+        "⬇  Export enrichment queue to Clay",
+        data=clay_csv,
+        file_name=f"enrichment_queue_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
+        mime="text/csv",
+        key="crm_enrich_export",
+    )
+
+    st.caption(
+        f"After Clay enriches these contacts, it will write today's date to "
+        f"`{_CLAY_ENRICHMENT_DATE_FIELD}`. They won't reappear in this queue for {int(cadence)} days."
+    )
+
+
 def render_crm_health_page(dry_run_mode: bool, auto_backup: bool) -> None:
     st.header("🏥  CRM Health")
     st.caption(
@@ -26107,9 +26285,10 @@ def render_crm_health_page(dry_run_mode: bool, auto_backup: bool) -> None:
         "source replacements, validate emails, and catch fuzzy duplicates."
     )
 
-    tab_dash, tab_stale, tab_replace, tab_validate, tab_fuzzy = st.tabs([
+    tab_dash, tab_stale, tab_enrich, tab_replace, tab_validate, tab_fuzzy = st.tabs([
         "📊  Health Dashboard",
         "🔍  Staleness Detection",
+        "🌱  Enrichment Queue",
         "👤  Replacement Queue",
         "✉️  Email & Phone",
         "🔗  Fuzzy Duplicates",
@@ -26119,6 +26298,8 @@ def render_crm_health_page(dry_run_mode: bool, auto_backup: bool) -> None:
         _render_crm_dashboard_tab()
     with tab_stale:
         _render_crm_staleness_tab(dry_run_mode)
+    with tab_enrich:
+        _render_crm_enrichment_tab(dry_run_mode)
     with tab_replace:
         _render_crm_replacement_tab(dry_run_mode)
     with tab_validate:
