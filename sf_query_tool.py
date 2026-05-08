@@ -1473,6 +1473,45 @@ Currently supported Python strategies:
      if not specified. At least one of account_type or owner_name must be non-empty.
    - extra_fields (list[str]): Additional Account field API names to include. Empty list if none.
 
+3. "field_completion" — Use when the user asks for the completion rate, population rate,
+   "how populated" / "% populated" / "% complete" / "how many records have a value for"
+   / "how filled in" of a SINGLE field on a Salesforce object. ALWAYS prefer this strategy
+   over generating raw SOQL for completion-rate questions — it correctly handles long-text
+   fields (which SOQL cannot null-filter), compound fields like Address, picklist defaults
+   (which inflate naive "non-null" counts), and booleans (which are never null).
+
+   Trigger phrases include — but are not limited to — any of these patterns:
+   - "completion rate of <field>"
+   - "population rate of <field>"
+   - "how populated is <field>"
+   - "% populated"
+   - "% complete"
+   - "what % of <object> have <field>"
+   - "how many <object> have <field> filled in"
+   - "show me the completion rate of <field> on <object>"
+
+   Do NOT generate SOQL for these — return this strategy. Nulls, empty strings, and
+   whitespace count as "not complete" automatically.
+
+   Params:
+   - sobject (str): Salesforce object API name (e.g. "Account", "Contact"). Required.
+   - field (str): Field API name OR human label. The Python helper does fuzzy resolution
+     so labels like "industry" or "billing country" or "L&D Responsibility" all resolve.
+   - where_clause (str): Optional additional SOQL filter (without the WHERE keyword) when
+     the user wants a scoped completion rate, e.g. "Type = 'Customer'". Empty string by
+     default. Common scopes the user may imply: "for customer accounts" → "Type = 'Customer'";
+     "for active records" → "IsActive__c = true". Be conservative — only set this when the
+     user clearly asks to scope.
+   - treat_picklist_default_as_empty (bool, default true): Picklist defaults are usually
+     a sign the field was never filled in deliberately. Keep true unless the user says
+     otherwise.
+
+   Out of scope for this strategy (do NOT route here):
+   - Trends over time / historical changes in completion rate → not yet supported, return
+     a regular SOQL response or explain that historical trend lookups are not available.
+   - Bulk multi-field completion comparison ("show me completion for every field on Account")
+     → direct the user to the Schema Explorer page; do not try to do this here.
+
 When returning a Python strategy, use this JSON shape:
 {
   "strategy": "python",
@@ -3178,9 +3217,19 @@ def run_owner_pure_hierarchy(params: dict, status_cb=None) -> "pd.DataFrame":
     return result_df
 
 
+def _run_field_completion_strategy(params: dict, status_cb=None):
+    """Adapter for the field_completion strategy. Calls the implementation in
+    modules/field_completion.py with a live SF connection. Returns the
+    structured stats dict (not a DataFrame) — render_query_page handles its
+    own UI for this strategy and never sends it through the standard flow."""
+    from modules.field_completion import run_field_completion
+    return run_field_completion(params, sf=get_sf_connection(), status_cb=status_cb)
+
+
 PYTHON_STRATEGIES: dict = {
     "account_hierarchy": run_account_hierarchy,
     "owner_pure_hierarchy": run_owner_pure_hierarchy,
+    "field_completion": _run_field_completion_strategy,
 }
 
 
@@ -3464,6 +3513,124 @@ def render_safety_flags(soql: str) -> tuple[list, list]:
     for b in blocks:
         st.error(f"🚫 PROTECTED FIELD: {b}")
     return warnings, blocks
+
+
+def _render_completion_card(result: dict, strategy: dict | None = None) -> None:
+    """
+    Render a field-completion result (from modules.field_completion) as a
+    metric card with two follow-up buttons:
+        • View incomplete records — loads a SOQL query into the Query Builder
+          showing the records where the field is null/empty.
+        • Open in Schema Explorer  — jumps to the Schema Explorer with object
+          and field pre-selected.
+    """
+    if not result:
+        return
+
+    # Hard error path
+    if result.get("error"):
+        st.error(f"❌ {result['error']}")
+        if result.get("notes"):
+            for n in result["notes"]:
+                st.caption(f"• {n}")
+        return
+
+    sobject  = result.get("object", "")
+    field    = result.get("field", "")
+    label    = result.get("field_label", field)
+    ftype    = result.get("field_type", "")
+    total    = result.get("total_records") or 0
+    complete = result.get("complete_count")
+    incomp   = result.get("incomplete_count")
+    pct      = result.get("completion_pct")
+    method   = result.get("method", "")
+    scope    = result.get("scope_filter", "(none)")
+    notes    = result.get("notes") or []
+
+    st.markdown("---")
+    header = f"📊 **{sobject}.{field}** — Completion Rate"
+    if result.get("resolved_from_hint"):
+        header += f"  \n_Resolved from your phrase: '{result['resolved_from_hint']}'_"
+    st.markdown(header)
+
+    # Three primary metrics in columns
+    col_pct, col_complete, col_incomplete = st.columns(3)
+    with col_pct:
+        st.metric(
+            "Completion %",
+            f"{pct:.2f}%" if isinstance(pct, (int, float)) else "—",
+        )
+    with col_complete:
+        st.metric(
+            "Complete",
+            f"{complete:,}" if isinstance(complete, int) else "—",
+            help="Records with a non-empty value (nulls, empty strings, "
+                 "and where applicable picklist defaults / whitespace are excluded).",
+        )
+    with col_incomplete:
+        st.metric(
+            "Incomplete",
+            f"{incomp:,}" if isinstance(incomp, int) else "—",
+        )
+
+    # Secondary facts
+    info_lines = [
+        f"**Type:** `{ftype or 'unknown'}`  ",
+        f"**Total records in scope:** {total:,}  ",
+        f"**Method:** `{method}`",
+    ]
+    st.caption("  \n".join(info_lines))
+
+    if scope and scope not in ("(none)", "IsDeleted = false"):
+        st.caption(f"**Scope filter:** `{scope}`")
+
+    # Notes / caveats from the strategy (e.g. picklist default exclusion)
+    for n in notes:
+        st.caption(f"ℹ️ {n}")
+
+    # ── Action buttons ───────────────────────────────────────────────────────
+    btn_col1, btn_col2, _ = st.columns([2, 2, 1])
+
+    with btn_col1:
+        if st.button("📋  View incomplete records", key=f"comp_view_incomplete_{sobject}_{field}"):
+            # Build a SOQL query for the incomplete records and load it into
+            # the Query Builder's edit box. We pre-load via session state so
+            # the user lands on a ready-to-run query.
+            null_pred = f"({field} = null OR {field} = '')"
+            scope_extra = ""
+            if scope and scope not in ("(none)", "IsDeleted = false"):
+                scope_extra = f" AND ({scope})"
+            elif scope == "IsDeleted = false":
+                scope_extra = ""  # already satisfied; SOQL implicitly filters deleted records
+            soql = (
+                f"SELECT Id, Name, {field} "
+                f"FROM {sobject} "
+                f"WHERE {null_pred}{scope_extra} "
+                f"LIMIT 500"
+            )
+            st.session_state.ai_generated_soql  = soql
+            st.session_state.ai_explanation     = (
+                f"Records on {sobject} where {field} is null, empty, or "
+                f"otherwise considered 'not complete' (capped at 500 rows)."
+            )
+            st.session_state.ai_safety_notes    = []
+            st.session_state.ai_steps           = []
+            st.session_state.ai_python_strategy = None
+            st.session_state.ai_detected_object = sobject
+            st.rerun()
+
+    with btn_col2:
+        if st.button("🔎  Open in Schema Explorer", key=f"comp_open_se_{sobject}_{field}"):
+            # Schema Explorer reads its initial object/field from session state
+            # — pre-loading here lands the user on the object with the field
+            # already in focus (graceful even if those keys aren't read yet).
+            st.session_state["_oe_object"]      = sobject
+            st.session_state["_oe_focus_field"] = field
+            st.session_state["_incoming_remediation"] = {
+                "object": sobject, "field": field,
+            }
+            st.session_state.page = "schema_explorer"
+            st.rerun()
 
 
 def render_dry_run_panel(df: pd.DataFrame, operation: str, object_name: str):
@@ -12408,7 +12575,58 @@ def render_query_page(dry_run_mode: bool, auto_backup: bool):
                 elif result_df is not None:
                     st.info("No records returned from the final step.")
 
-        # ── Case 4: Python strategy ──────────────────────────────────────────
+        # ── Case 4a: Field completion strategy (renders a stat card) ─────────
+        elif (st.session_state.get("ai_python_strategy")
+                and st.session_state.ai_python_strategy.get("python_task") == "field_completion"):
+            strategy = st.session_state.ai_python_strategy
+            st.markdown("---")
+            st.markdown(f"**What this does:** {strategy.get('explanation', '')}")
+
+            for note in strategy.get("safety_notes", []):
+                st.markdown(f'<div class="safety-banner">⚠️ {note}</div>', unsafe_allow_html=True)
+
+            params = strategy.get("params", {})
+            with st.expander("🔍 Review parsed parameters", expanded=False):
+                st.markdown(f"**Object:** `{params.get('sobject', '(missing)')}`")
+                st.markdown(f"**Field:** `{params.get('field', '(missing)')}`")
+                if params.get("where_clause"):
+                    st.markdown(f"**Scope filter:** `{params['where_clause']}`")
+                if params.get("treat_picklist_default_as_empty") is False:
+                    st.markdown("**Picklist defaults:** counted as populated (user override)")
+                if params.get("treat_whitespace_as_empty") is False:
+                    st.markdown("**Whitespace values:** counted as populated (user override)")
+
+            # Cache the result so re-renders (snooze, clipboard buttons, etc.)
+            # don't re-trigger the Salesforce queries.
+            _comp_cache_key = (
+                f"_completion_{params.get('sobject','')}::"
+                f"{params.get('field','')}::{params.get('where_clause','')}"
+            )
+
+            run_clicked = st.button(
+                "▶️  Calculate Completion Rate",
+                key="run_field_completion",
+                type="primary",
+            )
+
+            if run_clicked or _comp_cache_key in st.session_state:
+                if _comp_cache_key not in st.session_state:
+                    with st.spinner("Querying Salesforce…"):
+                        try:
+                            result = execute_python_strategy(strategy)
+                        except (ValueError, RuntimeError) as e:
+                            st.error(str(e))
+                            result = None
+                    if result is not None:
+                        st.session_state[_comp_cache_key] = result
+
+                result = st.session_state.get(_comp_cache_key)
+                if result is not None:
+                    _render_completion_card(result, strategy)
+
+            st.markdown("")  # vertical breathing room before "Ask about the org"
+
+        # ── Case 4b: Generic Python strategy (hierarchy etc.) ────────────────
         elif st.session_state.get("ai_python_strategy"):
             strategy = st.session_state.ai_python_strategy
             st.markdown("---")
