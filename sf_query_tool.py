@@ -11998,9 +11998,9 @@ def render_sidebar_nav():
         _nav_btn("🔐  Permissions & Users", "permissions")
         _nav_btn("📄  Org Explorer", "org_explorer")
 
-    # ── SAGE PIPELINE ─────────────────────────────────────────────────────────────────
-    with st.expander("🧬  SAGE", expanded=False):
-        _nav_btn("🧬  Field Manager", "sage_fields")
+    # ── DATA LAKE ─────────────────────────────────────────────────────────────────────
+    with st.expander("🧱  Data Lake", expanded=False):
+        _nav_btn("🧱  Field Manager", "sage_fields")
 
     # ── REFERENCE & LOGS ──────────────────────────────────────────────────────────────
     with st.expander("📚  Reference & Logs", expanded=False):
