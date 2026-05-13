@@ -466,11 +466,11 @@ def _render_field_table(client, fields, actor) -> None:
         st.info("No fields configured for this object yet.")
         return
 
-    weights = [0.5, 2, 2, 1, 1, 1.5, 1, 1, 0.7]
+    weights = [0.4, 2, 2, 0.9, 1, 1.3, 0.7, 0.8, 1.0]
     header_cols = st.columns(weights)
     for col, label in zip(
         header_cols,
-        ["#", "SF field", "BQ column", "Type", "Mode", "Cast", "Derived", "Enabled", ""],
+        ["#", "SF field", "BQ column", "Type", "Mode", "Cast", "Derived", "Enabled", "Actions"],
     ):
         col.markdown(f"**{label}**")
 
