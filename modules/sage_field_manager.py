@@ -411,63 +411,73 @@ def _render_field_table(client, fields, actor) -> None:
 
 
 def _render_add_field_form(client, object_name, existing_columns, actor) -> None:
+    """Inline form to add one new field.
+
+    Implemented without ``st.form`` so the BQ-column auto-suggestion can
+    update live as the user types the SF field name.  (``st.form`` batches
+    all widgets and only reruns on submit, which freezes the suggestion at
+    the initial empty value.)
+    """
     with st.expander("➕ Add field", expanded=False):
-        with st.form(key=f"sage_add_field_{object_name}"):
-            col1, col2 = st.columns(2)
-            sf_field = col1.text_input(
-                "Salesforce field name",
-                placeholder="e.g. Website, Description, BillingPostalCode",
-                help="Use dotted paths for relationships: Owner.Name, Product2.Family.",
-                key=f"sage_sf_field_{object_name}",
-            )
-            bq_column = col2.text_input(
-                "BigQuery column",
-                value=_suggest_bq_column(sf_field) if sf_field else "",
-                placeholder="auto-suggested from SF field",
-                key=f"sage_bq_column_{object_name}",
-            )
-            col3, col4, col5 = st.columns(3)
-            bq_type = col3.selectbox("Type", BQ_TYPES, index=0,
-                key=f"sage_bq_type_{object_name}")
-            bq_mode = col4.selectbox("Mode", BQ_MODES, index=0,
-                key=f"sage_bq_mode_{object_name}")
-            cast_strategy = col5.selectbox(
-                "Cast strategy",
-                CAST_STRATEGIES,
-                index=CAST_STRATEGIES.index(DEFAULT_CAST_FOR_TYPE[bq_type]),
-                key=f"sage_cast_{object_name}",
-                help="`auto` is correct for almost everything except numerics, booleans, and datetimes.",
-            )
-            is_derived = st.checkbox(
-                "Derived (Python builder)",
-                value=False,
-                key=f"sage_derived_{object_name}",
-                help=(
-                    "Check if this column's value is computed in Python from other "
-                    "fields rather than coming directly from SOQL.  A builder must "
-                    "be registered in main.DERIVED_BUILDERS."
-                ),
-            )
-            submitted = st.form_submit_button("Add field", type="primary")
-            if submitted:
-                if not sf_field.strip() or not bq_column.strip():
-                    st.error("Both Salesforce field and BigQuery column are required.")
-                elif bq_column in existing_columns:
-                    st.error(f"BigQuery column `{bq_column}` already exists.")
-                else:
-                    _insert_field(
-                        client,
-                        object_name=object_name,
-                        sf_field=sf_field.strip(),
-                        bq_column=bq_column.strip(),
-                        bq_type=bq_type,
-                        bq_mode=bq_mode,
-                        cast_strategy=cast_strategy,
-                        is_derived=is_derived,
-                        actor_email=actor,
-                    )
-                    st.success(f"Added `{bq_column}` to {object_name}.")
-                    st.rerun()
+        col1, col2 = st.columns(2)
+        sf_field = col1.text_input(
+            "Salesforce field name",
+            placeholder="e.g. Website, Description, BillingPostalCode",
+            help="Use dotted paths for relationships: Owner.Name, Product2.Family.",
+            key=f"sage_sf_field_{object_name}",
+        )
+        # Suggested column updates live as sf_field is typed.  The user can
+        # override by editing the BQ column input directly.
+        suggested_bq = _suggest_bq_column(sf_field) if sf_field else ""
+        bq_column = col2.text_input(
+            "BigQuery column",
+            value=suggested_bq,
+            placeholder="auto-suggested from SF field",
+            key=f"sage_bq_column_{object_name}_{suggested_bq}",
+        )
+        col3, col4, col5 = st.columns(3)
+        bq_type = col3.selectbox(
+            "Type", BQ_TYPES, index=0, key=f"sage_bq_type_{object_name}"
+        )
+        bq_mode = col4.selectbox(
+            "Mode", BQ_MODES, index=0, key=f"sage_bq_mode_{object_name}"
+        )
+        cast_strategy = col5.selectbox(
+            "Cast strategy",
+            CAST_STRATEGIES,
+            index=CAST_STRATEGIES.index(DEFAULT_CAST_FOR_TYPE[bq_type]),
+            key=f"sage_cast_{object_name}_{bq_type}",
+            help="`auto` is correct for almost everything except numerics, booleans, and datetimes.",
+        )
+        is_derived = st.checkbox(
+            "Derived (Python builder)",
+            value=False,
+            key=f"sage_derived_{object_name}",
+            help=(
+                "Check if this column's value is computed in Python from other "
+                "fields rather than coming directly from SOQL.  A builder must "
+                "be registered in main.DERIVED_BUILDERS."
+            ),
+        )
+        if st.button("Add field", type="primary", key=f"sage_add_field_submit_{object_name}"):
+            if not sf_field.strip() or not bq_column.strip():
+                st.error("Both Salesforce field and BigQuery column are required.")
+            elif bq_column in existing_columns:
+                st.error(f"BigQuery column `{bq_column}` already exists.")
+            else:
+                _insert_field(
+                    client,
+                    object_name=object_name,
+                    sf_field=sf_field.strip(),
+                    bq_column=bq_column.strip(),
+                    bq_type=bq_type,
+                    bq_mode=bq_mode,
+                    cast_strategy=cast_strategy,
+                    is_derived=is_derived,
+                    actor_email=actor,
+                )
+                st.success(f"Added `{bq_column}` to {object_name}.")
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -556,120 +566,137 @@ def _render_add_object_form(client, existing_object_names: set[str], existing_ta
     later via the Field Manager tab for that object.
     """
 
-    with st.form(key="sage_add_object"):
-        col1, col2 = st.columns(2)
-        object_name = col1.text_input(
-            "Salesforce object name",
-            placeholder="e.g. User, Contact, Case, Lead",
-            help="The exact SOQL object API name.  Case-sensitive.",
-        )
-        bq_table = col2.text_input(
-            "BigQuery table name",
-            value=_suggest_bq_table(object_name),
-            placeholder="auto-suggested from object name",
-            help="Will land under `gong-transcripts-490013.salesforce_data.<this>`.",
-        )
+    # No st.form wrapper — Streamlit's form widget batches all inputs and only
+    # reruns on submit, which prevents the BQ table / PK column / source label
+    # suggestions from updating live as the user types the object name.
+    col1, col2 = st.columns(2)
+    object_name = col1.text_input(
+        "Salesforce object name",
+        placeholder="e.g. User, Contact, Case, Lead",
+        help="The exact SOQL object API name.  Case-sensitive.",
+        key="sage_add_obj_name",
+    )
 
-        st.markdown("**Primary key** — the SF field that uniquely identifies a record. "
-                    "Almost always `Id`.")
-        col3, col4, col5 = st.columns([2, 2, 1])
-        primary_key_sf_field = col3.text_input(
-            "SF primary-key field",
-            value="Id",
-            key="sage_add_obj_pk_sf",
-        )
-        primary_key_bq_column = col4.text_input(
-            "BQ primary-key column",
-            value=_suggest_pk_column(object_name),
-            placeholder="auto-suggested",
-            key="sage_add_obj_pk_bq",
-        )
-        primary_key_bq_type = col5.selectbox(
-            "Type",
-            BQ_TYPES,
-            index=0,
-            key="sage_add_obj_pk_type",
-        )
+    # Re-derive each suggestion from the live object_name; embed it into the
+    # widget key so Streamlit treats a new suggestion as a new widget and
+    # re-renders the input value (rather than preserving the stale value the
+    # user hasn't touched).
+    suggested_table = _suggest_bq_table(object_name)
+    suggested_pk = _suggest_pk_column(object_name)
+    suggested_source = _suggest_source_label(object_name)
 
-        st.markdown("**Filters & sync behaviour**")
-        col6, col7 = st.columns(2)
-        where_clause = col6.text_input(
-            "WHERE clause (optional)",
-            placeholder="e.g. IsDeleted = false",
-            help="SOQL WHERE body, no leading WHERE.  Applied in both backfill "
-                 "and incremental modes.",
-        )
-        incremental_field = col7.text_input(
-            "Incremental field",
-            value="LastModifiedDate",
-            help="SF datetime field for incremental syncs.  Almost always "
-                 "LastModifiedDate.",
-        )
+    bq_table = col2.text_input(
+        "BigQuery table name",
+        value=suggested_table,
+        placeholder="auto-suggested from object name",
+        help="Will land under `gong-transcripts-490013.salesforce_data.<this>`.",
+        key=f"sage_add_obj_bq_table__{suggested_table}",
+    )
 
-        source_label = st.text_input(
-            "Audit source label",
-            value=_suggest_source_label(object_name),
-            placeholder="auto-suggested",
-            help="Written to the `source` column on every row this object "
-                 "produces, for traceability.",
-        )
+    st.markdown(
+        "**Primary key** — the SF field that uniquely identifies a record. "
+        "Almost always `Id`."
+    )
+    col3, col4, col5 = st.columns([2, 2, 1])
+    primary_key_sf_field = col3.text_input(
+        "SF primary-key field",
+        value="Id",
+        key="sage_add_obj_pk_sf",
+    )
+    primary_key_bq_column = col4.text_input(
+        "BQ primary-key column",
+        value=suggested_pk,
+        placeholder="auto-suggested",
+        key=f"sage_add_obj_pk_bq__{suggested_pk}",
+    )
+    primary_key_bq_type = col5.selectbox(
+        "Type",
+        BQ_TYPES,
+        index=0,
+        key="sage_add_obj_pk_type",
+    )
 
-        extra_soql_raw = st.text_input(
-            "Extra SOQL fields (optional, comma-separated)",
-            placeholder="e.g. OwnerId, RecordTypeId",
-            help="SF fields to include in the SELECT but **not** map to a BQ "
-                 "column.  Used for derived-column inputs or forward-compat.",
-        )
+    st.markdown("**Filters & sync behaviour**")
+    col6, col7 = st.columns(2)
+    where_clause = col6.text_input(
+        "WHERE clause (optional)",
+        placeholder="e.g. IsDeleted = false",
+        help="SOQL WHERE body, no leading WHERE.  Applied in both backfill "
+             "and incremental modes.",
+        key="sage_add_obj_where",
+    )
+    incremental_field = col7.text_input(
+        "Incremental field",
+        value="LastModifiedDate",
+        help="SF datetime field for incremental syncs.  Almost always "
+             "LastModifiedDate.",
+        key="sage_add_obj_inc",
+    )
 
-        submitted = st.form_submit_button("Create object", type="primary")
+    source_label = st.text_input(
+        "Audit source label",
+        value=suggested_source,
+        placeholder="auto-suggested",
+        help="Written to the `source` column on every row this object "
+             "produces, for traceability.",
+        key=f"sage_add_obj_source__{suggested_source}",
+    )
 
-        if submitted:
-            errors = []
-            object_name = object_name.strip()
-            bq_table = bq_table.strip()
-            primary_key_sf_field = primary_key_sf_field.strip()
-            primary_key_bq_column = primary_key_bq_column.strip()
-            where_clause_clean = (where_clause or "").strip() or None
-            source_label = source_label.strip()
-            extra_soql = [s.strip() for s in extra_soql_raw.split(",") if s.strip()]
+    extra_soql_raw = st.text_input(
+        "Extra SOQL fields (optional, comma-separated)",
+        placeholder="e.g. OwnerId, RecordTypeId",
+        help="SF fields to include in the SELECT but **not** map to a BQ "
+             "column.  Used for derived-column inputs or forward-compat.",
+        key="sage_add_obj_extra",
+    )
 
-            if not object_name:
-                errors.append("Salesforce object name is required.")
-            elif object_name in existing_object_names:
-                errors.append(f"Object `{object_name}` already exists in the manifest.")
-            if not bq_table:
-                errors.append("BigQuery table name is required.")
-            elif bq_table in existing_tables:
-                errors.append(f"BigQuery table `{bq_table}` is already used.")
-            if not primary_key_sf_field:
-                errors.append("Primary-key SF field is required.")
-            if not primary_key_bq_column:
-                errors.append("Primary-key BQ column is required.")
-            if not source_label:
-                errors.append("Source label is required.")
+    if st.button("Create object", type="primary", key="sage_add_obj_submit"):
+        errors = []
+        object_name = object_name.strip()
+        bq_table = bq_table.strip()
+        primary_key_sf_field = primary_key_sf_field.strip()
+        primary_key_bq_column = primary_key_bq_column.strip()
+        where_clause_clean = (where_clause or "").strip() or None
+        source_label = source_label.strip()
+        extra_soql = [s.strip() for s in extra_soql_raw.split(",") if s.strip()]
 
-            if errors:
-                for err in errors:
-                    st.error(err)
-            else:
-                _insert_object(
-                    client,
-                    object_name=object_name,
-                    bq_table=bq_table,
-                    primary_key_column=primary_key_bq_column,
-                    primary_key_sf_field=primary_key_sf_field,
-                    primary_key_bq_type=primary_key_bq_type,
-                    where_clause=where_clause_clean,
-                    incremental_field=incremental_field.strip() or "LastModifiedDate",
-                    source_label=source_label,
-                    extra_soql_fields=extra_soql,
-                    actor_email=actor,
-                )
-                st.success(
-                    f"Created `{object_name}`.  Open Field Manager and pick "
-                    f"its tab to add fields, then trigger an incremental sync."
-                )
-                st.rerun()
+        if not object_name:
+            errors.append("Salesforce object name is required.")
+        elif object_name in existing_object_names:
+            errors.append(f"Object `{object_name}` already exists in the manifest.")
+        if not bq_table:
+            errors.append("BigQuery table name is required.")
+        elif bq_table in existing_tables:
+            errors.append(f"BigQuery table `{bq_table}` is already used.")
+        if not primary_key_sf_field:
+            errors.append("Primary-key SF field is required.")
+        if not primary_key_bq_column:
+            errors.append("Primary-key BQ column is required.")
+        if not source_label:
+            errors.append("Source label is required.")
+
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            _insert_object(
+                client,
+                object_name=object_name,
+                bq_table=bq_table,
+                primary_key_column=primary_key_bq_column,
+                primary_key_sf_field=primary_key_sf_field,
+                primary_key_bq_type=primary_key_bq_type,
+                where_clause=where_clause_clean,
+                incremental_field=incremental_field.strip() or "LastModifiedDate",
+                source_label=source_label,
+                extra_soql_fields=extra_soql,
+                actor_email=actor,
+            )
+            st.success(
+                f"Created `{object_name}`.  Open Field Manager and pick "
+                f"its tab to add fields, then trigger an incremental sync."
+            )
+            st.rerun()
 
 
 def _page_history(client) -> None:
