@@ -12000,7 +12000,8 @@ def render_sidebar_nav():
 
     # ── DATA LAKE ─────────────────────────────────────────────────────────────────────
     with st.expander("🧱  Data Lake", expanded=False):
-        _nav_btn("🧱  Field Manager", "sage_fields")
+        _nav_btn("🗃️  Object Manager", "sage_objects")
+        _nav_btn("🧬  Field Manager", "sage_fields")
 
     # ── REFERENCE & LOGS ──────────────────────────────────────────────────────────────
     with st.expander("📚  Reference & Logs", expanded=False):
@@ -23907,6 +23908,9 @@ def main():
     elif page == "sage_fields":
         from modules import sage_field_manager
         sage_field_manager.render_page(dry_run_mode, auto_backup)
+    elif page == "sage_objects":
+        from modules import sage_field_manager
+        sage_field_manager.render_object_manager(dry_run_mode, auto_backup)
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
 
@@ -24236,6 +24240,9 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
     elif page == "sage_fields":
         from modules import sage_field_manager
         sage_field_manager.render_page(dry_run_mode, auto_backup)
+    elif page == "sage_objects":
+        from modules import sage_field_manager
+        sage_field_manager.render_object_manager(dry_run_mode, auto_backup)
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
 

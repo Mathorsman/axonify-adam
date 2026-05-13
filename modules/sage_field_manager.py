@@ -548,24 +548,13 @@ def _page_object(client, obj, actor) -> None:
                     st.error(msg)
 
 
-def _page_add_object(client, existing_object_names: set[str], existing_tables: set[str], actor: str) -> None:
+def _render_add_object_form(client, existing_object_names: set[str], existing_tables: set[str], actor: str) -> None:
     """Form to create a new sObject entry in the manifest.
 
     A new entry needs at minimum: the SF object name, the BQ table name,
     and a primary key field.  Everything else is optional and can be edited
-    later via the object's own tab.
-
-    After submission the user is rerun back to the standard tab list — the
-    new tab appears alongside the existing ones, and they can start adding
-    fields immediately.
+    later via the Field Manager tab for that object.
     """
-    st.subheader("Add a new Salesforce object to the manifest")
-    st.caption(
-        "Creating an object here makes the SAGE pipeline start syncing it on "
-        "the next run.  The BigQuery table will be created automatically with "
-        "just the primary-key column; add the rest of the fields once the "
-        "object's own tab appears."
-    )
 
     with st.form(key="sage_add_object"):
         col1, col2 = st.columns(2)
@@ -677,8 +666,8 @@ def _page_add_object(client, existing_object_names: set[str], existing_tables: s
                     actor_email=actor,
                 )
                 st.success(
-                    f"Created `{object_name}`.  Switch to its tab to add fields, "
-                    f"then trigger an incremental sync."
+                    f"Created `{object_name}`.  Open Field Manager and pick "
+                    f"its tab to add fields, then trigger an incremental sync."
                 )
                 st.rerun()
 
@@ -735,24 +724,89 @@ def render_page(dry_run_mode: bool, auto_backup: bool) -> None:
         )
         return
 
-    tab_names = (
-        [o["object_name"] for o in objects]
-        + ["➕ Add object", "📜 History"]
-    )
+    tab_names = [o["object_name"] for o in objects] + ["📜 History"]
     tabs = st.tabs(tab_names)
 
-    # Object tabs come first.
-    for tab, obj in zip(tabs[: len(objects)], objects):
+    for tab, obj in zip(tabs[:-1], objects):
         with tab:
             _page_object(client, obj, actor)
 
-    with tabs[-2]:
-        _page_add_object(
-            client,
-            existing_object_names={o["object_name"] for o in objects},
-            existing_tables={o["bq_table"] for o in objects},
-            actor=actor,
-        )
-
     with tabs[-1]:
         _page_history(client)
+
+
+# ---------------------------------------------------------------------------
+# Object Manager — separate sidebar entry, focused on adding / overview.
+# ---------------------------------------------------------------------------
+
+
+def render_object_manager(dry_run_mode: bool, auto_backup: bool) -> None:
+    """A.D.A.M. page: manage the *set* of synced sObjects.
+
+    Field-level editing lives in the Field Manager page; this one is for
+    structural changes: what's being synced at all, primary key, WHERE
+    filter, audit label.  New objects are created here and their fields
+    populated via the Field Manager.
+    """
+    st.title("Data Lake — Object Manager")
+    st.caption(
+        "Manage which Salesforce objects the SAGE pipeline syncs into "
+        "BigQuery.  Each row maps one SF sObject to one BQ table in "
+        "`gong-transcripts-490013.salesforce_data`.  Field-level mapping "
+        "lives in Field Manager."
+    )
+
+    client = _supabase_client()
+    actor = (
+        st.session_state.get("sf_user_info", {}).get("email")
+        or _secret("DEFAULT_ACTOR_EMAIL")
+        or "unknown@axonify.com"
+    )
+
+    objects = _fetch_objects(client)
+
+    st.markdown("### Synced objects")
+    if not objects:
+        st.info(
+            "No objects in the manifest yet.  Use the form below to create one."
+        )
+    else:
+        for obj in objects:
+            fields = _fetch_fields(client, obj["object_name"])
+            with st.container(border=True):
+                top = st.columns([3, 2, 1, 1])
+                top[0].markdown(
+                    f"#### `{obj['object_name']}` → `{obj['bq_table']}`"
+                )
+                top[1].markdown(
+                    f"**Source label**\n\n`{obj['source_label']}`"
+                )
+                top[2].metric("Fields", len(fields))
+                top[3].metric("Enabled", sum(1 for f in fields if f["enabled"]))
+
+                detail = st.columns(3)
+                detail[0].markdown(
+                    f"**Primary key**\n\n`{obj['primary_key_column']}`"
+                )
+                detail[1].markdown(
+                    f"**Incremental field**\n\n`{obj['incremental_field']}`"
+                )
+                detail[2].markdown(
+                    f"**WHERE clause**\n\n"
+                    f"`{obj['where_clause'] or '(none)'}`"
+                )
+
+                extra = obj.get("extra_soql_fields") or []
+                if extra:
+                    st.caption(
+                        f"Extra SOQL fields (not mapped to BQ): "
+                        f"{', '.join(extra)}"
+                    )
+
+    st.markdown("### Add a new object")
+    _render_add_object_form(
+        client,
+        existing_object_names={o["object_name"] for o in objects},
+        existing_tables={o["bq_table"] for o in objects},
+        actor=actor,
+    )
