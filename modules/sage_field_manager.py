@@ -253,6 +253,91 @@ def _set_field_enabled(client, *, field_row, enabled, actor_email) -> None:
     }).execute()
 
 
+def _delete_field(client, *, field_row, actor_email) -> None:
+    """Remove a field from the manifest.
+
+    Hard delete from ``sage_sf_field_manifest``.  Logs the full removed
+    row to history so it can be reconstructed if needed.  The corresponding
+    BigQuery column is **not** dropped — it stays in BQ with its historic
+    values until manually altered.  This is intentional: dropping a BQ
+    column is a separate destructive action and must not happen by accident.
+    """
+    client.table("sage_sf_field_manifest_history").insert({
+        "object_name": field_row["object_name"],
+        "bq_column": field_row["bq_column"],
+        "action": "delete",
+        "diff": {
+            "removed_row": {
+                k: field_row.get(k)
+                for k in (
+                    "position", "sf_field", "bq_column", "bq_type", "bq_mode",
+                    "cast_strategy", "is_derived", "enabled",
+                )
+            },
+            "note": "BQ column not dropped; remove manually if needed.",
+        },
+        "actor_email": actor_email,
+    }).execute()
+    client.table("sage_sf_field_manifest").delete().eq("id", field_row["id"]).execute()
+
+
+# ---------------------------------------------------------------------------
+# Salesforce describe — autocomplete + type inference
+# ---------------------------------------------------------------------------
+
+# Maps each SF describe field-type to (bq_type, cast_strategy).  Drives the
+# auto-population of the BQ type + cast inputs when the admin picks a field
+# from the dropdown.
+_SF_TYPE_TO_BQ: dict[str, tuple[str, str]] = {
+    "id": ("STRING", "auto"),
+    "string": ("STRING", "auto"),
+    "textarea": ("STRING", "auto"),
+    "email": ("STRING", "auto"),
+    "phone": ("STRING", "auto"),
+    "url": ("STRING", "auto"),
+    "picklist": ("STRING", "auto"),
+    "multipicklist": ("STRING", "auto"),
+    "reference": ("STRING", "auto"),
+    "combobox": ("STRING", "auto"),
+    "encryptedstring": ("STRING", "auto"),
+    "address": ("STRING", "auto"),
+    "location": ("STRING", "auto"),
+    "anyType": ("STRING", "auto"),
+    "double": ("FLOAT64", "float_or_null"),
+    "currency": ("FLOAT64", "float_or_null"),
+    "percent": ("FLOAT64", "float_or_null"),
+    "int": ("INTEGER", "int_or_null"),
+    "long": ("INTEGER", "int_or_null"),
+    "boolean": ("BOOL", "bool_passthrough"),
+    "date": ("DATE", "auto"),
+    "datetime": ("TIMESTAMP", "sf_ts"),
+    "time": ("STRING", "auto"),
+}
+
+
+def _sf_to_bq_defaults(sf_type: str) -> tuple[str, str]:
+    """Suggest (bq_type, cast_strategy) from an SF describe field type."""
+    return _SF_TYPE_TO_BQ.get(sf_type, ("STRING", "auto"))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _describe_fields(object_name: str) -> list[dict]:
+    """Return the SF field catalogue for ``object_name``, via A.D.A.M.'s cache.
+
+    Returns an empty list if A.D.A.M.'s describe helper is unavailable (e.g.
+    the module is imported outside the host app) or if the SF API errors.
+    The UI falls back to a free-form text input when this is empty.
+    """
+    try:
+        import importlib
+
+        host = importlib.import_module("sf_query_tool")
+        fields = host.get_object_fields(object_name)
+        return fields or []
+    except Exception:
+        return []
+
+
 # ---------------------------------------------------------------------------
 # SOQL preview — same logic as salesforce-pipeline/manifest.build_soql.
 # ---------------------------------------------------------------------------
@@ -381,15 +466,16 @@ def _render_field_table(client, fields, actor) -> None:
         st.info("No fields configured for this object yet.")
         return
 
-    header_cols = st.columns([0.5, 2, 2, 1, 1, 1.5, 1, 1])
+    weights = [0.5, 2, 2, 1, 1, 1.5, 1, 1, 0.7]
+    header_cols = st.columns(weights)
     for col, label in zip(
         header_cols,
-        ["#", "SF field", "BQ column", "Type", "Mode", "Cast", "Derived", "Enabled"],
+        ["#", "SF field", "BQ column", "Type", "Mode", "Cast", "Derived", "Enabled", ""],
     ):
         col.markdown(f"**{label}**")
 
     for field in fields:
-        cols = st.columns([0.5, 2, 2, 1, 1, 1.5, 1, 1])
+        cols = st.columns(weights)
         cols[0].markdown(f"`{field['position']}`")
         cols[1].markdown(f"`{field['sf_field']}`")
         cols[2].markdown(f"`{field['bq_column']}`")
@@ -409,58 +495,168 @@ def _render_field_table(client, fields, actor) -> None:
             )
             st.rerun()
 
+        # Per-row delete in a popover so the action is intentional, not a
+        # single mis-click.  Refuses to delete the primary key — that would
+        # break upsert deletes on incremental syncs.
+        with cols[8].popover("⋯", help="Row actions"):
+            st.markdown(
+                f"**Delete `{field['bq_column']}` from the manifest?**"
+            )
+            st.caption(
+                "The BigQuery column will NOT be dropped — it stays with "
+                "its historic values.  The pipeline just stops populating "
+                "it on future runs."
+            )
+            if field["bq_mode"] == "REQUIRED":
+                st.warning(
+                    "Primary keys can't be deleted — incremental upserts "
+                    "rely on them.  Delete the whole object instead."
+                )
+            else:
+                if st.button(
+                    "🗑️ Delete field",
+                    key=f"sage_del_btn_{field['id']}",
+                    type="primary",
+                ):
+                    _delete_field(client, field_row=field, actor_email=actor)
+                    st.toast(
+                        f"Deleted `{field['bq_column']}` from "
+                        f"{field['object_name']}",
+                        icon="🗑️",
+                    )
+                    st.rerun()
+
 
 def _render_add_field_form(client, object_name, existing_columns, actor) -> None:
     """Inline form to add one new field.
 
-    Implemented without ``st.form`` so the BQ-column auto-suggestion can
-    update live as the user types the SF field name.  (``st.form`` batches
-    all widgets and only reruns on submit, which freezes the suggestion at
-    the initial empty value.)
+    Two modes:
+      - **Picker** (default): selectbox sourced from the SF describe API.
+        Verifies the field exists, shows its label + SF type, and
+        auto-populates BQ type + cast strategy from the SF type.
+      - **Custom path**: free-form text input for dotted relationship
+        traversals (``Owner.Name``, ``Product2.Family``) that don't appear
+        in describe directly.
+
+    Not wrapped in ``st.form`` so suggestions update live as the user types.
     """
     with st.expander("➕ Add field", expanded=False):
-        col1, col2 = st.columns(2)
-        sf_field = col1.text_input(
-            "Salesforce field name",
-            placeholder="e.g. Website, Description, BillingPostalCode",
-            help="Use dotted paths for relationships: Owner.Name, Product2.Family.",
-            key=f"sage_sf_field_{object_name}",
-        )
-        # Suggested column updates live as sf_field is typed.  The user can
-        # override by editing the BQ column input directly.
+        all_fields = _describe_fields(object_name)
+        existing_sf_fields = {
+            f["sf_field"]
+            for f in _fetch_fields(client, object_name)
+            if not f["is_derived"]
+        }
+
+        if not all_fields:
+            st.warning(
+                f"Couldn't load the field catalogue for `{object_name}` from "
+                f"Salesforce.  Falling back to free-form input — make sure "
+                f"the field name is exactly right (case-sensitive)."
+            )
+            use_picker = False
+        else:
+            use_picker = not st.toggle(
+                "Custom field path (relationship traversal)",
+                value=False,
+                key=f"sage_add_field_custom_{object_name}",
+                help="Enable for dotted paths like `Owner.Name` or "
+                     "`Product2.Family` — those don't appear in describe but "
+                     "the pipeline resolves them at runtime.",
+            )
+
+        # ------------------------------------------------------------------
+        # SF field — selectbox (picker) or text input (custom)
+        # ------------------------------------------------------------------
+        if use_picker:
+            # Filter out fields that are already on this object so the admin
+            # can't accidentally double-add.
+            available = [
+                f for f in all_fields if f["name"] not in existing_sf_fields
+            ]
+            if not available:
+                st.info("Every Salesforce field on this object is already mapped.")
+                return
+
+            def _label(f):
+                return f"{f['name']}  —  {f['label']}  ({f['type']})"
+
+            choice = st.selectbox(
+                f"Salesforce field on `{object_name}`",
+                options=available,
+                format_func=_label,
+                key=f"sage_add_field_picker_{object_name}",
+                help="Start typing to filter.  Showing only fields that are "
+                     "not already in the manifest.",
+            )
+            sf_field = choice["name"]
+            sf_type = choice["type"]
+            sf_label = choice["label"]
+            default_bq, default_cast = _sf_to_bq_defaults(sf_type)
+            st.caption(
+                f"**SF type:** `{sf_type}`   **Label:** {sf_label}   "
+                f"**Default mapping:** `{default_bq}` / cast `{default_cast}`"
+            )
+        else:
+            sf_field = st.text_input(
+                "Salesforce field path",
+                placeholder="e.g. Owner.Name, Product2.Family",
+                key=f"sage_add_field_path_{object_name}",
+                help="Dotted paths walk relationships at runtime.  Make sure "
+                     "the target field exists on the referenced object.",
+            ).strip()
+            sf_type = None
+            default_bq, default_cast = "STRING", "auto"
+
+        # ------------------------------------------------------------------
+        # BQ column + type + mode + cast — auto-filled from the SF choice
+        # ------------------------------------------------------------------
         suggested_bq = _suggest_bq_column(sf_field) if sf_field else ""
-        bq_column = col2.text_input(
+        bq_column = st.text_input(
             "BigQuery column",
             value=suggested_bq,
             placeholder="auto-suggested from SF field",
-            key=f"sage_bq_column_{object_name}_{suggested_bq}",
+            key=f"sage_add_field_bq_col_{object_name}__{suggested_bq}",
         )
-        col3, col4, col5 = st.columns(3)
-        bq_type = col3.selectbox(
-            "Type", BQ_TYPES, index=0, key=f"sage_bq_type_{object_name}"
+
+        col1, col2, col3 = st.columns(3)
+        bq_type = col1.selectbox(
+            "Type",
+            BQ_TYPES,
+            index=BQ_TYPES.index(default_bq),
+            key=f"sage_add_field_bq_type_{object_name}__{default_bq}",
         )
-        bq_mode = col4.selectbox(
-            "Mode", BQ_MODES, index=0, key=f"sage_bq_mode_{object_name}"
+        bq_mode = col2.selectbox(
+            "Mode",
+            BQ_MODES,
+            index=0,
+            key=f"sage_add_field_bq_mode_{object_name}",
         )
-        cast_strategy = col5.selectbox(
+        cast_strategy = col3.selectbox(
             "Cast strategy",
             CAST_STRATEGIES,
-            index=CAST_STRATEGIES.index(DEFAULT_CAST_FOR_TYPE[bq_type]),
-            key=f"sage_cast_{object_name}_{bq_type}",
+            index=CAST_STRATEGIES.index(default_cast),
+            key=f"sage_add_field_cast_{object_name}__{default_cast}",
             help="`auto` is correct for almost everything except numerics, booleans, and datetimes.",
         )
+
         is_derived = st.checkbox(
             "Derived (Python builder)",
             value=False,
-            key=f"sage_derived_{object_name}",
+            key=f"sage_add_field_derived_{object_name}",
             help=(
                 "Check if this column's value is computed in Python from other "
                 "fields rather than coming directly from SOQL.  A builder must "
-                "be registered in main.DERIVED_BUILDERS."
+                "be registered in `main.DERIVED_BUILDERS`."
             ),
         )
-        if st.button("Add field", type="primary", key=f"sage_add_field_submit_{object_name}"):
-            if not sf_field.strip() or not bq_column.strip():
+
+        if st.button(
+            "Add field",
+            type="primary",
+            key=f"sage_add_field_submit_{object_name}",
+        ):
+            if not sf_field or not bq_column.strip():
                 st.error("Both Salesforce field and BigQuery column are required.")
             elif bq_column in existing_columns:
                 st.error(f"BigQuery column `{bq_column}` already exists.")
@@ -468,7 +664,7 @@ def _render_add_field_form(client, object_name, existing_columns, actor) -> None
                 _insert_field(
                     client,
                     object_name=object_name,
-                    sf_field=sf_field.strip(),
+                    sf_field=sf_field,
                     bq_column=bq_column.strip(),
                     bq_type=bq_type,
                     bq_mode=bq_mode,
