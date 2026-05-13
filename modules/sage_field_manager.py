@@ -163,6 +163,83 @@ def _insert_field(client, *, object_name, sf_field, bq_column, bq_type, bq_mode,
     }).execute()
 
 
+def _insert_object(
+    client,
+    *,
+    object_name: str,
+    bq_table: str,
+    primary_key_column: str,
+    primary_key_sf_field: str,
+    primary_key_bq_type: str,
+    where_clause: str | None,
+    incremental_field: str,
+    source_label: str,
+    extra_soql_fields: list[str],
+    actor_email: str,
+) -> None:
+    """Create a new sObject row plus its primary-key FieldSpec.
+
+    Every object needs at least one REQUIRED field (the PK) so the BQ table
+    can be created — this helper inserts the object row and the PK field row
+    in one logical operation, plus two history entries.
+    """
+    existing = _fetch_objects(client)
+    next_position = (max((o["position"] for o in existing), default=-1)) + 1
+
+    client.table("sage_sf_object_manifest").insert({
+        "object_name": object_name,
+        "bq_table": bq_table,
+        "primary_key_column": primary_key_column,
+        "where_clause": where_clause or None,
+        "incremental_field": incremental_field,
+        "source_label": source_label,
+        "extra_soql_fields": extra_soql_fields,
+        "position": next_position,
+        "enabled": True,
+    }).execute()
+
+    client.table("sage_sf_field_manifest").insert({
+        "object_name": object_name,
+        "position": 0,
+        "sf_field": primary_key_sf_field,
+        "bq_column": primary_key_column,
+        "bq_type": primary_key_bq_type,
+        "bq_mode": "REQUIRED",
+        "cast_strategy": "auto",
+        "is_derived": False,
+        "enabled": True,
+    }).execute()
+
+    client.table("sage_sf_field_manifest_history").insert({
+        "object_name": object_name,
+        "bq_column": None,
+        "action": "create",
+        "diff": {
+            "scope": "object",
+            "bq_table": bq_table,
+            "primary_key_column": primary_key_column,
+            "where_clause": where_clause,
+            "incremental_field": incremental_field,
+            "source_label": source_label,
+            "extra_soql_fields": extra_soql_fields,
+        },
+        "actor_email": actor_email,
+    }).execute()
+
+    client.table("sage_sf_field_manifest_history").insert({
+        "object_name": object_name,
+        "bq_column": primary_key_column,
+        "action": "create",
+        "diff": {
+            "sf_field": primary_key_sf_field,
+            "bq_type": primary_key_bq_type,
+            "bq_mode": "REQUIRED",
+            "note": "auto-created primary key",
+        },
+        "actor_email": actor_email,
+    }).execute()
+
+
 def _set_field_enabled(client, *, field_row, enabled, actor_email) -> None:
     client.table("sage_sf_field_manifest").update(
         {"enabled": enabled}
@@ -267,6 +344,36 @@ def _suggest_bq_column(sf_field: str) -> str:
     parts = [p for p in re.split(r"[._]", stripped) if p]
     snake = "_".join(re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", p) for p in parts)
     return snake.lower()
+
+
+def _suggest_bq_table(object_name: str) -> str:
+    """`User` → `users`, `OpportunityLineItem` → `opportunity_line_items`."""
+    if not object_name:
+        return ""
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", object_name).lower()
+    # Naive English pluralisation — covers the common SF objects.  Admins
+    # can override the auto-suggestion in the form.
+    if snake.endswith("y") and not snake.endswith(("ay", "ey", "oy", "uy")):
+        return snake[:-1] + "ies"
+    if snake.endswith(("s", "x", "ch", "sh")):
+        return snake + "es"
+    return snake + "s"
+
+
+def _suggest_source_label(object_name: str) -> str:
+    """`User` → `salesforce-user-sync`."""
+    if not object_name:
+        return ""
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", object_name).lower()
+    return f"salesforce-{snake}-sync"
+
+
+def _suggest_pk_column(object_name: str) -> str:
+    """`User` → `user_id`, `OpportunityLineItem` → `opportunity_line_item_id`."""
+    if not object_name:
+        return ""
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", object_name).lower()
+    return f"{snake}_id"
 
 
 def _render_field_table(client, fields, actor) -> None:
@@ -441,6 +548,141 @@ def _page_object(client, obj, actor) -> None:
                     st.error(msg)
 
 
+def _page_add_object(client, existing_object_names: set[str], existing_tables: set[str], actor: str) -> None:
+    """Form to create a new sObject entry in the manifest.
+
+    A new entry needs at minimum: the SF object name, the BQ table name,
+    and a primary key field.  Everything else is optional and can be edited
+    later via the object's own tab.
+
+    After submission the user is rerun back to the standard tab list — the
+    new tab appears alongside the existing ones, and they can start adding
+    fields immediately.
+    """
+    st.subheader("Add a new Salesforce object to the manifest")
+    st.caption(
+        "Creating an object here makes the SAGE pipeline start syncing it on "
+        "the next run.  The BigQuery table will be created automatically with "
+        "just the primary-key column; add the rest of the fields once the "
+        "object's own tab appears."
+    )
+
+    with st.form(key="sage_add_object"):
+        col1, col2 = st.columns(2)
+        object_name = col1.text_input(
+            "Salesforce object name",
+            placeholder="e.g. User, Contact, Case, Lead",
+            help="The exact SOQL object API name.  Case-sensitive.",
+        )
+        bq_table = col2.text_input(
+            "BigQuery table name",
+            value=_suggest_bq_table(object_name),
+            placeholder="auto-suggested from object name",
+            help="Will land under `gong-transcripts-490013.salesforce_data.<this>`.",
+        )
+
+        st.markdown("**Primary key** — the SF field that uniquely identifies a record. "
+                    "Almost always `Id`.")
+        col3, col4, col5 = st.columns([2, 2, 1])
+        primary_key_sf_field = col3.text_input(
+            "SF primary-key field",
+            value="Id",
+            key="sage_add_obj_pk_sf",
+        )
+        primary_key_bq_column = col4.text_input(
+            "BQ primary-key column",
+            value=_suggest_pk_column(object_name),
+            placeholder="auto-suggested",
+            key="sage_add_obj_pk_bq",
+        )
+        primary_key_bq_type = col5.selectbox(
+            "Type",
+            BQ_TYPES,
+            index=0,
+            key="sage_add_obj_pk_type",
+        )
+
+        st.markdown("**Filters & sync behaviour**")
+        col6, col7 = st.columns(2)
+        where_clause = col6.text_input(
+            "WHERE clause (optional)",
+            placeholder="e.g. IsDeleted = false",
+            help="SOQL WHERE body, no leading WHERE.  Applied in both backfill "
+                 "and incremental modes.",
+        )
+        incremental_field = col7.text_input(
+            "Incremental field",
+            value="LastModifiedDate",
+            help="SF datetime field for incremental syncs.  Almost always "
+                 "LastModifiedDate.",
+        )
+
+        source_label = st.text_input(
+            "Audit source label",
+            value=_suggest_source_label(object_name),
+            placeholder="auto-suggested",
+            help="Written to the `source` column on every row this object "
+                 "produces, for traceability.",
+        )
+
+        extra_soql_raw = st.text_input(
+            "Extra SOQL fields (optional, comma-separated)",
+            placeholder="e.g. OwnerId, RecordTypeId",
+            help="SF fields to include in the SELECT but **not** map to a BQ "
+                 "column.  Used for derived-column inputs or forward-compat.",
+        )
+
+        submitted = st.form_submit_button("Create object", type="primary")
+
+        if submitted:
+            errors = []
+            object_name = object_name.strip()
+            bq_table = bq_table.strip()
+            primary_key_sf_field = primary_key_sf_field.strip()
+            primary_key_bq_column = primary_key_bq_column.strip()
+            where_clause_clean = (where_clause or "").strip() or None
+            source_label = source_label.strip()
+            extra_soql = [s.strip() for s in extra_soql_raw.split(",") if s.strip()]
+
+            if not object_name:
+                errors.append("Salesforce object name is required.")
+            elif object_name in existing_object_names:
+                errors.append(f"Object `{object_name}` already exists in the manifest.")
+            if not bq_table:
+                errors.append("BigQuery table name is required.")
+            elif bq_table in existing_tables:
+                errors.append(f"BigQuery table `{bq_table}` is already used.")
+            if not primary_key_sf_field:
+                errors.append("Primary-key SF field is required.")
+            if not primary_key_bq_column:
+                errors.append("Primary-key BQ column is required.")
+            if not source_label:
+                errors.append("Source label is required.")
+
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                _insert_object(
+                    client,
+                    object_name=object_name,
+                    bq_table=bq_table,
+                    primary_key_column=primary_key_bq_column,
+                    primary_key_sf_field=primary_key_sf_field,
+                    primary_key_bq_type=primary_key_bq_type,
+                    where_clause=where_clause_clean,
+                    incremental_field=incremental_field.strip() or "LastModifiedDate",
+                    source_label=source_label,
+                    extra_soql_fields=extra_soql,
+                    actor_email=actor,
+                )
+                st.success(
+                    f"Created `{object_name}`.  Switch to its tab to add fields, "
+                    f"then trigger an incremental sync."
+                )
+                st.rerun()
+
+
 def _page_history(client) -> None:
     rows = _fetch_history(client)
     if not rows:
@@ -493,12 +735,24 @@ def render_page(dry_run_mode: bool, auto_backup: bool) -> None:
         )
         return
 
-    tab_names = [o["object_name"] for o in objects] + ["📜 History"]
+    tab_names = (
+        [o["object_name"] for o in objects]
+        + ["➕ Add object", "📜 History"]
+    )
     tabs = st.tabs(tab_names)
 
-    for tab, obj in zip(tabs[:-1], objects):
+    # Object tabs come first.
+    for tab, obj in zip(tabs[: len(objects)], objects):
         with tab:
             _page_object(client, obj, actor)
+
+    with tabs[-2]:
+        _page_add_object(
+            client,
+            existing_object_names={o["object_name"] for o in objects},
+            existing_tables={o["bq_table"] for o in objects},
+            actor=actor,
+        )
 
     with tabs[-1]:
         _page_history(client)
