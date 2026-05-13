@@ -438,18 +438,19 @@ def _render_soql(obj, fields) -> str:
 
 
 def _trigger_cloud_run_job(*, project: str, region: str, job: str, mode: str) -> tuple[bool, str]:
-    """POST to runJobs:run with a service-account-issued token.
+    """POST to ``runJobs:run`` with a service-account-issued token.
 
-    Returns ``(success, message)``.  Sets ``--wait=false`` semantics by
-    not polling — the job runs in Cloud Run; the caller can track it in
-    the GCP console.
+    Returns ``(success, message)`` — never raises.  The caller renders the
+    message; we wrap every step so a missing secret, malformed JSON,
+    network blip, or API rejection produces a visible string rather than a
+    page-crashing exception.
     """
     sa_json = _secret("GCP_SERVICE_ACCOUNT_JSON")
     if not sa_json:
         return False, (
-            "GCP_SERVICE_ACCOUNT_JSON secret is not set.  Add a service account "
-            "key with the `roles/run.invoker` role on the salesforce-pipeline job, "
-            "then redeploy."
+            "GCP_SERVICE_ACCOUNT_JSON secret is not set.  Add a service "
+            "account key in Streamlit Cloud → app → Settings → Secrets, "
+            "with `roles/run.developer` scoped to the salesforce-indexer job."
         )
 
     try:
@@ -466,10 +467,13 @@ def _trigger_cloud_run_job(*, project: str, region: str, job: str, mode: str) ->
             "requirements.txt and redeploy."
         )
 
-    creds = service_account.Credentials.from_service_account_info(
-        sa_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
-    creds.refresh(GoogleAuthRequest())
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        creds.refresh(GoogleAuthRequest())
+    except Exception as exc:  # pylint: disable=broad-except
+        return False, f"Failed to mint a GCP access token: {type(exc).__name__}: {exc}"
 
     url = (
         f"https://run.googleapis.com/v2/projects/{project}/locations/{region}"
@@ -480,17 +484,21 @@ def _trigger_cloud_run_job(*, project: str, region: str, job: str, mode: str) ->
             "containerOverrides": [{"args": [f"--mode={mode}"]}]
         }
     }
-    resp = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {creds.token}",
-            "Content-Type": "application/json",
-        },
-        json=body,
-        timeout=30,
-    )
+    try:
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {creds.token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        return False, f"Network error calling Cloud Run API: {exc}"
+
     if resp.status_code >= 300:
-        return False, f"HTTP {resp.status_code}: {resp.text[:500]}"
+        return False, f"HTTP {resp.status_code}: {resp.text[:800]}"
 
     op = resp.json()
     op_name = op.get("name", "unknown")
@@ -859,7 +867,15 @@ def _page_object(client, obj, actor) -> None:
     with st.expander("🔍 SOQL preview", expanded=False):
         st.code(_render_soql(obj, fields), language="sql")
 
-    with st.expander("⚙️ Trigger pipeline run", expanded=False):
+    # Trigger results live in session_state keyed by object so they survive
+    # the rerun-induced expander collapse.  Without this, st.success() would
+    # render inside the expander, then disappear when the expander snaps
+    # closed on the next interaction — the user would see "nothing happened".
+    trigger_state_key = f"sage_trigger_result_{obj['object_name']}"
+    last = st.session_state.get(trigger_state_key)
+
+    expander_open = bool(last)  # Keep the expander open if there's a result to show.
+    with st.expander("⚙️ Trigger pipeline run", expanded=expander_open):
         st.markdown(
             "After changing the manifest, run the pipeline to materialise the "
             "additions/removals in BigQuery.  Incremental is fast and safe; "
@@ -869,18 +885,43 @@ def _page_object(client, obj, actor) -> None:
         job = _secret("CLOUD_RUN_JOB_NAME", "salesforce-indexer")
         region = _secret("CLOUD_RUN_JOB_REGION", "us-central1")
 
-        col1, col2 = st.columns(2)
-        if col1.button("▶️ Trigger incremental sync", key=f"sage_trigger_inc_{obj['object_name']}", type="primary"):
-            ok, msg = _trigger_cloud_run_job(
-                project=project, region=region, job=job, mode="incremental"
-            )
+        # Surface the most recent trigger result every render until the user
+        # dismisses it.  Persists across reruns.
+        if last:
+            ok, msg, when = last
             if ok:
-                st.success(f"Submitted execution: `{msg}`")
-                st.caption(
-                    "Track progress in the GCP console → Cloud Run → Jobs → executions."
+                st.success(
+                    f"✅ Submitted at {when} — execution `{msg}`.  "
+                    f"Track in GCP console → Cloud Run → Jobs → "
+                    f"[{job}](https://console.cloud.google.com/run/jobs/"
+                    f"details/{region}/{job}/executions?project={project})."
                 )
             else:
-                st.error(msg)
+                st.error(f"❌ Last trigger failed: {msg}")
+            if st.button("Dismiss", key=f"sage_trigger_dismiss_{obj['object_name']}"):
+                del st.session_state[trigger_state_key]
+                st.rerun()
+
+        col1, col2 = st.columns(2)
+        if col1.button(
+            "▶️ Trigger incremental sync",
+            key=f"sage_trigger_inc_{obj['object_name']}",
+            type="primary",
+        ):
+            with st.spinner("Submitting incremental sync…"):
+                ok, msg = _trigger_cloud_run_job(
+                    project=project, region=region, job=job, mode="incremental"
+                )
+            from datetime import datetime
+            st.session_state[trigger_state_key] = (
+                ok, msg, datetime.now().strftime("%H:%M:%S"),
+            )
+            # Toast survives the rerun even if the user navigates away.
+            st.toast(
+                "Sync submitted" if ok else f"Trigger failed: {msg[:80]}",
+                icon="✅" if ok else "❌",
+            )
+            st.rerun()
 
         if col2.button("⚠️ Trigger backfill", key=f"sage_trigger_bf_{obj['object_name']}"):
             st.session_state[f"sage_bf_pending_{obj['object_name']}"] = True
@@ -892,14 +933,20 @@ def _page_object(client, obj, actor) -> None:
                 key=f"sage_bf_confirm_{obj['object_name']}",
             )
             if confirm == "BACKFILL":
-                ok, msg = _trigger_cloud_run_job(
-                    project=project, region=region, job=job, mode="backfill"
+                with st.spinner("Submitting backfill…"):
+                    ok, msg = _trigger_cloud_run_job(
+                        project=project, region=region, job=job, mode="backfill"
+                    )
+                from datetime import datetime
+                st.session_state[trigger_state_key] = (
+                    ok, msg, datetime.now().strftime("%H:%M:%S"),
                 )
-                if ok:
-                    st.success(f"Backfill submitted: `{msg}`")
-                    st.session_state[f"sage_bf_pending_{obj['object_name']}"] = False
-                else:
-                    st.error(msg)
+                st.session_state[f"sage_bf_pending_{obj['object_name']}"] = False
+                st.toast(
+                    "Backfill submitted" if ok else f"Backfill failed: {msg[:80]}",
+                    icon="✅" if ok else "❌",
+                )
+                st.rerun()
 
 
 def _render_add_object_form(client, existing_object_names: set[str], existing_tables: set[str], actor: str) -> None:
