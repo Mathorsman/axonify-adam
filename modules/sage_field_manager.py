@@ -253,19 +253,21 @@ def _set_field_enabled(client, *, field_row, enabled, actor_email) -> None:
     }).execute()
 
 
-def _delete_field(client, *, field_row, actor_email) -> None:
+def _delete_field(client, *, field_row, actor_email, bq_dropped: bool = False) -> None:
     """Remove a field from the manifest.
 
-    Hard delete from ``sage_sf_field_manifest``.  Logs the full removed
-    row to history so it can be reconstructed if needed.  The corresponding
-    BigQuery column is **not** dropped — it stays in BQ with its historic
-    values until manually altered.  This is intentional: dropping a BQ
-    column is a separate destructive action and must not happen by accident.
+    Hard delete from ``sage_sf_field_manifest``.  Logs the full removed row
+    to history so it can be reconstructed if needed.
+
+    By default the BigQuery column is left intact — only the manifest
+    mapping is removed.  Pass ``bq_dropped=True`` *after* a successful
+    ``_drop_bq_column`` call so the history entry records both actions
+    atomically.
     """
     client.table("sage_sf_field_manifest_history").insert({
         "object_name": field_row["object_name"],
         "bq_column": field_row["bq_column"],
-        "action": "delete",
+        "action": "delete_with_bq_drop" if bq_dropped else "delete",
         "diff": {
             "removed_row": {
                 k: field_row.get(k)
@@ -274,11 +276,89 @@ def _delete_field(client, *, field_row, actor_email) -> None:
                     "cast_strategy", "is_derived", "enabled",
                 )
             },
-            "note": "BQ column not dropped; remove manually if needed.",
+            "bq_dropped": bq_dropped,
+            "note": (
+                "BigQuery column dropped via ALTER TABLE."
+                if bq_dropped
+                else "BQ column not dropped; remove manually if needed."
+            ),
         },
         "actor_email": actor_email,
     }).execute()
     client.table("sage_sf_field_manifest").delete().eq("id", field_row["id"]).execute()
+
+
+def _drop_bq_column(*, project: str, dataset: str, table: str, column: str) -> tuple[bool, str]:
+    """Issue ``ALTER TABLE <dataset>.<table> DROP COLUMN <column>`` against BigQuery.
+
+    Uses the synchronous ``jobs.query`` REST endpoint with a 30-second timeout
+    — DDL on a single column completes in well under that on any table.
+
+    Returns ``(success, message)``.  Success returns the job id; failure
+    returns the BQ error text suitable for showing in the UI.
+    """
+    sa_json = _secret("GCP_SERVICE_ACCOUNT_JSON")
+    if not sa_json:
+        return False, (
+            "GCP_SERVICE_ACCOUNT_JSON secret is not set.  The service "
+            "account needs `bigquery.tables.update` on "
+            f"`{project}.{dataset}`."
+        )
+
+    try:
+        sa_info = json.loads(sa_json) if isinstance(sa_json, str) else dict(sa_json)
+    except json.JSONDecodeError as exc:
+        return False, f"GCP_SERVICE_ACCOUNT_JSON is not valid JSON: {exc}"
+
+    try:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+    except ImportError:
+        return False, (
+            "google-auth is not installed.  Add `google-auth>=2.0.0` to "
+            "requirements.txt and redeploy."
+        )
+
+    creds = service_account.Credentials.from_service_account_info(
+        sa_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    creds.refresh(GoogleAuthRequest())
+
+    # Backtick-quoting protects against odd identifiers and stops SOQL-style
+    # parsing surprises.  The column / dataset / table values come from the
+    # manifest we control, but defence in depth is cheap.
+    sql = (
+        f"ALTER TABLE `{project}.{dataset}.{table}` "
+        f"DROP COLUMN IF EXISTS `{column}`"
+    )
+
+    resp = requests.post(
+        f"https://bigquery.googleapis.com/bigquery/v2/projects/{project}/queries",
+        headers={
+            "Authorization": f"Bearer {creds.token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "query": sql,
+            "useLegacySql": False,
+            "timeoutMs": 30000,
+        },
+        timeout=45,
+    )
+    if resp.status_code >= 300:
+        return False, f"HTTP {resp.status_code}: {resp.text[:500]}"
+
+    body = resp.json()
+    if body.get("jobComplete") is False:
+        return False, (
+            "BigQuery job did not complete inside 30 s.  The DROP may still "
+            "succeed in the background — check the BQ console."
+        )
+    if "errors" in body:
+        return False, f"BigQuery: {body['errors']}"
+
+    job_ref = body.get("jobReference", {})
+    return True, job_ref.get("jobId", "unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +541,99 @@ def _suggest_pk_column(object_name: str) -> str:
     return f"{snake}_id"
 
 
+def _render_delete_popover(client, *, field, actor) -> None:
+    """Two-tier delete UI inside the row popover.
+
+    Tier 1 ("Remove from manifest"): pipeline stops populating the column on
+    future runs.  Historic values stay in BigQuery — reversible by adding the
+    field back.
+
+    Tier 2 ("Also drop BigQuery column"): typed-confirmation gate; runs
+    ``ALTER TABLE … DROP COLUMN IF EXISTS …`` via the BigQuery REST API.
+    Destroys the historic data.  Not reversible.
+    """
+    bq_column = field["bq_column"]
+    object_name = field["object_name"]
+    fid = field["id"]
+
+    st.markdown(f"**Delete `{bq_column}` from the manifest?**")
+
+    if field["bq_mode"] == "REQUIRED":
+        st.warning(
+            "Primary keys can't be deleted — incremental upserts rely on them. "
+            "Delete the whole object instead."
+        )
+        return
+
+    st.caption(
+        "By default the BigQuery column stays put with its historic values "
+        "— the pipeline just stops populating it on future runs.  Reversible."
+    )
+
+    if st.button(
+        "🗑️ Remove from manifest",
+        key=f"sage_del_btn_{fid}",
+        type="primary",
+    ):
+        _delete_field(client, field_row=field, actor_email=actor)
+        st.toast(f"Removed `{bq_column}` from {object_name}", icon="🗑️")
+        st.rerun()
+
+    st.divider()
+
+    # ── Tier 2 — also drop the BQ column ──────────────────────────────────
+    project = _secret("GCP_PROJECT_ID", "gong-transcripts-490013")
+    dataset = _secret("SAGE_BQ_DATASET", "salesforce_data")
+
+    obj_row = _fetch_object_by_name(client, object_name)
+    bq_table = (obj_row or {}).get("bq_table") or "<unknown>"
+
+    st.markdown("**Also drop the BigQuery column** (destructive)")
+    st.caption(
+        f"Runs `ALTER TABLE {project}.{dataset}.{bq_table} "
+        f"DROP COLUMN IF EXISTS {bq_column}`.  The column and its historic "
+        f"values are gone for good — not reversible."
+    )
+
+    confirm_key = f"sage_drop_confirm_{fid}"
+    confirm = st.text_input(
+        f"Type `{bq_column}` to enable the drop button:",
+        key=confirm_key,
+    )
+
+    if st.button(
+        "💥 Remove from manifest AND drop BQ column",
+        key=f"sage_drop_btn_{fid}",
+        type="primary",
+        disabled=(confirm != bq_column),
+    ):
+        ok, msg = _drop_bq_column(
+            project=project, dataset=dataset, table=bq_table, column=bq_column,
+        )
+        if ok:
+            _delete_field(client, field_row=field, actor_email=actor, bq_dropped=True)
+            st.toast(
+                f"Dropped `{bq_column}` from BQ + manifest (job {msg})",
+                icon="💥",
+            )
+            st.rerun()
+        else:
+            st.error(f"Drop failed — manifest untouched. {msg}")
+
+
+def _fetch_object_by_name(client, object_name: str) -> dict | None:
+    """Look up one object row by name; returns None if missing."""
+    rows = (
+        client.table("sage_sf_object_manifest")
+        .select("*")
+        .eq("object_name", object_name)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
 def _render_field_table(client, fields, actor) -> None:
     if not fields:
         st.info("No fields configured for this object yet.")
@@ -499,32 +672,7 @@ def _render_field_table(client, fields, actor) -> None:
         # single mis-click.  Refuses to delete the primary key — that would
         # break upsert deletes on incremental syncs.
         with cols[8].popover("⋯", help="Row actions"):
-            st.markdown(
-                f"**Delete `{field['bq_column']}` from the manifest?**"
-            )
-            st.caption(
-                "The BigQuery column will NOT be dropped — it stays with "
-                "its historic values.  The pipeline just stops populating "
-                "it on future runs."
-            )
-            if field["bq_mode"] == "REQUIRED":
-                st.warning(
-                    "Primary keys can't be deleted — incremental upserts "
-                    "rely on them.  Delete the whole object instead."
-                )
-            else:
-                if st.button(
-                    "🗑️ Delete field",
-                    key=f"sage_del_btn_{field['id']}",
-                    type="primary",
-                ):
-                    _delete_field(client, field_row=field, actor_email=actor)
-                    st.toast(
-                        f"Deleted `{field['bq_column']}` from "
-                        f"{field['object_name']}",
-                        icon="🗑️",
-                    )
-                    st.rerun()
+            _render_delete_popover(client, field=field, actor=actor)
 
 
 def _render_add_field_form(client, object_name, existing_columns, actor) -> None:
