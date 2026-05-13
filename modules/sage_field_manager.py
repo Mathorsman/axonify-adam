@@ -14,7 +14,7 @@ Required Streamlit secrets (re-uses existing A.D.A.M. SUPABASE_*):
 
 For the "Trigger sync" button, additionally:
     GCP_PROJECT_ID            "gong-transcripts-490013"
-    CLOUD_RUN_JOB_NAME        "salesforce-pipeline"
+    CLOUD_RUN_JOB_NAME        "salesforce-indexer"
     CLOUD_RUN_JOB_REGION      "us-central1"
     GCP_SERVICE_ACCOUNT_JSON  full service-account key JSON, granted roles/run.invoker
                               on the job
@@ -866,7 +866,7 @@ def _page_object(client, obj, actor) -> None:
             "backfill truncates and reloads everything."
         )
         project = _secret("GCP_PROJECT_ID", "gong-transcripts-490013")
-        job = _secret("CLOUD_RUN_JOB_NAME", "salesforce-pipeline")
+        job = _secret("CLOUD_RUN_JOB_NAME", "salesforce-indexer")
         region = _secret("CLOUD_RUN_JOB_REGION", "us-central1")
 
         col1, col2 = st.columns(2)
