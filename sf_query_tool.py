@@ -11998,6 +11998,10 @@ def render_sidebar_nav():
         _nav_btn("🔐  Permissions & Users", "permissions")
         _nav_btn("📄  Org Explorer", "org_explorer")
 
+    # ── SAGE PIPELINE ─────────────────────────────────────────────────────────────────
+    with st.expander("🧬  SAGE", expanded=False):
+        _nav_btn("🧬  Field Manager", "sage_fields")
+
     # ── REFERENCE & LOGS ──────────────────────────────────────────────────────────────
     with st.expander("📚  Reference & Logs", expanded=False):
         _hist_label = "📚  Reference & Logs"
@@ -23900,6 +23904,9 @@ def main():
         render_org_explorer_page(dry_run_mode, auto_backup)
     elif page == "history":
         render_history_page()
+    elif page == "sage_fields":
+        from modules import sage_field_manager
+        sage_field_manager.render_page(dry_run_mode, auto_backup)
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
 
@@ -24226,6 +24233,9 @@ def render_runbooks_page(dry_run_mode: bool, auto_backup: bool):
         render_org_explorer_page(dry_run_mode, auto_backup)
     elif page == "history":
         render_history_page()
+    elif page == "sage_fields":
+        from modules import sage_field_manager
+        sage_field_manager.render_page(dry_run_mode, auto_backup)
     else:
         render_dashboard_page(dry_run_mode, auto_backup)
 
