@@ -362,6 +362,136 @@ def _drop_bq_column(*, project: str, dataset: str, table: str, column: str) -> t
 
 
 # ---------------------------------------------------------------------------
+# BigQuery schema introspection — reconcile manifest with what's in BQ.
+# ---------------------------------------------------------------------------
+
+# Reverse of _SF_TYPE_TO_BQ — what to default a manifest row to when we're
+# starting from a BQ column type (because the column already exists in BQ
+# and we're back-filling the manifest entry).
+_BQ_TYPE_TO_CAST: dict[str, str] = {
+    "STRING": "auto",
+    "INT64": "int_or_null",
+    "INTEGER": "int_or_null",
+    "FLOAT64": "float_or_null",
+    "FLOAT": "float_or_null",
+    "NUMERIC": "float_or_null",
+    "BOOL": "bool_passthrough",
+    "BOOLEAN": "bool_passthrough",
+    "DATE": "auto",
+    "TIMESTAMP": "sf_ts",
+    "DATETIME": "sf_ts",
+}
+
+# Columns that the pipeline writes regardless of the manifest; they should
+# never appear as "orphans" needing reconciliation.
+_PIPELINE_SYSTEM_COLUMNS = frozenset({"indexed_at", "source"})
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_bq_columns(project: str, dataset: str, table: str) -> list[dict]:
+    """Return ``[{name, type, mode}]`` for every column in a BigQuery table.
+
+    Uses the BigQuery REST API directly with a service-account-issued
+    token — same auth path as the Cloud Run Jobs trigger, no SDK install
+    required on the A.D.A.M. side beyond ``google-auth``.
+
+    Returns an empty list (and surfaces a Streamlit error) if the SA secret
+    isn't configured or the API call fails.  60-second cache so the
+    Reconcile expander is snappy when re-opened.
+    """
+    sa_json = _secret("GCP_SERVICE_ACCOUNT_JSON")
+    if not sa_json:
+        st.error(
+            "GCP_SERVICE_ACCOUNT_JSON secret is not set — can't introspect "
+            "BigQuery.  Add it in Streamlit Cloud secrets to enable reconcile."
+        )
+        return []
+
+    try:
+        sa_info = json.loads(sa_json) if isinstance(sa_json, str) else dict(sa_json)
+    except json.JSONDecodeError as exc:
+        st.error(f"GCP_SERVICE_ACCOUNT_JSON is not valid JSON: {exc}")
+        return []
+
+    try:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+    except ImportError:
+        st.error(
+            "google-auth is not installed.  Add `google-auth>=2.0.0` to "
+            "requirements.txt and redeploy."
+        )
+        return []
+
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        creds.refresh(GoogleAuthRequest())
+    except Exception as exc:  # pylint: disable=broad-except
+        st.error(f"Failed to mint GCP access token: {type(exc).__name__}: {exc}")
+        return []
+
+    url = (
+        f"https://bigquery.googleapis.com/bigquery/v2/projects/{project}"
+        f"/datasets/{dataset}/tables/{table}"
+    )
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {creds.token}"},
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        st.error(f"Network error calling BigQuery: {exc}")
+        return []
+
+    if resp.status_code == 404:
+        # Table doesn't exist yet — that's a valid state when a manifest
+        # object has been added but never synced.  Reconcile UI handles it.
+        return []
+    if resp.status_code >= 300:
+        st.error(f"BigQuery HTTP {resp.status_code}: {resp.text[:400]}")
+        return []
+
+    schema = resp.json().get("schema", {}).get("fields", []) or []
+    return [
+        {"name": f["name"], "type": f["type"], "mode": f.get("mode", "NULLABLE")}
+        for f in schema
+    ]
+
+
+def _classify_drift(
+    manifest_fields: list[dict],
+    bq_columns: list[dict],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Split BQ schema vs manifest into three buckets.
+
+    Returns ``(in_sync, orphans_in_bq, pending_in_manifest)`` where:
+      - ``in_sync``: columns present in both manifest and BQ.
+      - ``orphans_in_bq``: BQ columns with no corresponding manifest row.
+        These are the ones the reconcile UI lets the admin import.  System
+        columns (``indexed_at``, ``source``) are filtered out.
+      - ``pending_in_manifest``: manifest rows whose BQ column doesn't yet
+        exist.  Will land on the next pipeline run; informational only.
+    """
+    manifest_by_col = {f["bq_column"]: f for f in manifest_fields}
+    bq_by_col = {c["name"]: c for c in bq_columns}
+
+    in_sync = [c for c in bq_columns if c["name"] in manifest_by_col]
+    orphans = [
+        c for c in bq_columns
+        if c["name"] not in manifest_by_col
+        and c["name"] not in _PIPELINE_SYSTEM_COLUMNS
+    ]
+    pending = [
+        f for f in manifest_fields
+        if f["bq_column"] not in bq_by_col
+    ]
+    return in_sync, orphans, pending
+
+
+# ---------------------------------------------------------------------------
 # Salesforce describe — autocomplete + type inference
 # ---------------------------------------------------------------------------
 
@@ -837,6 +967,220 @@ def _render_add_field_form(client, object_name, existing_columns, actor) -> None
 # ---------------------------------------------------------------------------
 
 
+def _render_bq_reconcile(client, obj, manifest_fields, actor) -> None:
+    """Force-sync the Field Manager view with the live BigQuery schema.
+
+    Shows three buckets:
+      1. Columns present in both manifest and BQ — silent count.
+      2. Manifest rows whose BQ column hasn't shown up yet (pending next
+         pipeline run) — informational, no action.
+      3. **Orphans** — BQ columns the manifest doesn't know about, usually
+         because they were created out-of-band (a previous hardcoded _SEED
+         that diverged, manual BQ DDL, or a manifest row that was deleted
+         from Supabase but never dropped from BQ).  Each orphan gets a tiny
+         form to import it into the manifest so future syncs will populate
+         it, OR drop it from BQ if it's truly garbage.
+    """
+    project = _secret("GCP_PROJECT_ID", "gong-transcripts-490013")
+    dataset = _secret("SAGE_BQ_DATASET", "salesforce_data")
+    table = obj["bq_table"]
+
+    with st.expander("🔄 Reconcile with BigQuery", expanded=False):
+        if st.button(
+            "↻ Refresh from BigQuery",
+            key=f"sage_bq_refresh_{obj['object_name']}",
+            help="Pulls the live BQ schema and re-computes the diff.",
+        ):
+            _fetch_bq_columns.clear()  # type: ignore[attr-defined]
+            st.rerun()
+
+        bq_columns = _fetch_bq_columns(project, dataset, table)
+        if not bq_columns:
+            st.info(
+                f"`{project}.{dataset}.{table}` doesn't exist in BigQuery "
+                "yet, or the schema couldn't be read.  It'll be created on "
+                "the next pipeline run if there are any enabled fields in "
+                "the manifest for this object."
+            )
+            return
+
+        in_sync, orphans, pending = _classify_drift(manifest_fields, bq_columns)
+
+        summary = st.columns(3)
+        summary[0].metric("In sync", len(in_sync))
+        summary[1].metric("Orphan in BQ", len(orphans))
+        summary[2].metric("Pending in manifest", len(pending))
+
+        if pending:
+            st.markdown("**Manifest rows not yet in BQ** — these land on the next pipeline run:")
+            for f in pending:
+                st.markdown(f"- `{f['bq_column']}` ({f['bq_type']})  ← `{f['sf_field']}`")
+
+        if not orphans:
+            st.success(
+                "No BigQuery columns missing from the manifest.  Field Manager "
+                "and BigQuery are in sync."
+            )
+            return
+
+        st.markdown(
+            "**BigQuery columns not in the manifest.**  Each row needs the "
+            "Salesforce field name so the pipeline knows where to source it.  "
+            "If a column is genuinely unwanted, use Drop instead — it'll run "
+            "`ALTER TABLE … DROP COLUMN` after a typed confirmation."
+        )
+
+        # SF describe-driven dropdown of fields we could map.  Already-mapped
+        # ones are filtered out so the same SF field can't be wired twice.
+        all_sf_fields = _describe_fields(obj["object_name"])
+        mapped_sf = {f["sf_field"] for f in manifest_fields if not f["is_derived"]}
+        available_sf_fields = [
+            f for f in all_sf_fields if f["name"] not in mapped_sf
+        ]
+
+        for orphan in orphans:
+            _render_orphan_row(
+                client,
+                obj=obj,
+                orphan=orphan,
+                available_sf_fields=available_sf_fields,
+                manifest_fields=manifest_fields,
+                actor=actor,
+                project=project,
+                dataset=dataset,
+            )
+
+
+def _render_orphan_row(
+    client,
+    *,
+    obj,
+    orphan: dict,
+    available_sf_fields: list[dict],
+    manifest_fields: list[dict],
+    actor: str,
+    project: str,
+    dataset: str,
+) -> None:
+    """Render one orphan-BQ-column row with Add-to-manifest / Drop controls."""
+    col_name = orphan["name"]
+    col_type = orphan["type"]
+    default_cast = _BQ_TYPE_TO_CAST.get(col_type, "auto")
+
+    with st.container(border=True):
+        head = st.columns([2, 1, 4])
+        head[0].markdown(f"`{col_name}`")
+        head[1].markdown(f"_{col_type}_")
+        action_key_base = f"sage_orphan_{obj['object_name']}_{col_name}"
+
+        mode = head[2].radio(
+            "Action",
+            options=["Add to manifest", "Drop from BQ", "Ignore"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key=f"{action_key_base}_mode",
+        )
+
+        if mode == "Add to manifest":
+            use_custom = st.toggle(
+                "Custom field path (relationship traversal)",
+                value=not available_sf_fields,
+                key=f"{action_key_base}_custom",
+                disabled=not available_sf_fields,
+            )
+
+            if use_custom or not available_sf_fields:
+                sf_field = st.text_input(
+                    "Salesforce field path",
+                    placeholder="e.g. Owner.Name, Account_Total_ARR__c",
+                    key=f"{action_key_base}_path",
+                ).strip()
+                sf_type = None
+            else:
+                def _label(f):
+                    return f"{f['name']}  —  {f['label']}  ({f['type']})"
+                choice = st.selectbox(
+                    "Salesforce field",
+                    options=available_sf_fields,
+                    format_func=_label,
+                    key=f"{action_key_base}_pick",
+                )
+                sf_field = choice["name"]
+                sf_type = choice["type"]
+                bq_default, cast_default = _sf_to_bq_defaults(sf_type)
+                if bq_default == col_type:
+                    default_cast = cast_default
+
+            cast_strategy = st.selectbox(
+                "Cast strategy",
+                CAST_STRATEGIES,
+                index=CAST_STRATEGIES.index(default_cast),
+                key=f"{action_key_base}_cast",
+                help="Auto-suggested from BQ column type; override if needed.",
+            )
+
+            if st.button(
+                f"Add `{col_name}` to manifest",
+                key=f"{action_key_base}_submit",
+                type="primary",
+                disabled=not sf_field,
+            ):
+                _insert_field(
+                    client,
+                    object_name=obj["object_name"],
+                    sf_field=sf_field,
+                    bq_column=col_name,
+                    bq_type=col_type,
+                    bq_mode=orphan.get("mode", "NULLABLE"),
+                    cast_strategy=cast_strategy,
+                    is_derived=False,
+                    actor_email=actor,
+                )
+                _fetch_bq_columns.clear()  # type: ignore[attr-defined]
+                st.toast(f"Mapped `{col_name}` ← `{sf_field}`", icon="✅")
+                st.rerun()
+
+        elif mode == "Drop from BQ":
+            st.caption(
+                f"Will run `ALTER TABLE {project}.{dataset}.{obj['bq_table']} "
+                f"DROP COLUMN IF EXISTS {col_name}`.  Irreversible — historic "
+                f"values are gone."
+            )
+            confirm = st.text_input(
+                f"Type `{col_name}` to enable the drop button:",
+                key=f"{action_key_base}_drop_confirm",
+            )
+            if st.button(
+                f"💥 Drop `{col_name}` from BigQuery",
+                key=f"{action_key_base}_drop",
+                type="primary",
+                disabled=(confirm != col_name),
+            ):
+                ok, msg = _drop_bq_column(
+                    project=project,
+                    dataset=dataset,
+                    table=obj["bq_table"],
+                    column=col_name,
+                )
+                if ok:
+                    # No manifest row to delete (it's an orphan by definition);
+                    # just log the drop to history for the audit trail.
+                    client.table("sage_sf_field_manifest_history").insert({
+                        "object_name": obj["object_name"],
+                        "bq_column": col_name,
+                        "action": "drop_orphan_bq_column",
+                        "diff": {"bq_type": col_type, "bq_job": msg},
+                        "actor_email": actor,
+                    }).execute()
+                    _fetch_bq_columns.clear()  # type: ignore[attr-defined]
+                    st.toast(f"Dropped `{col_name}` (job {msg})", icon="💥")
+                    st.rerun()
+                else:
+                    st.error(f"Drop failed: {msg}")
+        else:  # Ignore
+            st.caption("No action — leaves the orphan column in place for review later.")
+
+
 def _page_object(client, obj, actor) -> None:
     fields = _fetch_fields(client, obj["object_name"])
 
@@ -866,6 +1210,8 @@ def _page_object(client, obj, actor) -> None:
 
     with st.expander("🔍 SOQL preview", expanded=False):
         st.code(_render_soql(obj, fields), language="sql")
+
+    _render_bq_reconcile(client, obj, fields, actor)
 
     # Trigger results live in session_state keyed by object so they survive
     # the rerun-induced expander collapse.  Without this, st.success() would
